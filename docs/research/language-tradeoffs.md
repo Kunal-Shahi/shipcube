@@ -132,6 +132,32 @@ If any of these fails, stay in Python and make it faster first: `min-instances`,
 
 **Fallback if the schedule slips:** ship the gateway in Python (FastAPI + `httpx`, or LiteLLM for the AI part) and accept the latency for the demo. The Go gateway adds value but the demo doesn't depend on it.
 
+## PR #1's TypeScript MCP stub: port it, or keep it and call Python over HTTP?
+
+Kunal makes this call. What exists on `backend/networking` (PR #1), not counting lockfiles:
+
+| Piece | Size | What it is |
+|---|---|---|
+| `services/mcp` | ~680 LOC (`tools.ts` 575, `server.ts` 60, `api.ts` 43) | 17 tools, 141 zod schema calls. Every tool is one or two `fetch` calls to the API; the server holds no state |
+| `services/api` | ~460 LOC + `openapi.yaml` (264 lines) | Node HTTP server over an in-memory mock store |
+
+The data layer ([shipcube-data](https://github.com/Kunal-Shahi/shipcube-data)) is a Python package (Pydantic + sqlglot). The roster expects its six MCP tools (`list_cubes`, `describe_cube`, `query`, `propose_migration`, `apply_migration`, `search_values`) to be called **in-process** by the MCP server. A TypeScript server can't do that.
+
+| | **A. Port to Python** | **B. Keep TS MCP + API, add a Python core service** |
+|---|---|---|
+| One-off work | Rewrite ~1,140 LOC as `MCPServer` + FastAPI. The tool logic is thin HTTP glue and translates almost line for line: **about 1 day** for MCP and API together, including the smoke test | Build and deploy a new Python HTTP service that wraps the data layer, placement and the classifier. Add six TS wrappers for the data tools. **About 1 day**, plus ongoing upkeep |
+| Services to run | 1 (MCP + API in one Cloud Run service) | 3 (TS MCP, TS API, Python core), or 2 if MCP and API merge |
+| Hops per data tool call | 0: agent → MCP → in-process function | 2: agent → MCP → API → Python core. Each hop is a separate request, and service-to-service calls on Cloud Run need an ID token. Locally a hop added ~1 ms (proxy benchmark above); on Cloud Run expect several ms per warm hop (not measured) |
+| Cold-start exposure | One Python cold start (~0.6 s; `min-instances=1` removes it) | One per service in the chain: TS ~0.15 s plus Python ~0.6 s. Removing them needs `min-instances=1` on each service, about $13 per service for the 8 days |
+| Schemas | One set in Pydantic. The MCP tool schemas, the OpenAPI spec and the data-layer types all generate from it | Three sets: zod (141 calls), `openapi.yaml`, and Pydantic. They must be kept in sync by hand or with a codegen step (Pydantic → JSON Schema → zod). With 6 data tools plus 17 platform tools changing daily, drift is the main risk |
+| Errors and auth | One place to map errors and check the PAT | Errors and auth crossing two boundaries; the API stays the only place authorization is decided, so the core must trust the API |
+| What we lose | The TS code already written; and the TS SDK is a little faster (12.8k vs 3.6k tool calls/s, irrelevant at agent call rates) | Nothing written so far |
+| Console | The frontend calls the same OpenAPI spec; FastAPI serves it, so the frontend's contract is unchanged if the paths stay the same | Unchanged |
+
+**Recommendation: A, port to Python.** Both options cost about a day now. After that, A has no extra hops, one cold start and one schema source; B adds two network hops to every data tool call and three schema copies to keep in sync for the rest of the build. B only wins if the data layer tools could live on a separate MCP server that agents connect to directly, and that splits the setup guide and the authentication story in two.
+
+If A is chosen, keep `openapi.yaml` as the contract and the 17 tool names and descriptions exactly as in PR #1, so the frontend's MCP setup guide and `docs/research/networking.md` stay valid.
+
 ## Proposed change for shared docs (not edited here)
 
 `docs/ARCHITECTURE.md`: add one line under the repo layout: "Backend is Python 3.12 except `services/gateway/` (Go). Rationale: docs/research/language-tradeoffs.md." Also note that the Python MCP SDK v2 renamed FastMCP to `MCPServer`, so code examples should use `from mcp.server.mcpserver import MCPServer`.
