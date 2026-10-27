@@ -47,7 +47,7 @@ expect() {
   fi
 }
 
-# shellcheck disable=SC2329 # invoked by the EXIT trap
+# shellcheck disable=SC2317,SC2329 # invoked by the EXIT trap
 cleanup() {
   set +e
   gcloud storage rm --quiet "gs://${UPLOADS_BUCKET}/${OBJ_A}" "gs://${UPLOADS_BUCKET}/${OBJ_B}" >/dev/null 2>&1
