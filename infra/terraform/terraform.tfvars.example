@@ -1,0 +1,4 @@
+control_project_id = "shipcube-control"
+apps_project_id    = "shipcube-apps"
+billing_account_id = "000000-000000-000000"
+region             = "asia-south1"
