@@ -116,7 +116,7 @@ for svc in console mcp gateway worker; do
   path=/health; [ "$svc" = console ] && path=/sign-in  # /healthz is reserved on run.app URLs
   auth=()
   [ "$svc" = worker ] && auth=(-H "Authorization: Bearer $(gcloud auth print-identity-token)")
-  code="$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" "$url$path" || true)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' ${auth[@]+"${auth[@]}"} "$url$path" || true)"
   printf '  %-16s %s  %s%s\n' "shipcube-$svc" "$code" "$url" "$path"
 done
 cat <<URLS
