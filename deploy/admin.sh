@@ -24,7 +24,7 @@ ARGS="-m,shipcube_api.admin$(printf ',%s' "$@")"
 
 gcloud run jobs deploy shipcube-admin --project "$PROJECT" --region "$REGION" --quiet \
   --image "$IMAGE" --service-account "$SA_WORKER" --set-cloudsql-instances "$SQL_INSTANCE" \
-  --command python --args "$ARGS" --tasks 1 --max-retries 0 --task-timeout 300s --cpu 1 --memory 1Gi \
+  --command python --args="$ARGS" --tasks 1 --max-retries 0 --task-timeout 300s --cpu 1 --memory 1Gi \
   --set-env-vars "^|^SHIPCUBE_DATABASE_URL=postgresql://sc-worker%40$PROJECT.iam@/shipcube?host=/cloudsql/$SQL_INSTANCE|SHIPCUBE_DB_IAM_AUTH=1|SHIPCUBE_DB_SET_ROLE=0" \
   --labels managed-by=shipcube-platform >/dev/null
 
