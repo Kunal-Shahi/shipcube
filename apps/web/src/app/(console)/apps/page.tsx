@@ -1,0 +1,151 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { Suspense } from "react";
+import { EmptyState, HealthPill, PageHeader, Panel, TableSkeleton, TierBadge, ButtonLink } from "@/components/ui";
+import { CodeBlock } from "@/components/copy-button";
+import { demoState, listApps, type DemoState } from "@/lib/api";
+import { RestoreButton } from "@/components/restore-button";
+import { ago, count, date, money, restoreWindow } from "@/lib/format";
+import type { AppKind } from "@/lib/types";
+
+export const metadata: Metadata = { title: "Apps" };
+
+const KIND_LABEL: Record<AppKind, string> = { tracker: "Tracker", dashboard: "Dashboard", report: "Report", api: "API", job: "Job" };
+
+type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
+
+export default async function AppsPage({ searchParams }: Props) {
+  const state = demoState(await searchParams);
+  return (
+    <>
+      <PageHeader
+        title="Apps"
+        description="Everything your agents have deployed through ShipCube. Apps are private until you share them."
+        actions={
+          <ButtonLink href="/setup" variant="secondary">
+            Connect an agent
+          </ButtonLink>
+        }
+      />
+      <Suspense key={state} fallback={<Panel><TableSkeleton rows={6} cols={6} /></Panel>}>
+        <AppsTable state={state} />
+      </Suspense>
+    </>
+  );
+}
+
+async function AppsTable({ state }: { state: DemoState }) {
+  const all = await listApps(state);
+  const apps = all.filter((a) => !a.deletedAt);
+  const deleted = all.filter((a) => a.deletedAt);
+
+  if (apps.length === 0) {
+    return (
+      <Panel>
+        <EmptyState
+          title="No apps yet"
+          body={
+            <>
+              <p>
+                Apps appear here after your coding agent deploys them. Open your project in Claude Code, Cursor or Muse
+                Code and ask it to deploy, for example:
+              </p>
+              <div className="mt-3 max-w-[560px]">
+                <CodeBlock label="Prompt" wrap code="Deploy this tracker with ShipCube and share it with finance-team@acme-analytics.com" />
+              </div>
+            </>
+          }
+          action={<ButtonLink href="/setup" variant="primary">Connect your agent</ButtonLink>}
+        />
+      </Panel>
+    );
+  }
+
+  const attention = apps.filter((a) => a.health === "down" || a.health === "degraded").length;
+  // The API's app list is minimal today; show a column only when some app has the value.
+  const has = {
+    requests: apps.some((a) => a.requests24h !== undefined),
+    spend: apps.some((a) => a.costMonthToDate !== undefined),
+    shared: apps.some((a) => a.sharedWith !== undefined),
+  };
+  const spent = apps.reduce((s, a) => s + (a.costMonthToDate ?? 0), 0);
+  const dash = <span className="text-fg-subtle" aria-label="not available">–</span>;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-4 py-2.5 text-[12px] text-fg-muted">
+          <span className="num">{apps.length} {apps.length === 1 ? "app" : "apps"}</span>
+          {attention > 0 && <span className="num text-warning">{attention} need attention</span>}
+          {has.spend && <span className="num">{money(spent)} this month</span>}
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-left">
+            <thead className="text-[12px] text-fg-muted">
+              <tr className="border-b border-border">
+                <th className="px-4 py-2 font-medium">Name</th>
+                <th className="px-4 py-2 font-medium">Status</th>
+                <th className="px-4 py-2 font-medium">Tier</th>
+                {has.requests && <th className="px-4 py-2 text-right font-medium">Requests, 24 h</th>}
+                {has.spend && <th className="px-4 py-2 text-right font-medium">Spend / cap</th>}
+                {has.shared && <th className="px-4 py-2 text-right font-medium">Shared with</th>}
+                <th className="px-4 py-2 font-medium">Last deploy</th>
+              </tr>
+            </thead>
+            <tbody>
+              {apps.map((a) => (
+                <tr key={a.id} className="group relative border-b border-border last:border-0 hover:bg-surface-2">
+                  <td className="px-4 py-2">
+                    <Link href={`/apps/${a.id}`} className="font-medium after:absolute after:inset-0 focus-visible:outline-none group-has-[:focus-visible]:underline">
+                      {a.name}
+                    </Link>
+                    {(a.kind || a.billing) && (
+                      <div className="text-[12px] text-fg-muted">
+                        {[a.kind && KIND_LABEL[a.kind], a.billing && (a.billing === "own-gcp" ? "Your GCP" : "ShipCube GCP")].filter(Boolean).join(", ")}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-4 py-2"><HealthPill health={a.health} /></td>
+                  <td className="px-4 py-2"><TierBadge tier={a.tier} long /></td>
+                  {has.requests && <td className="num px-4 py-2 text-right">{a.requests24h === undefined ? dash : count(a.requests24h)}</td>}
+                  {has.spend && (
+                    <td className="num px-4 py-2 text-right">
+                      {a.costMonthToDate === undefined ? dash : money(a.costMonthToDate)}
+                      {a.spendCap !== undefined && <span className="text-fg-subtle"> / {money(a.spendCap)}</span>}
+                    </td>
+                  )}
+                  {has.shared && <td className="num px-4 py-2 text-right">{a.sharedWith ?? dash}</td>}
+                  <td className="px-4 py-2 text-fg-muted">
+                    {ago(a.lastDeployAt)}
+                    {a.deployedBy && <span className="text-fg-subtle">, {a.deployedBy}</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+      {deleted.length > 0 && (
+        <Panel>
+          <div className="border-b border-border px-4 py-2.5 text-[12px] font-medium text-fg-muted">Recently deleted</div>
+          <ul className="divide-y divide-border">
+            {deleted.map((a) => {
+              const w = restoreWindow(a.deletedAt!);
+              return (
+                <li key={a.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+                  <div className="min-w-0">
+                    <Link href={`/apps/${a.id}`} className="font-medium text-fg-muted hover:text-fg">{a.name}</Link>
+                    <div className="text-[12px] text-fg-muted">
+                      Deleted {ago(a.deletedAt!)}. Restorable until {date(w.until)}, {w.daysLeft} {w.daysLeft === 1 ? "day" : "days"} left.
+                    </div>
+                  </div>
+                  <RestoreButton appId={a.id} name={a.name} />
+                </li>
+              );
+            })}
+          </ul>
+        </Panel>
+      )}
+    </div>
+  );
+}
