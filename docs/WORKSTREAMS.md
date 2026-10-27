@@ -17,7 +17,7 @@ Kunal is the lead and makes every product and merge decision. Each teammate is a
 | Teammate | Session name | Branch / PR | Status |
 |---|---|---|---|
 | Frontend | `frontend` | [#3](https://github.com/Kunal-Shahi/shipcube/pull/3) | Console on mock data; auth behind an adapter interface |
-| Backend networking | `networking` | [#1](https://github.com/Kunal-Shahi/shipcube/pull/1) | MCP stub (17 tools) + API skeleton; built in TypeScript |
+| Backend networking | `networking` | [#1](https://github.com/Kunal-Shahi/shipcube/pull/1) | MCP stub (17 tools) + API skeleton; being ported from TypeScript to Python |
 | Infra and security | `security` | [#2](https://github.com/Kunal-Shahi/shipcube/pull/2) | Tenancy research, DB schema, Terraform skeleton |
 | Language trade-offs | `language` | [#4](https://github.com/Kunal-Shahi/shipcube/pull/4) | Recommends Python for the backend, Go for the gateway |
 | Data layer | `data-layer` | shipcube-data repo | In progress |
@@ -29,12 +29,15 @@ Kunal is the lead and makes every product and merge decision. Each teammate is a
 - **Networking ↔ security:** the API is the only place that makes authorization decisions. Security owns the token, grant and audit tables in `docs/research/database-design.md`. Networking's access-proxy plans must match the IAP decision and the `services/gateway` design.
 - **Networking ↔ data layer:** the data layer's MCP tools (`list_cubes`, `describe_cube`, `query`, `propose_migration`, `apply_migration`, `search_values`) are mounted on ShipCube's MCP server. The data layer exposes them as a Python package the MCP server can call in-process.
 - **Security ↔ data layer:** warehouse row-level security is injected as filters from the caller's identity and grants. Tenant-to-schema routing uses workspace ids from the security schema.
-- **Everyone ↔ language:** follow the language decision once Kunal approves it.
+- **Everyone ↔ language:** follow the language decision (see Decided).
 
 ## Open decisions (Kunal)
 
-1. **Language:** PR #4 recommends Python for the MCP server and API, but PR #1 built them in TypeScript. Until Kunal decides, don't build new code on either side of this.
-2. **Merge order** for PRs #1–#4.
+1. **Merge order** for PRs #1–#4.
+
+## Decided
+
+- **Language (Kunal, Oct 27):** Python 3.12 for the MCP server, control-plane API, deployer, data layer, profiler, classifier and monitoring. Go only for the access proxy / AI gateway (`services/gateway`). Next.js/TypeScript for the console only. PR #1 is being ported to Python.
 
 ## How to coordinate
 
