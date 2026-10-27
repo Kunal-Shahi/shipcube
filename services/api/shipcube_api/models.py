@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 APP_NAME_PATTERN = r"^[a-z][a-z0-9-]{1,38}[a-z0-9]$"
 AppName = Annotated[
@@ -46,14 +46,29 @@ class ImageSource(_Model):
     uri: str = Field(description="Container image, e.g. us-docker.pkg.dev/p/r/app@sha256:...")
 
 
+INLINE_MAX_FILES = 100
+INLINE_MAX_BYTES = 2 * 1024 * 1024  # a ~20-file, ~1 MB demo app fits with room to spare
+
+
 class InlineFile(_Model):
-    path: str
+    path: str = Field(max_length=300)
     content: str
+    encoding: Literal["utf-8", "base64"] = "utf-8"
 
 
 class InlineSource(_Model):
     kind: Literal["inline"]
-    files: list[InlineFile] = Field(max_length=50, description="Small apps only (< 256 KB total)")
+    files: list[InlineFile] = Field(
+        min_length=1, max_length=INLINE_MAX_FILES,
+        description="Up to 100 files and 2 MB in total (content length). Use upload for anything bigger.",
+    )
+
+    @model_validator(mode="after")
+    def _total_size(self) -> InlineSource:
+        total = sum(len(f.content) for f in self.files)
+        if total > INLINE_MAX_BYTES:
+            raise ValueError(f"inline source is {total} bytes; the limit is {INLINE_MAX_BYTES}. Use create_upload instead")
+        return self
 
 
 Source = Annotated[
@@ -79,8 +94,10 @@ class Caps(_Model):
 
 # --- operations --------------------------------------------------------------------
 
-OpKind = Literal["estimate", "deploy", "delete"]
-OpStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
+# Same values as security's `operations` table. A rejected or expired approval cancels the operation.
+OpKind = Literal["estimate", "deploy", "delete", "set_caps", "set_access"]
+OpStatus = Literal["awaiting_approval", "queued", "running", "succeeded", "failed", "cancelled"]
+ApprovalAction = Literal["first_linked_deploy", "cap_raise", "domain_grant", "delete_app"]
 
 
 class Progress(BaseModel):
@@ -110,6 +127,10 @@ class Operation(BaseModel):
     steps: list[Step]
     result: Any = None
     error: OpError | None = None
+    approval_url: str | None = Field(None, description="Set while status is awaiting_approval: a human approves or rejects in the console")
+    approval_reasons: list[str] = Field(default_factory=list, description="Why this operation needs approval")
+    approval_actions: list[ApprovalAction] = Field(default_factory=list, description="security's approvals.action values")
+    approval_expires_at: str | None = Field(None, description="Unanswered approvals expire after 72 hours and cancel the operation")
     poll_after_s: int
     created_at: str
     updated_at: str
@@ -140,9 +161,18 @@ class DeployRequest(_Model):
     caps: Caps | None = None
 
 
-class GrantRequest(_Model):
+class Grant(_Model):
     principal: Principal
     role: Literal["viewer", "editor"] = "viewer"
+
+
+class AccessChange(_Model):
+    add: list[Grant] = Field(default_factory=list)
+    remove: list[Principal] = Field(default_factory=list)
+
+
+class ApprovalDecision(_Model):
+    comment: str | None = Field(None, max_length=500)
 
 
 class AiConfigRequest(_Model):
@@ -150,27 +180,6 @@ class AiConfigRequest(_Model):
     model: str = "muse-spark"
     key_secret: str | None = Field(None, description="Secret name holding the BYOK API key")
     base_url: str | None = Field(None, description="For openai_compatible providers")
-
-
-class DataSourceRequest(_Model):
-    name: str = Field(pattern=r"^[a-z][a-z0-9_]{1,40}$")
-    kind: Literal["postgres", "bigquery", "duckdb", "snowflake"]
-    connection_secret: str | None = Field(None, description="Secret name holding the DSN or service-account key")
-    model_yaml: str | None = Field(None, description="Semantic DSL (cubes) for this source; inferred from the schema if omitted")
-
-
-class SemanticQuery(_Model):
-    measures: list[Any] = Field(min_length=1)
-    dimensions: list[str] | None = None
-    time: dict[str, Any] | None = None
-    filters: Any = None
-    order: list[tuple[str, Literal["asc", "desc"]]] | None = None
-    limit: int | None = Field(None, le=10_000)
-
-
-class QueryRequest(_Model):
-    datasource: str | None = None
-    query: SemanticQuery
 
 
 # --- responses ---------------------------------------------------------------------
@@ -202,6 +211,7 @@ class TokenInfo(BaseModel):
 class Me(BaseModel):
     user_id: str
     email: str
+    role: Literal["owner", "admin", "developer", "viewer"] = Field(description="Workspace membership role")
     workspace: Workspace
     gcp_targets: list[GcpTarget]
     limits: Limits
@@ -225,6 +235,10 @@ class AccessBinding(BaseModel):
 
 class AccessList(BaseModel):
     access: list[AccessBinding]
+
+
+class AccessResult(AccessList):
+    operation: Operation | None = Field(None, description="Set when some changes (domain: grants) await approval")
 
 
 class AiConfig(BaseModel):
@@ -258,6 +272,26 @@ class App(AppSummary):
     caps: dict[str, Any]
     access: list[AccessBinding]
     ai: AiConfig
+    deleted_at: str | None = None
+    restorable_until: str | None = Field(None, description="Soft-deleted apps can be restored from the console until then")
+
+
+class EstimateResult(BaseModel):
+    """Operation.result for kind=estimate. The classifier fills the numbers; the explainer
+    (Muse Spark, or rules as fallback) fills reasoning, alternatives and recommended_caps."""
+
+    estimate_id: str
+    workload_class: str
+    confidence: float
+    tier: str
+    target: str
+    resources: dict[str, Any]
+    monthly_cost_usd: dict[str, float]
+    profile: dict[str, Any]
+    reasoning: str
+    alternatives: list[dict[str, str]]
+    recommended_caps: dict[str, Any]
+    explained_by: Literal["muse-spark", "rules"]
 
 
 class LogEntry(BaseModel):
@@ -300,30 +334,7 @@ class Metrics(BaseModel):
 class CapsResult(BaseModel):
     caps: dict[str, Any]
     enforced_by: dict[str, str]
-
-
-class DataSource(BaseModel):
-    datasource_id: str
-    name: str
-    kind: str
-    egress: str
-    cubes_detected: list[str]
-    status: str
-
-
-class Column(BaseModel):
-    name: str
-    type: str
-
-
-class QueryResult(BaseModel):
-    level: Literal["L0", "L1", "L2", "L3"]
-    sql: str
-    columns: list[Column]
-    rows: list[list[Any]]
-    cached: bool
-    verified: bool
-    datasource: str
+    operation: Operation | None = Field(None, description="Set when a raise above the workspace default awaits approval")
 
 
 class ErrorBody(BaseModel):

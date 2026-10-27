@@ -11,10 +11,10 @@ This doc covers how a coding agent reaches ShipCube, how ShipCube reaches GCP, a
 | 1 | MCP transport | One remote **Streamable HTTP** endpoint, `https://mcp.shipcube.dev/mcp`, built on the stateless **2026-07-28** spec. No stdio package. | A stdio shim only if a client can't do remote HTTP |
 | 1 | MCP auth | **Personal access token** (`sc_pat_<id>_<secret>`, stored as an HMAC per security's `api_tokens` table) from the web console, sent as `Authorization: Bearer`. | **OAuth 2.1** per the MCP authorization spec: ShipCube as the authorization server in front of Google sign-in, Client ID Metadata Documents first, DCR as fallback |
 | 1 | Language | **Python 3.12**: the official `mcp` 2.3.0 SDK (`MCPServer`) plus FastAPI, run as **one service** (`/mcp` and `/v1/*`). Tools call the API in-process. Kunal's decision on PR #4. | Split MCP and API with `SHIPCUBE_API_URL` |
-| 2 | Tools | 17 tools (§2). Long-running tools return an **Operation**, wait up to `wait_s` (≤55 s) while streaming `notifications/progress`, then hand back the id for `get_operation`. **Idempotency keys** on every mutating call. | The MCP `tasks` extension, once Claude Code and Cursor support it |
+| 2 | Tools | **16 tools** (Kunal, Oct 28): 11 app tools plus 5 `data_*` tools mounted from shipcube-data (§2). Long-running tools return an **Operation**, wait up to `wait_s` (≤55 s) while streaming `notifications/progress`, then hand back the id for `operation`. **Idempotency keys** on every mutating call. Four kinds of action wait for a human: `awaiting_approval` + `approval_url` (§2.5). | The MCP `tasks` extension, once Claude Code and Cursor support it |
 | 3 | Control plane | **REST + JSON**, OpenAPI 3.1, `/v1` in the path, AIP-151-style operations. No gRPC. Deploys and profiling run as a **step machine driven by Cloud Tasks**. | Workflows if the step graph grows |
 | 4 | Flow | MCP → API → Cloud Tasks → worker → Cloud Build → Artifact Registry → Cloud Run. In a linked project the worker impersonates a deployer service account there. | |
-| 5 | Reaching apps | **IAP directly on each Cloud Run service** (security's decision, PR #2): the app's `run.app` URL, Google sign-in, and `grant_access` writes `access_grants` plus an IAM binding. No load balancer. **[security]** | `<app>.apps.shipcube.dev` through an ALB and the Go access proxy (`services/gateway`), if custom domains or per-request caps are needed |
+| 5 | Reaching apps | **IAP directly on each Cloud Run service** (security's decision, PR #2): the app's `run.app` URL, Google sign-in, and `set_access` writes `access_grants` plus an IAM binding. No load balancer. **[security]** | `<app>.apps.shipcube.dev` through an ALB and the Go access proxy (`services/gateway`), if custom domains or per-request caps are needed |
 | 5 | Egress | Default: none. Apps that need a static IP for a customer database use Direct VPC egress + Cloud NAT with a reserved IP, one per GCP project. | |
 | 6 | Caps | Cloud Run handles instances, concurrency, CPU/memory and timeout. Requests per minute applies to AI-gateway calls only while apps sit behind IAP. Spend uses ShipCube's own cost meter plus a billing budget, and the kill switch is `max-instances=0`. | Per-request app caps through the access proxy or Cloud Armor |
 | 6 | Budget | About **$5–20/month** fixed (Cloud SQL, plus NAT once a demo app needs a static IP). The access-proxy option adds ~$18 for the ALB. GKE Autopilot is placement-only. | |
@@ -96,7 +96,7 @@ This matches security's `api_tokens` table and token section (PR #2, `database-d
 - **Format:** `sc_pat_<id>_<secret>`, with 32 random bytes for the secret. The prefix makes tokens easy for secret scanners to find.
 - **Storage:** only `HMAC-SHA-256(pepper, secret)`, looked up through a unique index. The pepper lives in Secret Manager.
 - **Lifetime:** 30 days by default, 90 at most. Tokens can be revoked; `last_used_at` is recorded.
-- **Scopes:** `apps:read`, `apps:deploy`, `access:write`, `caps:write`, `secrets:write`. Networking proposes adding `data:read` and `data:migrate` for the data-layer tools (§2.4).
+- **Scopes:** `apps:read`, `apps:deploy`, `access:write`, `caps:write`, `secrets:write`, `data:read`, `data:migrate` (propose only) and `data:raw` (L3, off by default). Security's PR #2 now carries this list. A PAT can never approve; only a console session can (§2.5).
 - The MCP server never sees Google credentials. **[security]** owns the token table and how tokens are minted.
 
 How it's wired (`services/mcp/shipcube_mcp/server.py`):
@@ -133,62 +133,62 @@ For phase 2, the Python SDK's `AuthSettings(resource_server_url=…)` publishes 
 | Contract | `services/api/openapi.yaml` stays the hand-written contract. `tests/test_api.py` fails if FastAPI's routes stop matching it. |
 | Deploy shape | **One Cloud Run service.** A small ASGI dispatcher sends `/mcp` to the SDK app (with its auth middleware) and everything else to FastAPI. Tools call the API in-process through `httpx.ASGITransport`, so it's the same routes, auth and validation, with no network hop. Set `SHIPCUBE_API_URL` to split them later. PR #4 recommends `min-instances=1` to hide Python's ~0.6 s cold start. |
 
-**Mounting other Python tool packages in-process** (`shipcube_mcp/plugins.py`):
-- A package exposes `register(host)`, discovered through the `shipcube.mcp_tools` entry-point group or `SHIPCUBE_MCP_PLUGINS=module:function`.
-- It registers tools with `host.tool(...)`, which takes the same arguments as `MCPServer.tool` and **replaces** a built-in tool of the same name.
-- Inside a tool, `await host.caller("data:read")` returns the verified user, workspace and scopes, or fails with `permission_denied`.
-- `tests/test_server.py` mounts a stand-in data-layer package this way.
+**Mounting the data layer in-process** (`shipcube_mcp/data.py`, §2.4): shipcube-data's `DataTools` library is called directly in the same process, with a `data_` prefix and an allow-list that keeps `apply_migration` out. A `DataBackend` interface switches between the real library and a stub.
 
 ---
 
 ## 2. MCP tools
 
-The draft in `docs/ARCHITECTURE.md` §0 had 11 tools. The final list has **17**. The additions:
-- `create_upload`: the agent's code has to reach us somehow.
-- `get_operation` / `cancel_operation`: long-running work.
-- `whoami`: lets the agent pick a GCP target.
-- `list_apps` and `delete_app`.
+**Decided by Kunal on Oct 28** (`docs/WORKSTREAMS.md` → Decided → MCP shape). The server exposes **16 tools**: 11 app tools plus 5 data tools from shipcube-data. The first draft had 17 app tools; the changes:
+- Three merges:
+  - `get_status` + `get_logs` + `get_metrics` → `inspect_app`
+  - `grant_access` + `revoke_access` → `set_access`
+  - `get_operation` + `cancel_operation` → `operation`
+- `connect_data` and `query` removed. Warehouses are connected in the console, so credentials never pass through an agent. Queries go through `data_query`.
 
-`get_status` also returns the access list, so there is no `list_access`. The source of truth is `services/mcp/shipcube_mcp/tools.py`, with schemas from `services/api/shipcube_api/models.py`. Every tool declares an `outputSchema` and returns `structuredContent`. §2.4 covers the six data-layer tools mounted on top, which bring the total to **22**.
+The source of truth is `services/mcp/shipcube_mcp/tools.py` (app tools) and `data.py` (data tools), with schemas from `services/api/shipcube_api/models.py`. Every app tool declares an `outputSchema` and returns `structuredContent`.
 
 ### 2.1 Tool list
 
 | Tool | Input (required **bold**) | Output | Annotations |
 |---|---|---|---|
-| `whoami` | — | `user_id, email, workspace, gcp_targets[{id, project, kind: shipcube\|linked, default}], limits` | read-only |
+| `whoami` | — | `user_id, email, role, workspace, gcp_targets[{id, project, kind: shipcube\|linked, default}], limits, token{id, scopes, expires_at}` | read-only |
 | `create_upload` | `content_type` | `upload_id, method: PUT, url, headers, max_bytes, expires_at` | |
-| `estimate_load` | **`source`**, `app`, `expected_users`, `schedule`, `wait_s` | `{operation, next?}`. When done, `operation.result` holds `estimate_id, workload_class, confidence, tier, target, resources, monthly_cost_usd{low, expected, high}, profile, recommended_caps, reasoning, alternatives[]` | read-only (no user-visible side effects) |
-| `deploy_app` | **`app`**, **`source`**, `estimate_id`, `tier`, `target`, `region`, `env`, `secrets` (names only), `caps`, `idempotency_key`, `wait_s` | `{operation, next?}`. Result: `app, url, revision, tier, target, access` | idempotent |
-| `get_operation` | **`id`**, `wait_s` | `{operation, next?}` | read-only |
-| `cancel_operation` | **`id`** | `{operation}` | idempotent |
+| `estimate_load` | **`source`**, `app`, `expected_users`, `schedule`, `wait_s` | `{operation, next?}`. The result (`EstimateResult`) holds the classifier's numbers: `estimate_id, workload_class, confidence, tier, target, resources, monthly_cost_usd{low, expected, high}, profile`. Muse Spark adds `reasoning, alternatives[], recommended_caps`, and **`explained_by: muse-spark \| rules`** says which explainer ran. | read-only |
+| `deploy_app` | **`app`**, **`source`**, `estimate_id`, `tier`, `target`, `region`, `env`, `secrets` (names only), `caps`, `idempotency_key`, `wait_s` | `{operation, next?}`. Result: `app, url, revision, tier, target, access`. May be `awaiting_approval` (§2.5). | idempotent |
+| `operation` | **`id`**, `action: get \| cancel`, `wait_s` | `{operation, next?}`. `cancel` also withdraws a pending approval. | idempotent |
 | `list_apps` | — | `apps[{name, url, tier, status, updated_at}]` | read-only |
-| `get_status` | **`app`** | `name, url, tier, target, region, status, revision, image, caps, access[], ai, updated_at` | read-only |
-| `get_logs` | **`app`**, `severity`, `limit`, `page_token` | `entries[{timestamp, severity, message, revision}], next_page_token` | read-only |
-| `get_metrics` | **`app`**, `window` | requests, error rate, p50/p95, instances, cold starts, CPU/memory utilization, `cost_usd`, `caps_hit`, `data_freshness_minutes` | read-only |
-| `set_caps` | **`app`**, **`caps`** | `caps, enforced_by{cap → mechanism}` | idempotent |
-| `grant_access` | **`app`**, **`principal`** (`user:`/`group:`/`domain:`), `role` | `access[]` | idempotent |
-| `revoke_access` | **`app`**, **`principal`** | `access[]` | destructive, idempotent |
-| `connect_data` | **`name`**, **`kind`**, `connection_secret`, `model_yaml` | `datasource_id, egress` (the IP to allow-list), `cubes_detected, status` | open-world |
-| `query` | **`query`** (the semantic L0/L1 shape from ARCHITECTURE §2), `datasource` | `level, sql, columns, rows, cached, verified` | read-only, open-world |
+| `inspect_app` | **`app`**, `include: [status, logs, metrics]` (default `[status]`), `log_severity`, `log_limit`, `metrics_window` | `{status?, logs?, metrics?}`. Status covers URL, tier, target, revision, caps, access list, AI provider and deletion fields. Logs come newest first. Metrics cover health, cost and cap usage. | read-only |
+| `set_caps` | **`app`**, **`caps`** | `caps, enforced_by{cap → mechanism}, operation?`. A raise above the workspace default comes back as an Operation awaiting approval, with the caps unchanged. | idempotent |
+| `set_access` | **`app`**, `add[{principal, role}]`, `remove[principal]` | `access[]` (the full list), `operation?` for pending `domain:` grants | idempotent |
 | `ai_config` | **`app`**, `provider`, `model`, `key_secret`, `base_url` | `ai, gateway_url` | idempotent |
-| `delete_app` | **`app`**, **`confirm: true`**, `wait_s` | `{operation, next?}` | destructive |
+| `delete_app` | **`app`**, **`confirm: true`**, `wait_s` | `{operation, next}`, always `awaiting_approval`. Once approved it's a soft delete, restorable for 7 days. | destructive |
+| `data_list_cubes` | — | shipcube-data | read-only |
+| `data_describe_cube` | **`cube`** | shipcube-data | read-only |
+| `data_query` | **`query`**, `mode: run \| sql`, `dialect` | shipcube-data | read-only |
+| `data_search_values` | **`dimension`**, `text`, `limit` | shipcube-data | read-only |
+| `data_propose_migration` | **`description`**, **`ops`** | diff, impact, `approval_url`. Never applies. Needs `data:migrate`. | not read-only, not destructive |
 
 Shared types:
 
 ```text
 Source = { kind: "upload", upload_id } | { kind: "git", url, ref?, subdir? }
-       | { kind: "image", uri } | { kind: "inline", files: [{path, content}] /* ≤50 files, ≤256 KB */ }
+       | { kind: "image", uri }
+       | { kind: "inline", files: [{path, content, encoding?: utf-8|base64}] }  /* ≤100 files, ≤2 MB content */
 Caps   = { max_instances?: 0..10, concurrency?: 1..1000, requests_per_minute?, monthly_spend_usd?,
            cpu?: "0.5"|"1"|"2"|"4", memory?: "512Mi", timeout_s?: 1..3600 }
-Operation = { id, kind: estimate|deploy|delete, app, status: queued|running|succeeded|failed|cancelled,
+Operation = { id, kind: estimate|deploy|delete|set_caps|set_access,
+              status: awaiting_approval|queued|running|succeeded|failed|cancelled,
               done, progress: {step, completed_steps, total_steps, message}, steps[{name, status}],
-              result, error: {code, message} | null, poll_after_s, created_at, updated_at }
+              result, error: {code, message} | null, approval_url, approval_reasons[], approval_actions[],
+              approval_expires_at, poll_after_s,
+              created_at, updated_at }
 ```
 
 Rules for the schemas:
-- **Secrets are never tool arguments.** `secrets`, `connection_secret` and `key_secret` are names of secrets the user stored through the console, so values never appear in agent transcripts. **[security]** owns the secret store.
-- App names are DNS labels (`^[a-z][a-z0-9-]{1,38}[a-z0-9]$`), so `<app>.apps.shipcube.dev` and the Cloud Run service name are both valid.
-- Tool descriptions spell out the normal flow (create_upload → estimate_load → deploy_app with `estimate_id` → grant_access), and the server `instructions` repeat it.
+- **Secrets are never tool arguments.** `secrets` and `key_secret` are names of secrets the user stored through the console, so values never appear in agent transcripts. **[security]** owns the secret store.
+- App names are DNS labels (`^[a-z][a-z0-9-]{1,38}[a-z0-9]$`), so they are valid Cloud Run service names.
+- Tool descriptions and the server `instructions` spell out the normal flow (create_upload → estimate_load → deploy_app with `estimate_id` → set_access) and what to do with `awaiting_approval`.
 
 ### 2.2 Getting code from the agent to ShipCube
 
@@ -201,7 +201,7 @@ tar czf - --exclude .git --exclude node_modules . | curl -X PUT -H "Content-Type
 Then it passes `{kind: "upload", upload_id}`. This keeps large payloads out of JSON-RPC, and the agent's own shell does the upload. The other source kinds:
 - `git`: public repos, or private ones through a GitHub App later.
 - `image`: the user already built a container.
-- `inline`: tiny single-file apps, so the demo works even without a shell.
+- `inline`: up to **100 files and 2 MB** of content (a ~20-file, ~1 MB demo app fits), with `encoding: base64` for binary files. It works even when the agent has no shell. The MCP endpoint accepts request bodies up to 6 MB to leave room for JSON escaping (the SDK default is 4 MB).
 
 ### 2.3 Long-running operations
 
@@ -215,30 +215,56 @@ The design:
 
 1. **Every long-running tool returns an Operation**, the same object the API returns (AIP-151 style). The agent sees `status`, `steps[]` and `progress`.
 2. **Bounded wait.** The tool waits up to `wait_s` (default 20, max 55). Meanwhile it polls the API once a second and sends **`notifications/progress`** on that request's SSE stream whenever a step completes, if the client sent a `progressToken` ([progress spec](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/progress)). Claude Code and the SDK client show these.
-3. If the work isn't done when the wait ends, the result includes `next: "Call get_operation with id … to keep waiting"`. **Polling, not push notifications:** in 2026-07-28 there is no server-initiated channel for request results. `subscriptions/listen` covers only list and resource changes. And the agent is the one waiting anyway.
+3. If the work isn't done when the wait ends, the result includes `next: "Call operation with id … to keep waiting"`. An operation `awaiting_approval` returns at once with the `approval_url` in `next`. **Polling, not push notifications:** in 2026-07-28 there is no server-initiated channel for request results. `subscriptions/listen` covers only list and resource changes. And the agent is the one waiting anyway.
 4. **Idempotency.**
    - `deploy_app` takes `idempotency_key`, which the MCP server sends as an `Idempotency-Key` header ([IETF draft](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/)).
    - The API stores `key → (operation_id, request_hash)`. The same key with the same body returns the **same operation**. The same key with a different body returns `409`.
    - If the agent omits the key, the MCP server derives one from `hash(token, tool, args, 10-minute bucket)`, so a retry after a dropped stream doesn't start a second build.
    - The smoke test shows this: a second run got back the same estimate and deploy operation ids.
-5. **Cancellation.** Closing the SSE stream cancels only the *wait* (the SDK cancels the tool's task), never the deploy. `cancel_operation` is explicit.
+5. **Cancellation.** Closing the SSE stream cancels only the *wait* (the SDK cancels the tool's task), never the deploy. `operation` with `action: cancel` is explicit.
 6. **Later:** advertise the `io.modelcontextprotocol/tasks` extension, so capable clients get a task handle and use `tasks/get`. The Operation maps onto it 1:1.
 
 ### 2.4 Data-layer tools (Kunal-Shahi/shipcube-data)
 
-The data layer ships its tools as a Python package that is mounted in-process through the plugin hook (§1.6). Placement in the tool list:
+The data layer ships its tools as an in-process Python library, `shipcube_data.tools.DataTools`, with `specs()` and `call(name, args, caller)` (shipcube-data PR #1, `docs/MCP.md`). `services/mcp/shipcube_mcp/data.py` mounts it as follows.
 
-| Tool | Owner | Scope (proposed) | Annotations | Notes |
-|---|---|---|---|---|
-| `connect_data` | networking | `secrets:write` | open-world | Stays ours. It registers the source with the control plane, sets up static egress (§5.5) and returns the IP to allow-list, then hands the connection to the data layer. |
-| `list_cubes` | data layer | `data:read` | read-only | |
-| `describe_cube` | data layer | `data:read` | read-only | |
-| `search_values` | data layer | `data:read` | read-only, open-world | Returns warehouse values, so the results are data, not instructions |
-| `query` | data layer | `data:read` | read-only, open-world | **Replaces** the stub `query` (same name, through `host.tool`) |
-| `propose_migration` | data layer | `data:migrate` | read-only (returns a diff) | |
-| `apply_migration` | data layer | `data:migrate` | destructive | Should follow security's threat-model rule (T1) and return a console confirmation URL rather than applying directly |
+**Prefix and allow-list:**
+- The five tools are mounted as `data_list_cubes`, `data_describe_cube`, `data_query`, `data_search_values` and `data_propose_migration`.
+- **`apply_migration` is never exposed.** An explicit allow-list (`EXPOSED`) means a new library tool stays hidden until someone reviews it.
+- Agents only propose model changes. A human approves and applies them in the console (`DataTools.approve`).
 
-Every data tool calls `host.caller(scope)` first. It gets the verified `workspace_id`, which security's schema uses for tenant-to-schema routing and row-level filters. The data layer never parses tokens itself.
+**Schemas:**
+- Each tool advertises the library's own JSON Schema (e.g. the full migration-op union for `propose_migration`).
+- The library validates its arguments itself and returns `{code, message, hint}` errors, which reach the agent as tool errors.
+
+**Identity:**
+- Before every call, the MCP server asks the API who the token belongs to (`GET /v1/me`: user, email, membership role, workspace, scopes) and checks the tool's scope: `data:read`, or `data:migrate` for propose. That's security's name for the scope; shipcube-data PR #1 still calls it `data:write`, so the adapter translates.
+- It then builds the library's `Caller` (`via="mcp"`, workspace UUID, role, token id, scopes).
+- The library turns that into tenant routing and row-level filters. Tool arguments never carry identity.
+
+**The `DataBackend` seam:**
+- `ShipcubeDataBackend` wraps the real library. Install it with the `data` extra (pinned to shipcube-data commit `5cdc6f8`), and the server serves the Olist demo warehouse.
+- The library's catalog is a sqlite3 connection, which is bound to the thread that opened it, so one dedicated worker thread owns the library.
+- Without the package, or without its example migrations, `StubDataBackend` serves canned results with the same names, scopes and error shape.
+- The smoke run below used the real library. The tests use the stub.
+
+### 2.5 Approvals
+
+Kunal's rule: agents act directly on reads, cap reductions, access removals, and deploys to ShipCube's project within the default caps. A human must approve these four:
+
+| Action | Trigger | What the agent gets |
+|---|---|---|
+| First deploy to a **linked GCP project** | first `deploy_app` with `target` of kind `linked` in this workspace; later deploys go straight through | Operation `awaiting_approval` |
+| **Cap raise above the workspace default** | `set_caps`, or `deploy_app` with `caps`, where any value exceeds the workspace default (security's `caps` rows with `app_id = null`) | `set_caps`: caps unchanged + `operation` awaiting approval (the whole change waits, so it never half-applies). `deploy_app`: the deploy waits. |
+| **`domain:` grant** | `set_access` adding `domain:…` | `user:`/`group:` grants and removals apply at once; the domain grants come back as a `set_access` operation |
+| **`delete_app`** | always | Operation awaiting approval. Once approved it's a **soft delete**: scaled to zero, IAP access removed, `deleted_at` + `restorable_until` (7 days), restorable from the console |
+
+Mechanics:
+- **Status:** a waiting operation has `status: awaiting_approval`, `approval_url` (`https://console.shipcube.dev/w/<workspace>/approvals/<op id>`), `approval_reasons[]`, `approval_actions[]` (security's `approvals.action` values: `first_linked_deploy`, `cap_raise`, `domain_grant`, `delete_app`), `approval_expires_at` (72 h) and a slow `poll_after_s` (10 s). Its clock doesn't start until approval.
+- **Agent side:** `next` tells the agent to show the link to the user and follow the operation with `operation`. `operation(action=cancel)` withdraws the request.
+- **Endpoints:** the console calls `POST /v1/operations/{id}/approve` or `/reject` (optional `comment`). Approval moves the operation to `queued`, and it runs as usual. As in security's `operations` table, there is no `rejected` status: a rejected, expired or withdrawn approval ends the operation as `cancelled`, with `error.code` set to `approval_rejected`, `approval_expired` or `approval_withdrawn`. `POST /v1/apps/{app}/restore` undoes a soft delete within the window.
+- **Who can approve: a human console session only.** A PAT gets `403`, whatever its scopes, so an agent can't approve its own request. The skeleton models console sessions as `sc_ses_…` tokens; in production they're Identity Platform sessions, owned by **[security]**.
+- **Idempotency:** idempotency keys cover approval requests too. A retried `set_caps` returns the same pending operation instead of opening a second approval.
 
 ---
 
@@ -411,7 +437,7 @@ A serverless NEG can route with a **URL mask** (e.g. `<service>.example.com`) st
 | Effort | Small | Medium: OIDC login, sessions, a streaming reverse proxy |
 
 **Decision (security's, PR #2): IAP directly on each Cloud Run service.** This replaces networking's first draft, which preferred the proxy.
-- `grant_access` writes an `access_grants` row and adds `roles/iap.httpsResourceAccessor` for `user:`, `group:` or `domain:`. `revoke_access` removes it. A reconciler fixes drift.
+- `set_access` writes `access_grants` rows and adds or removes `roles/iap.httpsResourceAccessor` for `user:`, `group:` or `domain:` (a `domain:` grant waits for approval, §2.5). A reconciler fixes drift.
 - It's free, puts no ShipCube code on the request path, and supports Google groups natively.
 - What we give up: custom domains, per-request `requests_per_minute` caps on app traffic, and per-request metering in our own hop. Request counts and latency come from Cloud Monitoring instead (§6).
 
@@ -452,7 +478,7 @@ With IAP, these limits apply to the app directly. If the access proxy is built, 
 Most demo apps read BigQuery or DuckDB, which needs no network setup. For customer Postgres/Snowflake behind an IP allow-list:
 - **Direct VPC egress** (GA, recommended, no connector VMs, scales to zero) with all traffic routed to the VPC, plus **Cloud NAT** in manual mode with a **reserved static IP** ([static outbound IP](https://docs.cloud.google.com/run/docs/configuring/static-outbound-ip), [VPC options](https://docs.cloud.google.com/run/docs/configuring/connecting-vpc)).
 - Cost: NAT IP $0.005/h (~$3.60/month) + $0.045/GiB processed + the gateway-hour charge ([NAT pricing](https://cloud.google.com/nat/pricing)). Serverless Access connectors are billed as VMs, so avoid them.
-- One NAT per project and region. Every app in ShipCube's project that opts in shares **one** egress IP, which `connect_data` returns so the user can allow-list it. Linked projects get their own NAT, created on first `connect_data`.
+- One NAT per project and region. Every app in ShipCube's project that opts in shares **one** egress IP, which the console shows when a warehouse is connected, so the user can allow-list it. Linked projects get their own NAT, created when their first warehouse is connected.
 - Only apps with `egress: static` get `--network/--subnet --vpc-egress=all-traffic`. Everything else keeps default internet egress (no NAT charges).
 - Private-IP databases (Cloud SQL in the user's VPC) work through the same Direct VPC egress in the linked project.
 - Risk to note: the IP is shared across tenants on ShipCube's project, so allow-listing it lets in every ShipCube app with static egress. Customers who care should use a linked project. **[security]**
@@ -511,7 +537,7 @@ Guardrails on ShipCube's project:
 
 1. **Domain.** Not needed for the IAP plan (apps use `run.app` URLs). A real domain (~$12/year) is only needed for `mcp.shipcube.dev`, OAuth redirect URIs in phase 2, or the access-proxy option.
 2. **Muse Code MCP support** (remote HTTP? headers? OAuth?) is undocumented publicly. Test it on day 2.
-3. **[security]** Add the `data:read` and `data:migrate` scopes and an `operations` table: id, kind, workspace, status, step, step_state, idempotency key and request hash, unique per workspace. The `deployments` table alone doesn't cover estimates and deletes. Rename the caps (`memory` → `memory_mib`, `timeout_s` → `request_timeout_s`, `monthly_spend_usd` → `spend_usd_per_month`), and either add `concurrency` to the `caps` table or keep it as a per-app setting. Also note the shared static egress IP risk (§5.5).
+3. **[security]** Mostly done in PR #2: the `operations` and `approvals` tables, soft-delete columns on `apps` (`purge_after` = our `restorable_until`) and the data scopes. Still open: what `approvals.action` holds when one deploy needs two approvals (linked project + cap raise); see the PR description. Rename the caps (`memory` → `memory_mib`, `timeout_s` → `request_timeout_s`, `monthly_spend_usd` → `spend_usd_per_month`), and either add `concurrency` to the `caps` table or keep it as a per-app setting. Also note the shared static egress IP risk (§5.5).
 4. **[language]** Decided: Python. Only the access proxy and AI gateway are Go, in `services/gateway`.
 
 ## Sources

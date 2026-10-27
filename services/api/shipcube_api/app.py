@@ -17,13 +17,18 @@ from fastapi.responses import JSONResponse
 
 from .auth import Caller, tokens
 from .models import (
-    AccessBinding, AccessList, AiConfigRequest, AiConfigResult, App, AppList, AppName, AppSummary, Caps,
-    CapsResult, DataSource, DataSourceRequest, DeployRequest, EstimateRequest, GrantRequest, Logs, Me, Metrics,
-    Operation, QueryRequest, QueryResult, Upload, UploadRequest,
+    AccessChange, AccessResult, AiConfigRequest, AiConfigResult, App, AppList, AppName, AppSummary,
+    ApprovalDecision, Caps, CapsResult, DeployRequest, EstimateRequest, Logs, Me, Metrics, Operation, Upload,
+    UploadRequest,
 )
-from .store import ENFORCED_BY, Conflict, now, store
+from .store import ENFORCED_BY, Conflict, caps_above_default, store
 
 app = FastAPI(title="ShipCube control-plane API", version="v1")
+
+# Approvals (docs/research/networking.md §2.5). Agents act directly on reads, cap reductions, access
+# removals and ShipCube-project deploys within default caps. These wait for a human in the console:
+# the first deploy to a linked GCP project, a cap raise above the workspace default, a domain: grant,
+# and delete_app (a soft delete, restorable for 7 days).
 
 
 class ApiError(HTTPException):
@@ -72,11 +77,17 @@ def scope(required: str):
 IdemKey = Annotated[str | None, Header(alias="Idempotency-Key", max_length=64)]
 
 
-def get_app(name: str) -> dict:
+def get_app(name: str, include_deleted: bool = False) -> dict:
     a = store.apps.get(name)
-    if a is None:
+    if a is None or (a["deleted_at"] and not include_deleted):
         raise ApiError(404, "not_found", f"app {name} not found")
     return a
+
+
+def console_session(c: Annotated[Caller, Depends(caller)]) -> Caller:
+    if c.via != "console":
+        raise ApiError(403, "permission_denied", "only a human console session can do this; approve at the approval_url")
+    return c
 
 
 def accepted(op: Operation, response: Response) -> Operation:
@@ -124,7 +135,16 @@ def start_estimate(body: EstimateRequest, response: Response, c: Annotated[Calle
 @app.post("/v1/apps/{app}/deployments", response_model=Operation, status_code=202)
 def deploy(app: AppName, body: DeployRequest, response: Response,
            c: Annotated[Caller, Depends(scope("apps:deploy"))], idem: IdemKey = None):
-    op = store.start_operation(c.workspace_id, "deploy", app, body.model_dump(mode="json"), idem)
+    target = body.target or next(t["id"] for t in store.me["gcp_targets"] if t["default"])
+    kind = store.target_kind(target)
+    if kind is None:
+        raise ApiError(400, "invalid_argument", f"unknown target {target}; see whoami")
+    reasons = []
+    if kind == "linked" and (c.workspace_id, target) not in store.approved_targets:
+        reasons.append(("first_linked_deploy", f"first deploy to linked GCP project {target}"))
+    reasons += caps_above_default(body.caps.model_dump(exclude_none=True) if body.caps else {})
+    payload = {**body.model_dump(mode="json"), "target": target}
+    op = store.start_operation(c.workspace_id, "deploy", app, payload, idem, reasons)
     return accepted(op, response)
 
 
@@ -144,6 +164,22 @@ def cancel_operation(op_id: str, c: Annotated[Caller, Depends(scope("apps:deploy
     return op
 
 
+@app.post("/v1/operations/{op_id}/approve", response_model=Operation)
+def approve(op_id: str, body: ApprovalDecision, c: Annotated[Caller, Depends(console_session)]):
+    op = store.decide(op_id, approve=True)
+    if op is None:
+        raise ApiError(404, "not_found", f"operation {op_id} not found")
+    return op
+
+
+@app.post("/v1/operations/{op_id}/reject", response_model=Operation)
+def reject(op_id: str, body: ApprovalDecision, c: Annotated[Caller, Depends(console_session)]):
+    op = store.decide(op_id, approve=False)
+    if op is None:
+        raise ApiError(404, "not_found", f"operation {op_id} not found")
+    return op
+
+
 @app.get("/v1/apps", response_model=AppList)
 def list_apps(c: Annotated[Caller, Depends(scope("apps:read"))]):
     return {"apps": [AppSummary.model_validate(a) for a in store.apps.values()]}
@@ -151,14 +187,25 @@ def list_apps(c: Annotated[Caller, Depends(scope("apps:read"))]):
 
 @app.get("/v1/apps/{app}", response_model=App)
 def app_status(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))]):
-    return get_app(app)
+    return get_app(app, include_deleted=True)
 
 
 @app.delete("/v1/apps/{app}", response_model=Operation, status_code=202)
 def delete_app(app: AppName, response: Response, c: Annotated[Caller, Depends(scope("apps:deploy"))],
                idem: IdemKey = None):
     get_app(app)
-    return accepted(store.start_operation(c.workspace_id, "delete", app, {}, idem), response)
+    reasons = [("delete_app", "delete_app always needs approval (soft delete, restorable for 7 days)")]
+    return accepted(store.start_operation(c.workspace_id, "delete", app, {}, idem, reasons), response)
+
+
+@app.post("/v1/apps/{app}/restore", response_model=App)
+def restore(app: AppName, c: Annotated[Caller, Depends(console_session)]):
+    a = get_app(app, include_deleted=True)
+    if not a["deleted_at"]:
+        raise ApiError(409, "conflict", f"app {app} is not deleted")
+    if a["restorable_until"] < datetime.now(UTC).isoformat():
+        raise ApiError(410, "gone", f"app {app} can no longer be restored")
+    return store.restore(app)
 
 
 @app.get("/v1/apps/{app}/logs", response_model=Logs)
@@ -177,27 +224,33 @@ def metrics(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))],
 
 
 @app.patch("/v1/apps/{app}/caps", response_model=CapsResult)
-def set_caps(app: AppName, body: Caps, c: Annotated[Caller, Depends(scope("caps:write"))]):
+def set_caps(app: AppName, body: Caps, c: Annotated[Caller, Depends(scope("caps:write"))], idem: IdemKey = None):
     a = get_app(app)
-    a["caps"].update(body.model_dump(exclude_none=True))
-    return {"caps": a["caps"], "enforced_by": {k: ENFORCED_BY.get(k, "not enforced (unknown cap)") for k in a["caps"]}}
+    change = body.model_dump(exclude_none=True)
+    op = None
+    if reasons := caps_above_default(change):
+        # The whole change waits, so the caps never end up half-applied.
+        op = store.start_operation(c.workspace_id, "set_caps", app, {"caps": change}, idem, reasons)
+    else:
+        store.apply_caps(app, change)
+    return {"caps": a["caps"], "enforced_by": {k: ENFORCED_BY.get(k, "not enforced (unknown cap)") for k in a["caps"]},
+            "operation": op}
 
 
-@app.post("/v1/apps/{app}/access", response_model=AccessList, status_code=201)
-def grant(app: AppName, body: GrantRequest, c: Annotated[Caller, Depends(scope("access:write"))]):
+@app.patch("/v1/apps/{app}/access", response_model=AccessResult)
+def set_access(app: AppName, body: AccessChange, c: Annotated[Caller, Depends(scope("access:write"))],
+               idem: IdemKey = None):
     a = get_app(app)
-    b = AccessBinding(principal=body.principal, role=body.role, granted_at=now()).model_dump()
-    a["access"] = [x for x in a["access"] if x["principal"] != body.principal] + [b]
-    return {"access": a["access"]}
-
-
-@app.delete("/v1/apps/{app}/access/{principal}", response_model=AccessList)
-def revoke(app: AppName, principal: str, c: Annotated[Caller, Depends(scope("access:write"))]):
-    a = get_app(app)
-    if principal == f"user:{store.me['email']}":
-        raise ApiError(400, "invalid_argument", "cannot revoke the owner")
-    a["access"] = [x for x in a["access"] if x["principal"] != principal]
-    return {"access": a["access"]}
+    if f"user:{store.me['email']}" in body.remove:
+        raise ApiError(400, "invalid_argument", "cannot remove the owner")
+    domain = [g.model_dump() for g in body.add if g.principal.startswith("domain:")]
+    direct = [g.model_dump() for g in body.add if not g.principal.startswith("domain:")]
+    store.apply_access(app, direct, body.remove)  # removals and user/group grants apply now
+    op = None
+    if domain:
+        reasons = [("domain_grant", f"grant to a whole domain ({g['principal']})") for g in domain]
+        op = store.start_operation(c.workspace_id, "set_access", app, {"add": domain}, idem, reasons)
+    return {"access": a["access"], "operation": op}
 
 
 @app.put("/v1/apps/{app}/ai", response_model=AiConfigResult)
@@ -205,13 +258,3 @@ def ai_config(app: AppName, body: AiConfigRequest, c: Annotated[Caller, Depends(
     a = get_app(app)
     a["ai"] = {"provider": body.provider, "model": body.model, "key_secret": body.key_secret}
     return {"ai": a["ai"], "gateway_url": f"https://ai.shipcube.dev/v1/apps/{app}"}
-
-
-@app.post("/v1/datasources", response_model=DataSource, status_code=201)
-def connect_data(body: DataSourceRequest, c: Annotated[Caller, Depends(scope("secrets:write"))]):
-    return store.connect_data(body.model_dump())
-
-
-@app.post("/v1/query", response_model=QueryResult)
-def query(body: QueryRequest, c: Annotated[Caller, Depends(scope("data:read"))]):
-    return store.query(body.model_dump())

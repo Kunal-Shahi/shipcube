@@ -6,7 +6,9 @@ The ShipCube control-plane API. It owns all state (apps, operations, caps, acces
 - **Implementation:** Python 3.12, FastAPI + Pydantic (`shipcube_api/`), with in-memory mock state. Operations advance with wall-clock time so that polling and progress behave like a real deploy.
   - `models.py` holds the request and response models. The MCP tools reuse them for their schemas.
   - `auth.py` handles PATs as in security's `api_tokens` table: `sc_pat_<id>_<secret>`, HMAC-SHA-256 with a pepper, 90-day maximum, scopes.
-  - `app.py` holds the routes. Every route checks a scope.
+  - `app.py` holds the routes. Every route checks a scope. Approve, reject and restore accept only a console session.
+  - `explain.py` holds the estimate explainer: Muse Spark (mocked) with a rule-based fallback; `explained_by` says which ran.
+  - `store.py` has the approvals: the first linked deploy, cap raises above the workspace default, `domain:` grants and deletes wait in `awaiting_approval` (72 h) until approved. Deletes are soft and restorable for 7 days.
 - **Deploy shape:** normally served in the same process as the MCP server (`services/mcp`). It can also run alone.
 - **Design:** `docs/research/networking.md` §3 (REST, versioning, the job model) and §4 (request flow).
 

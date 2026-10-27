@@ -13,6 +13,10 @@ dependencies = [
     "shipcube-api",
 ]
 
+[project.optional-dependencies]
+# The real data layer (Kunal-Shahi/shipcube-data PR #1). Without it the data_* tools use a stub.
+data = ["shipcube-data[duckdb]"]
+
 [project.scripts]
 shipcube-mcp = "shipcube_mcp.server:main"
 
@@ -21,6 +25,7 @@ dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 
 [tool.uv.sources]
 shipcube-api = { path = "../api", editable = true }
+shipcube-data = { git = "https://github.com/Kunal-Shahi/shipcube-data", rev = "5cdc6f8eb44209370e7f7da50104aa4a18ca2034" }
 
 [build-system]
 requires = ["hatchling"]

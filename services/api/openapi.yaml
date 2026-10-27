@@ -58,7 +58,7 @@ paths:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/App' } } } }
         '404': { $ref: '#/components/responses/Error' }
     delete:
-      summary: Tear down an app
+      summary: Soft-delete an app (always awaits approval; restorable for 7 days)
       parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       responses:
         '202': { $ref: '#/components/responses/Accepted' }
@@ -98,6 +98,22 @@ paths:
       parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Operation' } } } }
+  /v1/operations/{id}/approve:
+    post:
+      summary: Approve an operation that is awaiting_approval (console session only; a PAT gets 403)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { comment: { type: string } } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Operation' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /v1/operations/{id}/reject:
+    post:
+      summary: Reject an operation that is awaiting_approval (console session only)
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { comment: { type: string } } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Operation' } } } }
   /v1/apps/{app}/logs:
     parameters: [{ $ref: '#/components/parameters/App' }]
     get:
@@ -118,29 +134,43 @@ paths:
   /v1/apps/{app}/caps:
     parameters: [{ $ref: '#/components/parameters/App' }]
     patch:
-      summary: Update caps (merge)
+      summary: Update caps (merge). A raise above the workspace default waits for approval and returns an Operation.
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Caps' } } } }
       responses:
         '200': { description: OK }
   /v1/apps/{app}/access:
     parameters: [{ $ref: '#/components/parameters/App' }]
-    post:
-      summary: Grant access
+    patch:
+      summary: Add and remove access grants; returns the full list
+      description: 'Removals and user/group grants apply at once. domain: grants wait for approval and come back as an Operation.'
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [principal], properties: { principal: { type: string }, role: { type: string, enum: [viewer, editor] } } }
+            schema:
+              type: object
+              properties:
+                add: { type: array, items: { type: object, required: [principal], properties: { principal: { type: string }, role: { type: string, enum: [viewer, editor] } } } }
+                remove: { type: array, items: { type: string } }
       responses:
-        '201': { description: Created }
-  /v1/apps/{app}/access/{principal}:
-    parameters:
-      - { $ref: '#/components/parameters/App' }
-      - { name: principal, in: path, required: true, schema: { type: string } }
-    delete:
-      summary: Revoke access
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access: { type: array, items: { type: object } }
+                  operation: { oneOf: [{ $ref: '#/components/schemas/Operation' }, { type: 'null' }] }
+  /v1/apps/{app}/restore:
+    parameters: [{ $ref: '#/components/parameters/App' }]
+    post:
+      summary: Restore a soft-deleted app (console session only, within 7 days)
       responses:
-        '200': { description: OK }
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/App' } } } }
+        '410': { $ref: '#/components/responses/Error' }
   /v1/apps/{app}/ai:
     parameters: [{ $ref: '#/components/parameters/App' }]
     put:
@@ -158,16 +188,6 @@ paths:
                 base_url: { type: string }
       responses:
         '200': { description: OK }
-  /v1/datasources:
-    post:
-      summary: Register a data source
-      responses:
-        '201': { description: Created }
-  /v1/query:
-    post:
-      summary: Run a semantic-layer query
-      responses:
-        '200': { description: OK }
 components:
   securitySchemes:
     bearer:
@@ -176,7 +196,8 @@ components:
       description: |
         Personal access token sc_pat_<id>_<secret> in phase 1 (stored as HMAC-SHA-256 with a pepper; see
         docs/research/database-design.md api_tokens). Scopes: apps:read, apps:deploy, access:write, caps:write,
-        secrets:write, data:read, data:migrate. OAuth 2.1 access tokens later.
+        secrets:write, data:read, data:migrate, data:raw. OAuth 2.1 access tokens later. Console sessions (not PATs)
+        are the only callers allowed to approve, reject or restore.
   parameters:
     App: { name: app, in: path, required: true, schema: { type: string, pattern: '^[a-z][a-z0-9-]{1,38}[a-z0-9]$' } }
     IdempotencyKey: { name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 64 } }
@@ -200,9 +221,10 @@ components:
         - { type: object, required: [kind, uri], properties: { kind: { const: image }, uri: { type: string } } }
         - type: object
           required: [kind, files]
+          description: Up to 100 files and 2 MB of content in total
           properties:
             kind: { const: inline }
-            files: { type: array, maxItems: 50, items: { type: object, properties: { path: { type: string }, content: { type: string } } } }
+            files: { type: array, minItems: 1, maxItems: 100, items: { type: object, properties: { path: { type: string }, content: { type: string }, encoding: { type: string, enum: [utf-8, base64] } } } }
     Caps:
       type: object
       properties:
@@ -218,16 +240,20 @@ components:
       required: [id, kind, status, done, progress, poll_after_s]
       properties:
         id: { type: string }
-        kind: { type: string, enum: [estimate, deploy, delete] }
+        kind: { type: string, enum: [estimate, deploy, delete, set_caps, set_access] }
         app: { type: [string, 'null'] }
-        status: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        status: { type: string, enum: [awaiting_approval, queued, running, succeeded, failed, cancelled], description: 'A rejected or expired (72 h) approval ends as cancelled with error.code approval_rejected or approval_expired' }
         done: { type: boolean }
         progress:
           type: object
           properties: { step: { type: string }, completed_steps: { type: integer }, total_steps: { type: integer }, message: { type: string } }
         steps: { type: array, items: { type: object, properties: { name: { type: string }, status: { type: string } } } }
-        result: { description: Kind-specific result, present when status is succeeded }
+        result: { description: 'Kind-specific result, present when status is succeeded. For estimate, see EstimateResult.' }
         error: { type: [object, 'null'], properties: { code: { type: string }, message: { type: string } } }
+        approval_url: { type: [string, 'null'], description: Set while awaiting_approval; a human approves in the console }
+        approval_reasons: { type: array, items: { type: string } }
+        approval_actions: { type: array, items: { type: string, enum: [first_linked_deploy, cap_raise, domain_grant, delete_app] } }
+        approval_expires_at: { type: [string, 'null'], format: date-time }
         poll_after_s: { type: integer }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -245,6 +271,7 @@ components:
       properties:
         user_id: { type: string }
         email: { type: string }
+        role: { type: string, enum: [owner, admin, developer, viewer] }
         workspace: { type: object, properties: { id: { type: string }, name: { type: string } } }
         gcp_targets:
           type: array
@@ -266,3 +293,20 @@ components:
             caps: { $ref: '#/components/schemas/Caps' }
             access: { type: array, items: { type: object, properties: { principal: { type: string }, role: { type: string }, granted_at: { type: string } } } }
             ai: { type: object, properties: { provider: { type: string }, model: { type: string }, key_secret: { type: [string, 'null'] } } }
+            deleted_at: { type: [string, 'null'] }
+            restorable_until: { type: [string, 'null'] }
+    EstimateResult:
+      type: object
+      description: The classifier fills the numbers; Muse Spark (or rules, as a fallback) fills reasoning, alternatives and recommended_caps.
+      properties:
+        estimate_id: { type: string }
+        workload_class: { type: string }
+        confidence: { type: number }
+        tier: { type: string }
+        resources: { type: object }
+        monthly_cost_usd: { type: object }
+        profile: { type: object }
+        reasoning: { type: string }
+        alternatives: { type: array, items: { type: object, properties: { tier: { type: string }, why_not: { type: string } } } }
+        recommended_caps: { type: object }
+        explained_by: { type: string, enum: [muse-spark, rules] }

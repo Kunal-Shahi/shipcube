@@ -20,14 +20,20 @@ from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from shipcube_api.store import WORKSPACE_ID
+
 from .backend import Api
-from .plugins import ToolHost, load_plugins
+from .data import DataBackend, default_backend, mount_data_tools
 from .tools import register_tools
 
 INSTRUCTIONS = (
-    "ShipCube deploys and runs internal apps on GCP. Typical flow: create_upload (or a git source) -> estimate_load -> "
-    "deploy_app with the estimate_id -> grant_access. Long-running tools return an operation; call get_operation to keep waiting."
+    "ShipCube deploys and runs internal apps on GCP. Typical flow: create_upload (or a git/inline source) -> "
+    "estimate_load -> deploy_app with the estimate_id -> set_access. Long-running tools return an operation; call "
+    "operation to keep waiting. Some actions need a human: they return status awaiting_approval with an approval_url "
+    "to show the user. data_* tools query the semantic layer; model changes are only ever proposed."
 )
+# Inline sources may carry up to 2 MB of file content; leave room for JSON escaping.
+MAX_REQUEST_BODY = 6 * 1024 * 1024
 
 
 class ApiTokenVerifier:
@@ -46,7 +52,7 @@ class ApiTokenVerifier:
         return AccessToken(token=token, client_id=f"pat:{token_id}", scopes=[])
 
 
-def build_server(api: Api) -> MCPServer:
+def build_server(api: Api, data: DataBackend | None = None) -> MCPServer:
     server = MCPServer(
         "shipcube",
         version="0.2.0",
@@ -58,7 +64,7 @@ def build_server(api: Api) -> MCPServer:
                           resource_server_url=None),
     )
     register_tools(server, api)
-    load_plugins(ToolHost(server, api))
+    mount_data_tools(server, api, data or default_backend(WORKSPACE_ID))
     return server
 
 
@@ -69,6 +75,7 @@ def build_app() -> ASGIApp:
     # The SDK app carries the bearer-auth middleware, so it is kept whole and only sees /mcp.
     mcp_app = server.streamable_http_app(
         stateless_http=True,
+        max_request_body_size=MAX_REQUEST_BODY,
         transport_security=TransportSecuritySettings(
             allowed_hosts=hosts,
             allowed_origins=[f"http://{h}" for h in hosts] + [f"https://{h}" for h in hosts],

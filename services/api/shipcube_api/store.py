@@ -1,5 +1,10 @@
 """In-memory mock state. Operations advance with wall-clock time so that polling and progress
-notifications behave like a real deploy without touching GCP."""
+notifications behave like a real deploy without touching GCP.
+
+Approvals: an operation that needs a human starts in `awaiting_approval` with an `approval_url`
+and does not start its clock until it is approved in the console (`approve`). See
+docs/research/networking.md §2.5 for which actions need approval.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from .models import Operation, OpKind, Progress, Step
+from .explain import explain
+from .models import OpError, Operation, OpKind, Progress, Step
+
+CONSOLE_URL = "https://console.shipcube.dev"
+WORKSPACE_ID = "0192f3a0-0000-7000-8000-000000000001"
+USER_ID = "0192f3a0-0000-7000-8000-0000000000a1"
+RESTORE_WINDOW = timedelta(days=7)
+APPROVAL_TTL = timedelta(hours=72)
 
 # (step, message, seconds)
 STEPS: dict[str, list[tuple[str, str, float]]] = {
@@ -19,7 +31,7 @@ STEPS: dict[str, list[tuple[str, str, float]]] = {
         ("fetch_source", "Fetching source", 1),
         ("sandbox_profile", "Running in sandbox on sample data", 3),
         ("classify", "Classifying workload", 1),
-        ("reason", "Muse Spark reviewing code and profile", 2),
+        ("explain", "Muse Spark explaining the placement", 2),
         ("price", "Pricing candidate tiers", 1),
     ],
     "deploy": [
@@ -27,10 +39,21 @@ STEPS: dict[str, list[tuple[str, str, float]]] = {
         ("build", "Cloud Build: building container", 4),
         ("push", "Pushing image to Artifact Registry", 1),
         ("deploy", "Creating Cloud Run revision", 2),
-        ("configure_access", "Applying private-by-default access policy", 1),
+        ("configure_access", "Applying private-by-default access policy (IAP)", 1),
         ("health_check", "Waiting for the revision to become ready", 1),
     ],
-    "delete": [("teardown", "Deleting service, image and access bindings", 2)],
+    "delete": [
+        ("scale_to_zero", "Scaling to zero and removing IAP access", 1),
+        ("soft_delete", "Marking deleted; restorable for 7 days", 1),
+    ],
+    "set_caps": [("apply", "Applying caps", 0.5)],
+    "set_access": [("apply", "Applying access grants (IAP bindings)", 0.5)],
+}
+
+# Workspace defaults (security's `caps` table, app_id = null). Raising a cap above these needs approval.
+WORKSPACE_DEFAULT_CAPS: dict[str, Any] = {
+    "max_instances": 2, "concurrency": 80, "requests_per_minute": 120, "monthly_spend_usd": 5,
+    "cpu": "1", "memory": "512Mi", "timeout_s": 60,
 }
 
 ENFORCED_BY = {
@@ -56,18 +79,36 @@ def _id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_hex(6)}"
 
 
+def _cap_value(key: str, v: Any) -> float:
+    if key == "memory":
+        n = float(str(v)[:-2])
+        return n * 1024 if str(v).endswith("Gi") else n
+    return float(v)
+
+
+def caps_above_default(caps: dict[str, Any]) -> list[tuple[str, str]]:
+    """(cap_raise, reason) for every cap that would be raised above the workspace default."""
+    return [
+        ("cap_raise", f"{k} {v} is above the workspace default {WORKSPACE_DEFAULT_CAPS[k]}")
+        for k, v in caps.items()
+        if v is not None and k in WORKSPACE_DEFAULT_CAPS and _cap_value(k, v) > _cap_value(k, WORKSPACE_DEFAULT_CAPS[k])
+    ]
+
+
 @dataclass
 class _OpRecord:
     op: Operation
-    started_at: float
     input: dict[str, Any]
+    workspace: str
+    started_at: float | None  # None while awaiting approval
     cancelled_at: float | None = None
 
 
 ME: dict[str, Any] = {
-    "user_id": "usr_demo",
+    "user_id": USER_ID,
     "email": "owner@example.com",
-    "workspace": {"id": "ws_demo", "name": "Demo workspace"},
+    "role": "owner",
+    "workspace": {"id": WORKSPACE_ID, "name": "Demo workspace"},
     "gcp_targets": [
         {"id": "shipcube", "project": "shipcube-apps", "kind": "shipcube", "default": True},
         {"id": "linked-1", "project": "acme-analytics-prod", "kind": "linked", "default": False},
@@ -86,11 +127,12 @@ def _seed_app(name: str, tier: str) -> dict[str, Any]:
         "status": "serving",
         "revision": f"{name}-00003-abc",
         "image": f"us-central1-docker.pkg.dev/shipcube-apps/apps/{name}@sha256:mock",
-        "caps": {"max_instances": 2, "concurrency": 40, "requests_per_minute": 120, "monthly_spend_usd": 5,
-                 "cpu": "1", "memory": "512Mi", "timeout_s": 60},
+        "caps": {**WORKSPACE_DEFAULT_CAPS, "concurrency": 40},
         "access": [{"principal": f"user:{ME['email']}", "role": "owner", "granted_at": "2026-10-26T12:00:00Z"}],
         "ai": {"provider": "meta", "model": "muse-spark", "key_secret": None},
         "updated_at": "2026-10-26T12:00:00Z",
+        "deleted_at": None,
+        "restorable_until": None,
     }
 
 
@@ -98,13 +140,18 @@ class Store:
     def __init__(self) -> None:
         self.me = ME
         self.apps: dict[str, dict[str, Any]] = {"regional-revenue": _seed_app("regional-revenue", "T1")}
+        self.approved_targets: set[tuple[str, str]] = {(WORKSPACE_ID, "shipcube")}
         self._ops: dict[str, _OpRecord] = {}
         self._idem: dict[tuple[str, str], tuple[str, str]] = {}
+
+    def target_kind(self, target_id: str) -> str | None:
+        return next((t["kind"] for t in self.me["gcp_targets"] if t["id"] == target_id), None)
 
     # --- operations --------------------------------------------------------------
 
     def start_operation(self, workspace: str, kind: OpKind, app: str | None, payload: dict[str, Any],
-                        idem_key: str | None) -> Operation:
+                        idem_key: str | None, approvals: list[tuple[str, str]] | None = None) -> Operation:
+        """`approvals` is [(action, reason)], action being one of security's approvals.action values."""
         body_hash = hashlib.sha256(json.dumps([kind, app, payload], sort_keys=True).encode()).hexdigest()
         if idem_key:
             prior = self._idem.get((workspace, idem_key))
@@ -113,13 +160,22 @@ class Store:
                     raise Conflict("idempotency key reused with a different request")
                 return self._materialize(self._ops[prior[0]])
         steps = STEPS[kind]
+        op_id = _id("op")
+        waiting = bool(approvals)
+        expires = (datetime.now(UTC) + APPROVAL_TTL).isoformat(timespec="seconds").replace("+00:00", "Z")
         op = Operation(
-            id=_id("op"), kind=kind, app=app, status="queued", done=False,
-            progress=Progress(step=steps[0][0], completed_steps=0, total_steps=len(steps), message="Queued"),
+            id=op_id, kind=kind, app=app, status="awaiting_approval" if waiting else "queued", done=False,
+            progress=Progress(step=steps[0][0], completed_steps=0, total_steps=len(steps),
+                              message="Waiting for approval in the console" if waiting else "Queued"),
             steps=[Step(name=s[0], status="pending") for s in steps],
-            poll_after_s=3 if kind == "deploy" else 2, created_at=now(), updated_at=now(),
+            approval_url=f"{CONSOLE_URL}/w/{workspace}/approvals/{op_id}" if waiting else None,
+            approval_reasons=[r for _, r in approvals or []],
+            approval_actions=sorted({a for a, _ in approvals or []}),
+            approval_expires_at=expires if waiting else None,
+            poll_after_s=10 if waiting else 3 if kind == "deploy" else 2,
+            created_at=now(), updated_at=now(),
         )
-        self._ops[op.id] = _OpRecord(op, time.monotonic(), payload)
+        self._ops[op.id] = _OpRecord(op, payload, workspace, None if waiting else time.monotonic())
         if idem_key:
             self._idem[(workspace, idem_key)] = (op.id, body_hash)
         return op
@@ -132,13 +188,42 @@ class Store:
         rec = self._ops.get(op_id)
         if rec is None:
             return None
-        if not rec.op.done:
+        if rec.op.status == "awaiting_approval":
+            self._end_approval(rec.op, "approval_withdrawn", "Cancelled before a decision")
+        elif not rec.op.done:
             rec.cancelled_at = time.monotonic()
         return self._materialize(rec)
 
+    def decide(self, op_id: str, approve: bool) -> Operation | None:
+        rec = self._ops.get(op_id)
+        if rec is None:
+            return None
+        op = rec.op
+        if op.status != "awaiting_approval":
+            raise Conflict(f"operation is {op.status}, not awaiting_approval")
+        if not approve:
+            self._end_approval(op, "approval_rejected", "Rejected in the console")
+            return op
+        op.approval_url = None
+        op.updated_at = now()
+        if op.kind == "deploy":
+            self.approved_targets.add((rec.workspace, rec.input.get("target") or "shipcube"))
+        op.status = "queued"
+        rec.started_at = time.monotonic()
+        return self._materialize(rec)
+
+    @staticmethod
+    def _end_approval(op: Operation, code: str, message: str) -> None:
+        op.status, op.done, op.approval_url = "cancelled", True, None
+        op.error = OpError(code=code, message=message)
+        op.progress = Progress(step=op.progress.step, completed_steps=0, total_steps=op.progress.total_steps, message=message)
+        op.updated_at = now()
+
     def _materialize(self, rec: _OpRecord) -> Operation:
         op = rec.op
-        if op.done:
+        if op.status == "awaiting_approval" and op.approval_expires_at and op.approval_expires_at < now():
+            self._end_approval(op, "approval_expired", "No decision within 72 hours")
+        if op.done or rec.started_at is None:
             return op
         steps = STEPS[op.kind]
         elapsed = (rec.cancelled_at or time.monotonic()) - rec.started_at
@@ -171,7 +256,7 @@ class Store:
 
     def _complete(self, op: Operation, payload: dict[str, Any]) -> Any:
         if op.kind == "estimate":
-            return {
+            classified = {  # the classifier's numbers
                 "estimate_id": f"est_{op.id[3:]}",
                 "workload_class": "bursty_interactive",
                 "confidence": 0.87,
@@ -180,18 +265,12 @@ class Store:
                 "resources": {"cpu": "1", "memory": "512Mi", "concurrency": 40, "min_instances": 0, "max_instances": 2},
                 "monthly_cost_usd": {"low": 0.0, "expected": 1.8, "high": 6.5},
                 "profile": {"peak_rss_mb": 210, "cpu_seconds": 3.4, "wall_seconds": 5.1, "queries": 12, "io_mb": 18},
-                "recommended_caps": {"requests_per_minute": 120, "monthly_spend_usd": 5},
-                "reasoning": "Short CPU bursts per request with long idle gaps and modest memory. Scale-to-zero "
-                             "Cloud Run fits; two instances cover the expected 5 concurrent viewers.",
-                "alternatives": [
-                    {"tier": "T0", "why_not": "Data refreshes hourly and viewers filter interactively, so a static snapshot is too stale."},
-                    {"tier": "T3", "why_not": "Always-on min instances would cost ~$15/month for no latency benefit at this load."},
-                ],
             }
+            return {**classified, **explain(classified).model_dump(mode="json")}
+        name = op.app or ""
         if op.kind == "deploy":
-            name = op.app or ""
             existing = self.apps.get(name)
-            app = existing or _seed_app(name, payload.get("tier") or "T1")
+            app = existing if existing and not existing["deleted_at"] else _seed_app(name, payload.get("tier") or "T1")
             app["status"] = "serving"
             app["tier"] = payload.get("tier") or app["tier"]
             app["target"] = payload.get("target") or app["target"]
@@ -202,8 +281,38 @@ class Store:
             self.apps[name] = app
             return {"app": name, "url": app["url"], "revision": app["revision"], "tier": app["tier"],
                     "target": app["target"], "access": "private (owner only, IAP)"}
-        self.apps.pop(op.app or "", None)
-        return {"app": op.app, "deleted": True}
+        if op.kind == "set_caps":
+            return {"caps": self.apply_caps(name, payload["caps"])}
+        if op.kind == "set_access":
+            return {"access": self.apply_access(name, payload.get("add", []), payload.get("remove", []))}
+        app = self.apps[name]  # delete: soft, restorable for 7 days
+        deleted = datetime.now(UTC)
+        app.update(status="deleted", deleted_at=deleted.isoformat(timespec="seconds").replace("+00:00", "Z"),
+                   restorable_until=(deleted + RESTORE_WINDOW).isoformat(timespec="seconds").replace("+00:00", "Z"))
+        return {"app": name, "deleted": True, "restorable_until": app["restorable_until"]}
+
+    # --- mutations shared by direct calls and approved operations ---------------------
+
+    def apply_caps(self, app: str, caps: dict[str, Any]) -> dict[str, Any]:
+        a = self.apps[app]
+        a["caps"].update({k: v for k, v in caps.items() if v is not None})
+        a["updated_at"] = now()
+        return a["caps"]
+
+    def apply_access(self, app: str, add: list[dict[str, Any]], remove: list[str]) -> list[dict[str, Any]]:
+        a = self.apps[app]
+        owner = f"user:{self.me['email']}"
+        keep = [b for b in a["access"] if b["principal"] == owner or b["principal"] not in remove]
+        for g in add:
+            keep = [b for b in keep if b["principal"] != g["principal"]]
+            keep.append({"principal": g["principal"], "role": g.get("role", "viewer"), "granted_at": now()})
+        a["access"] = keep
+        return keep
+
+    def restore(self, app: str) -> dict[str, Any]:
+        a = self.apps[app]
+        a.update(status="serving", deleted_at=None, restorable_until=None, updated_at=now())
+        return a
 
     # --- reads -------------------------------------------------------------------
 
@@ -211,7 +320,7 @@ class Store:
         lines = [
             ("INFO", "GET /api/revenue?region=SP 200 84ms"),
             ("INFO", "GET / 200 12ms"),
-            ("WARNING", "semantic layer: query fell back to L3 raw SQL (unverified)"),
+            ("WARNING", "data layer: query scanned all partitions (no time range)"),
             ("INFO", "Cold start: 1.9s"),
             ("ERROR", "upstream warehouse timeout after 30s"),
         ]
@@ -231,22 +340,6 @@ class Store:
             "cost_usd": {"compute": 0.03, "ai_tokens": 0.01, "warehouse": 0.0, "month_to_date": 0.62},
             "caps_hit": {"rate_limited_requests": 3, "max_instances_reached": 0},
             "data_freshness_minutes": 42,
-        }
-
-    def connect_data(self, body: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "datasource_id": _id("ds"), "name": body["name"], "kind": body["kind"],
-            "egress": "none (bundled)" if body["kind"] == "duckdb" else "static egress IP 34.0.0.1 via Cloud NAT (allowlist this)",
-            "cubes_detected": ["orders", "customers"], "status": "connected",
-        }
-
-    def query(self, body: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "level": "L0",
-            "sql": "SELECT region, SUM(amount) AS revenue FROM orders GROUP BY 1 ORDER BY 2 DESC LIMIT 100",
-            "columns": [{"name": "orders.region", "type": "string"}, {"name": "orders.revenue", "type": "number"}],
-            "rows": [["SP", 1_284_220.5], ["RJ", 512_904.1], ["MG", 471_330.0]],
-            "cached": False, "verified": True, "datasource": body.get("datasource") or "default",
         }
 
 
