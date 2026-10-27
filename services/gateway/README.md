@@ -29,6 +29,15 @@ app (per-app SA) --Google ID token--> gateway --key from Secret Manager--> Muse 
 6. **Meters** input/output tokens and cost into usage events (structured log lines tagged
    `shipcube_usage`, and optionally batched to the API for `usage_events`).
 
+**Verified against the real Meta Model API** (Oct 27): `META_BASE_URL=https://api.meta.ai/v1` is
+OpenAI-compatible; the key in `projects/shipcube-control-ks/secrets/meta-api-key/versions/1` lists
+`muse-spark-1.3`, `muse-spark-1.2`, `muse-spark-1.1`, `muse-wonder-1.0`, `muse-image-1.0`, `sam-3.1` and
+`muse-voice-transcribe-1.0`. A non-streamed and a streamed `muse-spark-1.3` call both went through the
+gateway and were metered. Muse Spark spends reasoning tokens inside `max_tokens` (173 of 183 for a
+one-word reply), so a small `max_tokens` can return empty content. When a stream ends without a
+`usage` chunk (Meta sometimes omits it), tokens are estimated from bytes and the event is marked
+`estimated`.
+
 If `META_SECRET_REF` is unset, Meta calls are answered by a built-in mock (`X-ShipCube-Provider: mock`)
 so apps and the demo work before the Meta key arrives.
 

@@ -192,6 +192,18 @@ func TestOpenAIStreamingPassesThroughAndMeters(t *testing.T) {
 	}
 }
 
+func TestStreamWithoutUsageIsEstimated(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"0123456789abcdef\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer up.Close()
+	h := newHarness(t, ProviderConfig{Kind: ProviderOpenAI, Model: "gpt-x"}, Caps{}, up.URL)
+	_ = sseData(t, h.post(t, `{"stream":true,"messages":[{"role":"user","content":"hi"}]}`).Body)
+	if e := h.sink.last(t); !e.Estimated || e.OutputTokens != 5 || e.InputTokens == 0 {
+		t.Fatalf("usage %+v", e)
+	}
+}
+
 func TestAnthropicTranslation(t *testing.T) {
 	var got map[string]any
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

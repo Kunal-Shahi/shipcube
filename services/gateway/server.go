@@ -115,6 +115,7 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 		Stream: stream, OccurredAt: start.UTC()}
 	defer func() {
 		ev.Provider, ev.InputTokens, ev.OutputTokens, ev.Status = kind, c.inTok, c.outTok, c.status
+		ev.Estimated = c.estimated
 		ev.CostUSD, ev.Priced = cost(g.Prices, kind, model, c.inTok, c.outTok)
 		ev.LatencyMS = time.Since(start).Milliseconds()
 		if ev.CapHit == "" {

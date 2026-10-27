@@ -31,6 +31,15 @@ type call struct {
 	outTok   int64
 	status   int
 	upstream string // provider request id, when the provider returns one
+	// estimated is set when the provider sent no usage, so tokens were estimated from bytes
+	// (about 4 characters per token). Caps still apply to unmetered streams.
+	estimated bool
+}
+
+func (c *call) estimate(requestBytes, contentChars int) {
+	c.inTok = int64(requestBytes/4 + 1)
+	c.outTok = int64(contentChars/4 + 1)
+	c.estimated = true
 }
 
 // redact removes the key from anything that came back from the provider before it reaches the app
@@ -113,6 +122,7 @@ func (g *Gateway) forwardOpenAI(ctx context.Context, w http.ResponseWriter, c *c
 	sseHeaders(w)
 	flusher, _ := w.(http.Flusher)
 	r := bufio.NewReaderSize(resp.Body, 64<<10)
+	metered, contentChars := false, 0
 	for {
 		line, err := r.ReadBytes('\n')
 		if len(line) > 0 {
@@ -120,13 +130,23 @@ func (g *Gateway) forwardOpenAI(ctx context.Context, w http.ResponseWriter, c *c
 				data = bytes.TrimSpace(data)
 				if !bytes.Equal(data, []byte("[DONE]")) {
 					var chunk struct {
+						Choices []struct {
+							Delta struct {
+								Content string `json:"content"`
+							} `json:"delta"`
+						} `json:"choices"`
 						Usage *struct {
 							PromptTokens     int64 `json:"prompt_tokens"`
 							CompletionTokens int64 `json:"completion_tokens"`
 						} `json:"usage"`
 					}
-					if json.Unmarshal(data, &chunk) == nil && chunk.Usage != nil {
-						c.inTok, c.outTok = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens
+					if json.Unmarshal(data, &chunk) == nil {
+						for _, ch := range chunk.Choices {
+							contentChars += len(ch.Delta.Content)
+						}
+						if chunk.Usage != nil {
+							c.inTok, c.outTok, metered = chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, true
+						}
 					}
 				}
 			}
@@ -141,6 +161,9 @@ func (g *Gateway) forwardOpenAI(ctx context.Context, w http.ResponseWriter, c *c
 	}
 	if flusher != nil {
 		flusher.Flush()
+	}
+	if !metered {
+		c.estimate(len(payload), contentChars)
 	}
 }
 

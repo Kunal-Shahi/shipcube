@@ -1,0 +1,69 @@
+name: ci / python
+
+on:
+  pull_request:
+    paths:
+      - "packages/**"
+      - "services/api/**"
+      - "services/mcp/**"
+      - "ml/**"
+      - ".github/workflows/ci-python.yml"
+  push:
+    branches: [main]
+    paths:
+      - "packages/**"
+      - "services/api/**"
+      - "services/mcp/**"
+      - "ml/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      projects: ${{ steps.find.outputs.projects }}
+    steps:
+      - uses: actions/checkout@v4
+      # Every Python project (a pyproject.toml) under packages/, services/ and ml/ gets its own job.
+      - id: find
+        run: |
+          projects=$(find packages services ml -name pyproject.toml -not -path '*/node_modules/*' -not -path '*/.venv/*' \
+            -exec dirname {} \; 2>/dev/null | sort | jq -R . | jq -cs .)
+          echo "projects=$projects" >> "$GITHUB_OUTPUT"
+          echo "Python projects: $projects"
+
+  test:
+    needs: discover
+    if: needs.discover.outputs.projects != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.discover.outputs.projects) }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "${{ matrix.project }}/uv.lock"
+      - name: Install
+        run: |
+          if [ -f uv.lock ]; then uv sync --locked; else uv sync; fi
+      # Lint where the project configures ruff, so CI doesn't impose rules a project hasn't adopted.
+      - name: Lint
+        run: |
+          if grep -q '^\[tool.ruff' pyproject.toml; then uvx ruff check .; else echo "no [tool.ruff] in pyproject.toml; skipped"; fi
+      - name: Test
+        run: |
+          if [ -d tests ]; then uv run --with pytest pytest -q; else echo "no tests/ directory; skipped"; fi

@@ -22,6 +22,7 @@ type UsageEvent struct {
 	OutputTokens int64     `json:"output_tokens"`
 	CostUSD      float64   `json:"cost_usd"`
 	Priced       bool      `json:"priced"`
+	Estimated    bool      `json:"estimated"`
 	Status       int       `json:"status"`
 	Stream       bool      `json:"stream"`
 	LatencyMS    int64     `json:"latency_ms"`
@@ -40,7 +41,7 @@ type LogSink struct{ Log *slog.Logger }
 func (s LogSink) Record(e UsageEvent) {
 	s.Log.Info("usage", "shipcube_usage", true, "app_id", e.AppID, "workspace_id", e.WorkspaceID, "app", e.App,
 		"provider", e.Provider, "model", e.Model, "input_tokens", e.InputTokens, "output_tokens", e.OutputTokens,
-		"cost_usd", e.CostUSD, "priced", e.Priced, "status", e.Status, "stream", e.Stream,
+		"cost_usd", e.CostUSD, "priced", e.Priced, "estimated", e.Estimated, "status", e.Status, "stream", e.Stream,
 		"latency_ms", e.LatencyMS, "cap_hit", e.CapHit)
 }
 
