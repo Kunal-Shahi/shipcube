@@ -20,9 +20,15 @@ Kunal is the lead and makes every product and merge decision. Each teammate is a
 | Backend networking | `networking` | [#1](https://github.com/Kunal-Shahi/shipcube/pull/1) | MCP stub (17 tools) + API skeleton; being ported from TypeScript to Python |
 | Infra and security | `security` | [#2](https://github.com/Kunal-Shahi/shipcube/pull/2) | Tenancy research, DB schema, Terraform skeleton |
 | Language trade-offs | `language` | [#4](https://github.com/Kunal-Shahi/shipcube/pull/4) | Recommends Python for the backend, Go for the gateway |
-| Data layer | `data-layer` | shipcube-data repo | In progress |
+| Data layer | `data-layer` | shipcube-data repo | Library with five `data_` tools; 109 tests |
+| Load estimator | `load-estimator` | (PR pending) | Owns `ml/workload-classifier/**`, `packages/profiler/**`, `packages/placement/**`, `docs/research/load-estimation.md` |
+| Platform | `platform` | (PR pending) | Owns `packages/monitor/**`, `services/gateway/**` (build; security keeps the design), `.github/workflows/**`, `deploy/**` |
 
 ## Interfaces between teammates
+
+- **Networking ↔ load-estimator:** `estimate_load` calls the load-estimator's in-process `estimate(source, hints)`.
+- **Networking ↔ platform:** `inspect_app` calls platform's monitoring provider. Deployed apps call platform's Go AI gateway. Networking builds the real deploy path (Cloud Build → Cloud Run + IAP); platform hosts ShipCube itself and runs CI.
+- **Security ↔ platform:** platform builds `services/gateway` from security's design and proposes `infra/**` changes through its PR instead of editing them.
 
 - **Frontend ↔ security:** sign-in uses Identity Platform (Google provider). The frontend adds an Identity Platform adapter next to `apps/web/src/lib/auth/mock.ts`. The security doc owns token minting, invites and signup gating.
 - **Frontend ↔ networking:** the console calls the control-plane API (`services/api` OpenAPI spec). The MCP setup guide must match the real endpoint, PAT format (`sc_pat_…`) and tool list in `docs/research/networking.md`.
