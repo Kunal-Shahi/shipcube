@@ -169,8 +169,20 @@ paths:
     post:
       summary: Restore a soft-deleted app (console session only, within 7 days)
       responses:
-        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/App' } } } }
-        '410': { $ref: '#/components/responses/Error' }
+        '202': { $ref: '#/components/responses/Accepted' }
+        '429': { $ref: '#/components/responses/Error' }
+  /v1/apps/{app}/rollbacks:
+    parameters: [{ $ref: '#/components/parameters/App' }]
+    post:
+      summary: Send all traffic back to an earlier revision ("previous" by default)
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { to: { type: string, default: previous, description: '"previous" or a revision name' } } }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '409': { $ref: '#/components/responses/Error' }
   /v1/apps/{app}/ai:
     parameters: [{ $ref: '#/components/parameters/App' }]
     put:
@@ -240,7 +252,7 @@ components:
       required: [id, kind, status, done, progress, poll_after_s]
       properties:
         id: { type: string }
-        kind: { type: string, enum: [estimate, deploy, delete, set_caps, set_access] }
+        kind: { type: string, enum: [estimate, deploy, rollback, delete, restore, purge, set_caps, set_access] }
         app: { type: [string, 'null'] }
         status: { type: string, enum: [awaiting_approval, queued, running, succeeded, failed, cancelled], description: 'A rejected or expired (72 h) approval ends as cancelled with error.code approval_rejected or approval_expired' }
         done: { type: boolean }
@@ -294,6 +306,8 @@ components:
             access: { type: array, items: { type: object, properties: { principal: { type: string }, role: { type: string }, granted_at: { type: string } } } }
             ai: { type: object, properties: { provider: { type: string }, model: { type: string }, key_secret: { type: [string, 'null'] } } }
             deleted_at: { type: [string, 'null'] }
+            revisions: { type: array, items: { type: object, properties: { revision: { type: string }, status: { type: string }, created_at: { type: string } } } }
+            runtime: { type: [object, 'null'], description: Live Cloud Run state }
             restorable_until: { type: [string, 'null'] }
     EstimateResult:
       type: object

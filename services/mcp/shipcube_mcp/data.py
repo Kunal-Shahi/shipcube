@@ -177,16 +177,26 @@ class StubDataBackend:
         raise DataToolError("unknown_tool", f"no tool named {name}")
 
 
-def default_backend(workspace_id: str) -> DataBackend:
+def default_backend() -> DataBackend | None:
+    """The real library, or None (data tools not mounted). The stub only in SHIPCUBE_DEV_MODE.
+
+    shipcube-data PR #1 serves one catalog per process (its demo warehouse), bound to the workspace in
+    SHIPCUBE_DATA_WORKSPACE. Per-workspace catalogs in Postgres are the data layer's next step."""
+    dev = os.environ.get("SHIPCUBE_DEV_MODE") == "1"
+    workspace_id = os.environ.get("SHIPCUBE_DATA_WORKSPACE")
     try:
         from shipcube_data import demo
     except ImportError:
-        log.info("shipcube-data not installed; using the stub data backend")
-        return StubDataBackend()
+        log.warning("shipcube-data not installed; %s", "using the DEV_MODE stub" if dev else "data_* tools are not mounted")
+        return StubDataBackend() if dev else None
     migrations = Path(os.environ.get("SHIPCUBE_DATA_MIGRATIONS", demo.MIGRATIONS))
     if not migrations.is_dir():
-        log.warning("shipcube-data migrations not found at %s; using the stub data backend", migrations)
-        return StubDataBackend()
+        log.warning("shipcube-data migrations not found at %s; %s", migrations,
+                    "using the DEV_MODE stub" if dev else "data_* tools are not mounted")
+        return StubDataBackend() if dev else None
+    if not workspace_id:
+        log.warning("SHIPCUBE_DATA_WORKSPACE is not set; %s", "using the DEV_MODE stub" if dev else "data_* tools are not mounted")
+        return StubDataBackend() if dev else None
     return ShipcubeDataBackend(workspace_id, migrations)
 
 
@@ -230,8 +240,10 @@ def _make_handler(api: Api, backend: DataBackend, spec: dict[str, Any]):
     return handler
 
 
-def mount_data_tools(server: MCPServer, api: Api, backend: DataBackend) -> list[str]:
-    mounted = []
+def mount_data_tools(server: MCPServer, api: Api, backend: DataBackend | None) -> list[str]:
+    mounted: list[str] = []
+    if backend is None:
+        return mounted
     for spec in backend.specs():
         if spec["name"] not in EXPOSED:
             continue  # apply_migration (and anything new) stays off until reviewed

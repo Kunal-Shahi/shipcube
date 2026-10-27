@@ -409,8 +409,14 @@ Keeping the **image in the user's project** avoids cross-project pulls. Pulling 
 
 ### 4.3 Built: the real deploy path (Oct 28)
 
-`services/api/shipcube_api/deploy/gcp.py` implements §4.1 against real GCP (`SHIPCUBE_BACKEND=gcp`). It talks to the REST APIs through `google-auth`, without per-service client libraries. Differences from the design:
-- **Runner:** operations run on an **in-process background runner** (an asyncio loop on a daemon thread, with blocking cloud calls in worker threads), not on Cloud Tasks. It was the quickest reliable option for the demo, but operations die with the process, so ShipCube runs as one instance with `min-instances=1`. The Cloud Tasks step machine (§3.3) replaces it once operations live in Postgres. The steps are already separate functions with the same names.
+`services/api/shipcube_api/deploy/gcp.py` implements §4.1 against real GCP. It talks to the REST APIs through `google-auth`, without per-service client libraries. Differences from the design:
+- **Durable queue: Postgres, not Cloud Tasks** (revised Oct 28 for the engineering standard). Operations live in security's `operations` table, extended by migration `0002`.
+  - Workers claim them with `FOR UPDATE SKIP LOCKED` and a 90 s lease, with a 30 s heartbeat.
+  - Every step is idempotent and saves its outputs (for example the Cloud Build id) before the next step starts. A retry, or a new worker after a crash, resumes at `step_index`, and a running build is re-attached instead of started again.
+  - Transient errors (429, 5xx, timeouts) back off exponentially, up to 5 attempts. Anything else fails at once with a typed code.
+  - Expired leases are reclaimed automatically, and `admin ops --stuck` / `requeue` / `fail` cover the rest.
+  - This gives the same guarantees as Cloud Tasks without needing a public worker endpoint, and any number of workers can run side by side. Cloud Tasks can still be added later as a wake-up signal.
+- **State:** all of it is in Postgres, using security's schema (migration `0001` is their DDL verbatim). Row-level security is enforced on API transactions.
 - **Waiting on GCP:** the Cloud Run step waits on the Admin API's long-running operation, and the build step polls `builds.get` every 3 s.
 - **Image tag:** the image is tagged with the operation id, and Cloud Run resolves the digest.
 - **Quota project:** user ADC without a quota project shares the gcloud OAuth client's quota, and Resource Manager returned `429`. The deployer now bills API quota to `shipcube-control-ks`.
@@ -432,6 +438,20 @@ First real run, through the MCP server (`services/mcp/scripts/e2e_gcp.py`), depl
 | `inspect_app` (live Cloud Run status) | 0.2 |
 
 Builds dominate the time. Faster rebuilds come from a buildpacks cache (`--cache-image`) and a pinned builder image; both are follow-ups.
+
+**Integration test on real GCP** (`services/api/tests/integration/test_gcp_e2e.py`, durable worker, Oct 28). Each step was checked against GCP itself:
+
+| Step | Seconds | Checked |
+|---|---|---|
+| deploy v1 (inline FastAPI app, buildpacks) | 91.2 | Cloud Run ready, IAP on, gen2, min 0, runtime SA `app-…`; IAP policy = owner only; an unauthenticated GET is intercepted by IAP |
+| redeploy v2 | 90.8 | new revision |
+| rollback to previous | 5.9 | Cloud Run traffic = 100% on the v1 revision |
+| grant a second Google account | 4.8 | IAP policy = both accounts |
+| soft delete (approved) | 7.3 | ingress internal-only, IAP accessors removed |
+| restore (console) | 5.2 | ingress all again |
+| purge (after the restore window) | 8.0 | service and runtime SA return 404 |
+
+Apps deployed from a laptop keep running after the laptop disconnects: they're Cloud Run services, and their state is in Postgres, not in the MCP session. Each deploy is a new revision, and `deploy_app(rollback_to="previous")` pins traffic back to the previous one.
 
 ---
 

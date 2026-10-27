@@ -23,6 +23,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
 
 import google.auth
+import requests
 from google.auth import impersonated_credentials
 from google.auth.transport.requests import AuthorizedSession, Request
 
@@ -75,14 +76,18 @@ class GcpDeployer:
         return self._session(sa)
 
     def _call(self, sess: AuthorizedSession, method: str, url: str, ok: tuple[int, ...] = (200,), **kw: Any) -> Any:
-        r = sess.request(method, url, timeout=60, **kw)
+        try:
+            r = sess.request(method, url, timeout=60, **kw)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            raise DeployError("unavailable", f"{method} {url.split('?')[0]}: {type(e).__name__}") from e
         if r.status_code not in ok:
             try:
                 err = r.json().get("error", {})
                 msg = err.get("message", r.text)
             except ValueError:
                 msg = r.text
-            code = {403: "permission_denied", 404: "not_found", 409: "conflict"}.get(r.status_code, "gcp_error")
+            code = {400: "invalid_argument", 403: "permission_denied", 404: "not_found", 409: "conflict",
+                    429: "rate_limited"}.get(r.status_code, "unavailable" if r.status_code >= 500 else "gcp_error")
             raise DeployError(code, f"{method} {url.split('?')[0]} -> {r.status_code}: {msg[:400]}")
         return r.json() if r.content else {}
 
@@ -162,7 +167,7 @@ class GcpDeployer:
         return f"{app.region}-docker.pkg.dev/{app.target.project}/{self.s.repo}/{app.service}:{tag}"
 
     def build(self, app: AppRef, staged: dict[str, Any], op_id: str, should_stop: ShouldStop,
-              on_build: Callable[[str], None]) -> str:
+              on_build: Callable[[str], None], existing_build_id: str | None = None) -> str:
         if "image" in staged:
             return staged["image"]
         sess = self._for(app)
@@ -181,9 +186,12 @@ class GcpDeployer:
             "tags": ["shipcube", app.service],
         }
         base = f"{BUILD}/projects/{project}/locations/{region}/builds"
-        op = self._call(sess, "POST", base, json=body)
-        build_id = op["metadata"]["build"]["id"]
-        on_build(build_id)
+        build_id = existing_build_id
+        if build_id is None:
+            op = self._call(sess, "POST", base, json=body)
+            build_id = op["metadata"]["build"]["id"]
+            on_build(build_id)
+            log.info("build started", extra={"build_id": build_id, "image": image})
         while True:
             b = self._call(sess, "GET", f"{base}/{build_id}")
             if b["status"] in ("SUCCESS",):
@@ -234,6 +242,8 @@ class GcpDeployer:
             "labels": {"shipcube-app": app.name, "shipcube-workspace": app.workspace_id[:8], "managed-by": "shipcube"},
             "ingress": "INGRESS_TRAFFIC_ALL",
             "invokerIamDisabled": False,
+            # A redeploy always serves the newest revision, also after a rollback pinned an older one.
+            "traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100}],
             "iapEnabled": True,
             "template": {
                 "serviceAccount": sa,
@@ -327,7 +337,22 @@ class GcpDeployer:
             "scaling": t.get("scaling"), "concurrency": t.get("maxInstanceRequestConcurrency"),
             "execution_environment": t.get("executionEnvironment"), "runtime_sa": t.get("serviceAccount"),
             "updated_at": svc.get("updateTime"),
+            "traffic": [{"revision": (t.get("revision") or "LATEST"), "percent": t.get("percent", 0)}
+                        for t in svc.get("trafficStatuses", [])],
         }
+
+    def route_traffic(self, app: AppRef, revision: str) -> None:
+        sess = self._for(app)
+        op = self._call(sess, "PATCH", self._service_url(app), params={"updateMask": "traffic"},
+                        json={"traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", "revision": revision, "percent": 100}]})
+        self._wait_op(sess, RUN, op)
+
+    def download_upload(self, workspace_id: str, upload_id: str, dest: Any) -> Any:
+        blob = self._bucket().blob(self._object(workspace_id, upload_id))
+        if not blob.exists():
+            raise DeployError("invalid_argument", f"upload {upload_id} was not found")
+        blob.download_to_filename(str(dest))
+        return dest
 
     def soft_delete(self, app: AppRef) -> None:
         """Unreachable but restorable: no IAP accessors and internal-only ingress. Instances already

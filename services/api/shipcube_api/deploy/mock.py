@@ -39,8 +39,9 @@ class MockDeployer:
         return {"mock": source.get("kind")}
 
     def build(self, app: AppRef, staged: dict[str, Any], op_id: str, should_stop: ShouldStop,
-              on_build: Callable[[str], None]) -> str:
-        on_build(f"mock-build-{op_id}")
+              on_build: Callable[[str], None], existing_build_id: str | None = None) -> str:
+        if not existing_build_id:
+            on_build(f"mock-build-{op_id}")
         self._sleep(4, should_stop)
         return f"{app.region}-docker.pkg.dev/{app.target.project}/shipcube/{app.name}:{op_id}"
 
@@ -49,6 +50,12 @@ class MockDeployer:
         self.deleted.discard(app.service)
         return Deployed(url=f"https://{app.service}-a1b2c3d4e5-el.a.run.app", revision=f"{app.service}-{secrets.token_hex(2)}",
                         image=image)
+
+    def route_traffic(self, app: AppRef, revision: str) -> None:
+        self._sleep(1)
+
+    def download_upload(self, workspace_id: str, upload_id: str, dest: Any) -> Any:
+        raise NotImplementedError("the mock deployer stores no uploads")
 
     def set_access(self, app: AppRef, principals: list[str]) -> None:
         self.access[app.service] = list(principals)

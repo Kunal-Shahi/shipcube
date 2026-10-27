@@ -1,7 +1,8 @@
 """Logs and metrics for inspect_app. The platform workstream owns the real implementation
-(Cloud Logging + Cloud Monitoring); until it lands, MockTelemetry returns canned data.
+(Cloud Logging + Cloud Monitoring) and installs it with `set_telemetry(...)` at startup.
 
-Set `telemetry` to another implementation at startup (`shipcube_api.telemetry.telemetry = ...`).
+Until then, production answers `telemetry_unavailable` (HTTP 501) instead of inventing numbers;
+MockTelemetry's canned data is used only in DEV_MODE.
 """
 
 from __future__ import annotations
@@ -18,7 +19,21 @@ class Telemetry(Protocol):
         """Matches models.Metrics."""
 
 
+class TelemetryUnavailable(Exception):
+    pass
+
+
+class UnconfiguredTelemetry:
+    def logs(self, app: dict[str, Any], limit: int, severity: str | None, page_token: str | None) -> dict[str, Any]:
+        raise TelemetryUnavailable("logs are not wired yet (platform workstream: Cloud Logging)")
+
+    def metrics(self, app: dict[str, Any], window: str) -> dict[str, Any]:
+        raise TelemetryUnavailable("metrics are not wired yet (platform workstream: Cloud Monitoring)")
+
+
 class MockTelemetry:
+    """DEV_MODE only."""
+
     def logs(self, app: dict[str, Any], limit: int, severity: str | None, page_token: str | None) -> dict[str, Any]:
         lines = [
             ("INFO", "GET /api/revenue?region=SP 200 84ms"),
@@ -46,4 +61,17 @@ class MockTelemetry:
         }
 
 
-telemetry: Telemetry = MockTelemetry()
+_telemetry: Telemetry | None = None
+
+
+def set_telemetry(t: Telemetry) -> None:
+    global _telemetry
+    _telemetry = t
+
+
+def telemetry() -> Telemetry:
+    from .settings import settings
+
+    if _telemetry is not None:
+        return _telemetry
+    return MockTelemetry() if settings.dev_mode else UnconfiguredTelemetry()

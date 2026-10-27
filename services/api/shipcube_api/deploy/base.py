@@ -58,6 +58,9 @@ class Deployed:
 
 
 class DeployError(Exception):
+    """Typed cloud error. Codes: unavailable, timeout, rate_limited (retryable); invalid_argument,
+    not_found, permission_denied, conflict, build_failed, cancelled, estimator_unavailable, gcp_error."""
+
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
@@ -76,8 +79,15 @@ class Deployer(Protocol):
         """Turn an API Source into something the builder can read ({gcs}, {git} or {image})."""
 
     def build(self, app: AppRef, staged: dict[str, Any], op_id: str, should_stop: ShouldStop,
-              on_build: Callable[[str], None]) -> str:
-        """Build and push an image; return its reference. Blocks until done."""
+              on_build: Callable[[str], None], existing_build_id: str | None = None) -> str:
+        """Build and push an image; return its reference. Blocks until done. With
+        existing_build_id (a retry), wait for that build instead of starting another."""
+
+    def route_traffic(self, app: AppRef, revision: str) -> None:
+        """Send 100% of traffic to an existing revision (rollback)."""
+
+    def download_upload(self, workspace_id: str, upload_id: str, dest: Any) -> Any:
+        """Fetch an uploaded source tarball to a local path (for the estimator)."""
 
     def deploy(self, app: AppRef, image: str, caps: dict[str, Any], env: dict[str, str]) -> Deployed:
         """Create or update the Cloud Run service (private, IAP on) and wait until it's ready."""

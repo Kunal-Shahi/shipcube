@@ -1,55 +1,115 @@
 # services/api
 
-The ShipCube control-plane API. It owns all state (apps, operations, caps, access, data sources), drives GCP, and is the only place that makes authorization decisions. The MCP server and the web console are both clients of it.
+The ShipCube control-plane API and its durable operations worker. The API owns all state in Postgres, makes every authorization decision and deploys to GCP. The MCP server (`services/mcp`) and the web console are its clients.
 
-- **Contract:** [`openapi.yaml`](openapi.yaml), hand-written and stable. `tests/test_api.py` fails if the FastAPI routes stop matching it.
-- **Implementation:** Python 3.12, FastAPI + Pydantic (`shipcube_api/`), with in-memory mock state. Operations advance with wall-clock time so that polling and progress behave like a real deploy.
-  - `models.py` holds the request and response models. The MCP tools reuse them for their schemas.
-  - `auth.py` handles PATs as in security's `api_tokens` table: `sc_pat_<id>_<secret>`, HMAC-SHA-256 with a pepper, 90-day maximum, scopes.
-  - `app.py` holds the routes. Every route checks a scope. Approve, reject and restore accept only a console session.
-  - `explain.py` holds the estimate explainer: Muse Spark (mocked) with a rule-based fallback; `explained_by` says which ran.
-  - `store.py` has the approvals: the first linked deploy, cap raises above the workspace default, `domain:` grants and deletes wait in `awaiting_approval` (72 h) until approved. Deletes are soft and restorable for 7 days.
-- **Deploy shape:** normally served in the same process as the MCP server (`services/mcp`). It can also run alone.
-- **Design:** `docs/research/networking.md` §3 (REST, versioning, the job model) and §4 (request flow).
+- **Contract:** [`openapi.yaml`](openapi.yaml). `tests/test_api.py` fails if the FastAPI routes drift from it.
+- **Design:** `docs/research/networking.md`: §2.5 approvals, §3 API and job model, §4 request flow, §4.3 the deploy path as built.
 
-```bash
-cd services/api
-SHIPCUBE_DEV_TOKEN=sc_pat_devlocal_devonlyNotASecret0123456789abcdefXYZ uv run uvicorn shipcube_api.app:app --port 8081
-curl -s localhost:8081/v1/me -H "Authorization: Bearer sc_pat_devlocal_devonlyNotASecret0123456789abcdefXYZ"
-uv run pytest
+## How it works
+
+```
+agent ─MCP─> /mcp ─in-process─> /v1 (FastAPI) ──writes desired state + operation──> Postgres
+                                                                                      │ claim (FOR UPDATE SKIP LOCKED, lease)
+                                              worker (embedded thread or standalone) ◄┘
+                                                │ idempotent steps, state saved after each
+                                                ▼
+             GCS (upload) → Cloud Build (buildpacks) → Artifact Registry → Cloud Run (gen2, IAP) → IAP bindings
 ```
 
-## Real GCP deploys (`SHIPCUBE_BACKEND=gcp`)
-
-With `SHIPCUBE_BACKEND=gcp`, the deploy tools act on GCP with Application Default Credentials (`gcloud auth application-default login`). The code is in `shipcube_api/deploy/gcp.py`, behind the `Deployer` interface in `deploy/base.py`. `deploy/mock.py` is the default.
-
-| Step | What happens |
+| Module | Role |
 |---|---|
-| `create_upload` | V4 signed `PUT` URL for one object, `gs://shipcube-uploads-ks/uploads/<workspace>/<upload_id>.tgz`, valid 15 minutes, signed as `sc-api@shipcube-control-ks` through IAM signBlob |
-| validate | `upload`: check the object exists and is ≤ 100 MB. `inline`: tar.gz the files into the bucket. `git`: Cloud Build `gitSource`. `image`: skip the build. |
-| build | Cloud Build in `asia-south1` with buildpacks (`gcr.io/k8s-skaffold/pack`, `--builder gcr.io/buildpacks/builder:latest --publish`), running as `sc-builder@shipcube-apps-ks`, with logs in Cloud Logging. Publishes `asia-south1-docker.pkg.dev/shipcube-apps-ks/shipcube/<service>:<op id>`. Python apps need `requirements.txt` and a `Procfile`. |
-| deploy | Creates the runtime SA `app-<hash>@shipcube-apps-ks`, with no project roles. Creates or updates the Cloud Run v2 service `<app>-<hash6>` with gen2, scale to zero (`min 0`), caps mapped to `maxInstanceCount`, concurrency, CPU, memory and timeout, `cpuIdle`, `iapEnabled`, and the invoker IAM check on. The IAP service agent gets `roles/run.invoker`. |
-| configure_access | The app's access list becomes the IAP policy: `roles/iap.httpsResourceAccessor` on `projects/<num>/iap_web/cloud_run-<region>/services/<service>`. It's owner-only by default. |
-| health_check | The service's terminal condition must be `CONDITION_SUCCEEDED`. |
-| `delete_app` (approved) | Soft delete: the IAP accessors are removed and ingress is set to internal-only, so the app is unreachable but intact. `restore` reverses it. A purge sweep on the runner deletes the service, the runtime SA and the images after 7 days. |
-| linked target | The same calls with credentials impersonating `ws-<id>-deployer@shipcube-control-ks`, using the project's `shipcube-builder@` and `shipcube-apps@` SAs from security's `link-project.sh`. **Not yet run against a real linked project.** |
+| `app.py` | Routes, auth dependencies, typed error mapping, request ids and trace propagation |
+| `store.py` | Request-side logic on security's schema: apps, deployments, caps, access grants, approvals, idempotent operation enqueueing, workspace limits (`max_apps`, `deploys_per_day`) |
+| `worker.py` | Durable queue: claim with a lease, a 30 s heartbeat, step plans per operation kind, retries with backoff, housekeeping |
+| `deploy/gcp.py` | GCP over REST with `google-auth`: signed uploads, Cloud Build, Cloud Run v2, IAM, IAP, traffic, purge |
+| `deploy/mock.py` | DEV_MODE only |
+| `estimator.py` | `estimate_load` engine: load-estimator's `shipcube_placement` if installed, otherwise a typed `estimator_unavailable` error |
+| `telemetry.py` | Logs and metrics interface. The platform workstream installs the real implementation; without it the API answers 501. |
+| `auth.py` | PATs in `api_tokens` (HMAC with a pepper), Identity Platform ID tokens for console users |
+| `db.py`, `migrations/` | Pool, versioned migrations (checksummed, advisory-locked), and per-transaction caller context for row-level security |
+| `obs.py` | JSON logs: `severity`, `message`, `request_id`, `operation_id`, `logging.googleapis.com/trace` |
+| `admin.py` | Operator CLI |
 
-Operations run on an in-process background runner (`runner.py`). They are lost if the process restarts, so run one instance with `min-instances=1`. The Cloud Tasks step machine in `docs/research/networking.md` §3.3 replaces it once operations are stored in Postgres.
+## Run locally
 
-**One-time setup:** `scripts/gcp_setup.sh` (idempotent) enables the APIs, creates the repo, the bucket (1-day lifecycle), `sc-builder`, `sc-api` and the IAP service agent, and makes the grants.
+```bash
+brew install postgresql@16 uv
+initdb -D ~/.shipcube-pg -U postgres -A trust && pg_ctl -D ~/.shipcube-pg -o "-p 5433" -l ~/.shipcube-pg/log start
+createdb -h localhost -p 5433 -U postgres shipcube
+export SHIPCUBE_DATABASE_URL=postgresql://postgres@localhost:5433/shipcube SHIPCUBE_TOKEN_PEPPER=$(openssl rand -hex 32)
 
-**IAP on a project without an organization** needs one manual step in the console:
-1. In `shipcube-apps-ks`, set Google Auth Platform → Branding to **External**. While it's in Testing, add every Google account that should sign in as a test user.
-2. Create a **Web application** OAuth client with the redirect URI `https://iap.googleapis.com/v1/oauth/clientIds/CLIENT_ID:handleRedirect`.
+# Production mode against real GCP (ADC: gcloud auth application-default login):
+uv run python -m shipcube_api.admin bootstrap --email you@gmail.com --workspace demo --name "Demo"   # prints a PAT once
+cd ../mcp && uv run python -m shipcube_mcp.server          # /mcp + /v1 + embedded worker on :8080
+
+# Or DEV_MODE (mock deployer, mock estimator, mock telemetry, dev console sessions): SHIPCUBE_DEV_MODE=1
+```
+
+## Configure
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SHIPCUBE_DATABASE_URL` | required | Postgres. On Cloud SQL, connect as the IAM database user for `shipcube_app` (API) or `shipcube_worker` (standalone worker). |
+| `SHIPCUBE_DB_SET_ROLE` | `1` | `SET LOCAL ROLE shipcube_app` for API transactions, so row-level security applies even as the table owner. Set to `0` when the login user already is `shipcube_app`. |
+| `SHIPCUBE_TOKEN_PEPPER` | required outside DEV_MODE | HMAC pepper for token digests, from Secret Manager |
+| `SHIPCUBE_IDP_PROJECT` | unset | Identity Platform project for console ID tokens (approvals, restore) |
+| `SHIPCUBE_BACKEND` | `gcp` (`mock` in DEV_MODE) | `mock` is refused outside DEV_MODE |
+| `SHIPCUBE_DEV_MODE` | unset | `1` enables every mock; never set in production |
+| `SHIPCUBE_APPS_PROJECT`, `SHIPCUBE_CONTROL_PROJECT`, `SHIPCUBE_REGION` | `shipcube-apps-ks`, `shipcube-control-ks`, `asia-south1` | Where apps run |
+| `SHIPCUBE_UPLOAD_BUCKET`, `SHIPCUBE_SIGNER_SA`, `SHIPCUBE_BUILDER_SA`, `SHIPCUBE_REPO`, `SHIPCUBE_BUILDER` | see `settings.py` | Upload bucket, URL signer, Cloud Build SA, Artifact Registry repo, buildpacks builder |
+| `SHIPCUBE_HOSTED_DEPLOYER_SA` | unset | Impersonate this SA for hosted deploys (production: `sc-hosted-deployer`) |
+| `SHIPCUBE_PROFILER_JOB` | unset | Profiler sandbox job for `estimate_load`; unset means static analysis only |
+| `SHIPCUBE_EMBEDDED_WORKER` | `1` | Run a worker thread in the API process |
+| `SHIPCUBE_LOG_LEVEL` | `INFO` | |
+
+## Deploy (Cloud Run, in `shipcube-control-ks`)
+
+**One-time GCP setup:** `scripts/gcp_setup.sh` (idempotent). It creates the APIs, the Artifact Registry repo, the upload bucket with a 1-day lifecycle, `sc-builder`, `sc-api` and the IAP service agent, plus the grants. **IAP on a project without an organization** also needs one console step:
+1. Set Google Auth Platform → Branding to **External**. While in Testing, add every user as a test user.
+2. Create a Web OAuth client with the redirect URI `https://iap.googleapis.com/v1/oauth/clientIds/CLIENT_ID:handleRedirect`.
 3. Apply it:
 
 ```bash
 printf 'access_settings:\n  oauth_settings:\n    client_id: CLIENT_ID\n    client_secret: CLIENT_SECRET\n' > /tmp/iap.yaml && gcloud iap settings set /tmp/iap.yaml --project=shipcube-apps-ks && rm /tmp/iap.yaml
 ```
 
-Without this step, IAP answers `502 Empty Google Account OAuth client ID(s)/secret(s)`.
+**Service:**
+- Run one image for both, `python -m shipcube_mcp.server` (MCP + API + embedded worker).
+- Use `min-instances=1`, so the worker always runs and there are no cold starts for agents.
+- Run as `sc-api`, with `SHIPCUBE_DATABASE_URL` pointing at Cloud SQL through the connector, and `SHIPCUBE_TOKEN_PEPPER` from Secret Manager.
+- More workers: deploy the same image with `python -m shipcube_api.worker` as a second service, or scale the API. Workers coordinate through the database.
+
+Hosting ShipCube itself is the platform workstream's job; this section says what the API needs.
+
+## Operate (runbook)
+
+| Situation | What to do |
+|---|---|
+| See what's happening | `python -m shipcube_api.admin ops` (latest 20), or filter the logs by `jsonPayload.operation_id` |
+| A deploy seems stuck | `admin ops --stuck` lists running operations with expired leases, operations retried more than twice, and queued ones overdue by 5 minutes. An expired lease is picked up again by any worker automatically, resuming at `step_index`. A running build is re-attached by its `build_id`, not restarted. |
+| Retry a failed operation | `admin requeue <id>` resumes from the step that failed |
+| Give up on one | `admin fail <id> --reason "..."` |
+| Transient GCP errors | 429, 5xx, timeouts and network errors retry automatically with exponential backoff (5 s × 2ⁿ, capped at 300 s, with jitter) up to `max_attempts` (5). Other errors fail at once with a typed `error_code`: `build_failed`, `permission_denied`, `invalid_argument`, `not_found`, `conflict`, `estimator_unavailable`, `gcp_error`. |
+| Build failed | The operation's error includes the Cloud Build log URL. Python apps need `requirements.txt` and a `Procfile`. |
+| IAP answers 502 "Empty Google Account OAuth client ID(s)/secret(s)" | The OAuth client step above wasn't done for that project |
+| Unanswered approvals | They expire after 72 h; housekeeping (every minute) cancels the operation with `approval_expired` |
+| Deleted apps | A soft delete removes IAP access and makes ingress internal-only. `POST /v1/apps/{app}/restore` (console) undoes it within 7 days. After that, housekeeping enqueues a `purge`, which deletes the service, its runtime SA and its images. |
+| Migrations | They run at startup under an advisory lock. Never edit an applied file: the checksum check refuses to start. Add `migrations/000N_*.sql` instead. |
+
+## Tests
 
 ```bash
-SHIPCUBE_BACKEND=gcp SHIPCUBE_OWNER_EMAIL=you@gmail.com SHIPCUBE_DEV_TOKEN=sc_pat_... uv run python -m shipcube_mcp.server   # from services/mcp
+uv run pytest                     # unit + API + durability tests on a throwaway local Postgres (or SHIPCUBE_TEST_DATABASE_URL)
+SHIPCUBE_IT_GCP=1 SHIPCUBE_BACKEND=gcp SHIPCUBE_IT_OWNER=you@gmail.com uv run pytest tests/integration -s   # real GCP, ~4 min
 ```
 
+The GCP integration test covers build → deploy → IAP policy and interception → redeploy → rollback (it checks Cloud Run traffic) → grant → soft delete → restore → purge, and checks that the service and SA are gone afterwards.
+
+## Known limits
+
+- **Linked user projects:** the code path (impersonating the workspace's deployer SA) is unit-tested, but it hasn't run against a real linked project yet.
+- **Approvals:** one deploy that needs two approvals stores one `approvals.action`, chosen by precedence; all actions are listed in `approval_actions`. This waits on security's decision.
+- **Console identity:** Identity Platform token verification is implemented but untested end to end, because the console doesn't issue tokens yet.
+- **Rollback:** it pins traffic to a revision. The next deploy moves traffic back to the latest revision.
+- **T2:** Cloud Run jobs and Cloud Scheduler aren't built yet.
+- **Requests per minute:** not enforced on app traffic while apps use IAP directly (see `networking.md` §6).

@@ -16,6 +16,8 @@ dependencies = [
 [project.optional-dependencies]
 # The real data layer (Kunal-Shahi/shipcube-data PR #1). Without it the data_* tools use a stub.
 data = ["shipcube-data[duckdb]"]
+# The load estimator behind estimate_load (see services/api/pyproject.toml).
+estimator = ["shipcube-api[estimator]"]
 
 [project.scripts]
 shipcube-mcp = "shipcube_mcp.server:main"
@@ -26,6 +28,9 @@ dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 [tool.uv.sources]
 shipcube-api = { path = "../api", editable = true }
 shipcube-data = { git = "https://github.com/Kunal-Shahi/shipcube-data", rev = "5cdc6f8eb44209370e7f7da50104aa4a18ca2034" }
+shipcube-placement = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "packages/placement" }
+shipcube-profiler = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "packages/profiler" }
+shipcube-classifier = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "ml/workload-classifier" }
 
 [build-system]
 requires = ["hatchling"]
