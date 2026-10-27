@@ -26,8 +26,8 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
 ## Deploy
 
 ```bash
-PROJECT=<project> REGION=asia-south1 CALLER_SA=<worker SA> deploy/provision.sh   # idempotent; prints the env block
-SHIPCUBE_GCP_IT=1 pytest -k integration                                          # real-GCP integration test
+# Resources: managed by Terraform in infra/ (spec: deploy/RESOURCES.md). Set SHIPCUBE_PROFILER_* from its outputs.
+SHIPCUBE_GCP_IT=1 pytest -k integration      # real-GCP integration test
 ```
 
 ## Operate

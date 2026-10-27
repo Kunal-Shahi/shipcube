@@ -302,7 +302,7 @@ Each step was a profiler or feature fix found on the dev suite. The held-out sui
 
 ### 4.2 Not yet verified on real GCP
 
-`CloudRunJobRunner` is unit-tested against a scripted fake of each REST call: specs, digest pinning, cleanup, typed failures per stage and retries. The real-GCP integration test (`test_gcp_runner.py::test_gcp_integration_profiles_the_batch_sample`, run with `SHIPCUBE_GCP_IT=1`) has **not been run yet**. It needs the resources in §9.3, and creating them is waiting on Kunal's go-ahead because they're billable.
+`CloudRunJobRunner` is unit-tested against a scripted fake of each REST call: specs, digest pinning, cleanup, typed failures per stage and retries. The real-GCP integration test (`test_gcp_runner.py::test_gcp_integration_profiles_the_batch_sample`, run with `SHIPCUBE_GCP_IT=1`) has **not been run yet**. It needs the resources in §9.3. Kunal approved them on Oct 27: the sandbox goes in `shipcube-apps`, and the ML bucket stays in `shipcube-control-ks`. They're waiting on the infra/security Terraform.
 
 ## 5. Placement (`packages/placement`)
 
@@ -418,7 +418,7 @@ All configuration comes from the environment.
 | Variable | Default | Purpose |
 |---|---|---|
 | `SHIPCUBE_DEV_MODE` | unset | `1` allows `LocalRunner` (tests, demo, laptops). Never in production |
-| `SHIPCUBE_PROFILER_PROJECT`, `_REGION`, `_BUCKET`, `_REPOSITORY`, `_NETWORK`, `_SUBNET`, `_SERVICE_ACCOUNT` | required in production | Profiler sandbox (`provision.sh` prints them) |
+| `SHIPCUBE_PROFILER_PROJECT`, `_REGION`, `_BUCKET`, `_REPOSITORY`, `_NETWORK`, `_SUBNET`, `_SERVICE_ACCOUNT` | required in production | Profiler sandbox; Terraform outputs (`packages/profiler/deploy/RESOURCES.md`) |
 | `SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT` | Cloud Build default | Build identity |
 | `SHIPCUBE_MODEL_URI` | `bundled` | `gs://<bucket>/models/workload-classifier/<version or latest>` |
 | `SHIPCUBE_MODEL_SHA256` | unset | Pin; loading fails on mismatch |
@@ -465,14 +465,12 @@ The host calls `shipcube_classifier.obs.configure_logging()` once. It logs JSON 
 
 ### 9.3 Deploy
 
-1. `PROJECT=… REGION=… CALLER_SA=… packages/profiler/deploy/provision.sh`. It's idempotent and creates:
-   - the bucket, with a 1-day lifecycle rule on `profiler-src/`
-   - the Artifact Registry repo, with 7-day image cleanup
-   - the deny-all-egress VPC and subnet
-   - the zero-role sandbox SA
-   - least-privilege bindings for the caller: `run.developer`, `cloudbuild.builds.editor`, `logging.viewer`, `serviceAccountUser` on the sandbox and build SAs, and `storage.objectAdmin` on the bucket
+1. **Infrastructure as code.** The resources in `packages/profiler/deploy/RESOURCES.md` are managed by the infra/security workstream's Terraform (`infra/**`), not created by hand:
+   - in `shipcube-apps`: the sandbox VPC with deny-all egress, the zero-role sandbox SA, the build SA, and the Artifact Registry repo with 7-day cleanup
+   - in `shipcube-control-ks`: the ML bucket `shipcube-ks-ml`, with a 1-day lifecycle rule on `profiler-src/`
+   - least-privilege IAM for the caller and the build SA
 
-   It prints the environment block.
+   Set the `SHIPCUBE_PROFILER_*` variables from its outputs.
 2. Publish the model: `python ml/workload-classifier/scripts/publish_model.py gs://<bucket>/models/workload-classifier --latest`. Then set `SHIPCUBE_MODEL_URI` and `SHIPCUBE_MODEL_SHA256` from its output.
 3. Install the three packages into the API worker image, and promote the same image across environments.
 4. Run `SHIPCUBE_GCP_IT=1 pytest packages/profiler -k integration` against the target project.
@@ -481,7 +479,7 @@ The host calls `shipcube_classifier.obs.configure_logging()` once. It logs JSON 
 
 | Symptom | Check | Fix |
 |---|---|---|
-| `estimate_load` fails with `ProfilerError: config` | Worker env | Set the `SHIPCUBE_PROFILER_*` variables (provision.sh output) |
+| `estimate_load` fails with `ProfilerError: config` | Worker env | Set the `SHIPCUBE_PROFILER_*` variables (Terraform outputs; see `deploy/RESOURCES.md`) |
 | Many `profile.failed stage=build` | Cloud Build history, tag `shipcube-profiler` | App requirements don't install. The estimate still returns a static profile; the user fixes requirements |
 | `profile.failed stage=logs` | Log entries for `resource.type=cloud_run_job`, `job_name=prof-…` | Log ingestion lag (raise `log_wait_s`), or the agent crashed (see the job's stderr) |
 | `ModelLoadError` at startup | `model.loaded` / exception text | Wrong URI, missing `storage.objectViewer`, or a tampered object. Re-publish, or pin the previous version |
