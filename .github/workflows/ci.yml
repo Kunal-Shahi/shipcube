@@ -1,0 +1,165 @@
+name: ci
+
+# One workflow so branch protection can require a single check, "ci-ok", which runs on every PR.
+# Path-filtered jobs skip when their code didn't change; ci-ok fails if any job that ran failed.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.diff.outputs.python }}
+      python_projects: ${{ steps.diff.outputs.python_projects }}
+      gateway: ${{ steps.diff.outputs.gateway }}
+      web: ${{ steps.diff.outputs.web }}
+      deploy: ${{ steps.diff.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          # New branches, force pushes or a missing base: treat everything as changed.
+          if git cat-file -e "$base^{commit}" 2>/dev/null; then
+            files=$(git diff --name-only "$base" HEAD)
+          else
+            files=$(git ls-files)
+          fi
+          has() { echo "$files" | grep -qE "$1" && echo true || echo false; }
+          ci=$(has '^\.github/workflows/ci\.yml$')
+          or() { [ "$1" = true ] || [ "$ci" = true ] && echo true || echo false; }
+          echo "python=$(or "$(has '^(packages|services/(api|mcp)|ml|deploy/migrate)/')")" >> "$GITHUB_OUTPUT"
+          echo "gateway=$(or "$(has '^services/gateway/')")" >> "$GITHUB_OUTPUT"
+          echo "web=$(or "$(has '^apps/web/')")" >> "$GITHUB_OUTPUT"
+          echo "deploy=$(or "$(has '^deploy/')")" >> "$GITHUB_OUTPUT"
+          projects=$(find packages services ml deploy -name pyproject.toml -not -path '*/node_modules/*' \
+            -not -path '*/.venv/*' -exec dirname {} \; 2>/dev/null | sort | jq -R . | jq -cs .)
+          echo "python_projects=$projects" >> "$GITHUB_OUTPUT"
+          echo "$files" | head -50
+
+  python:
+    needs: changes
+    if: needs.changes.outputs.python == 'true' && needs.changes.outputs.python_projects != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJSON(needs.changes.outputs.python_projects) }}
+    # A real Postgres for integration tests (deploy/migrate today; the API's DB tests later).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 15
+    env:
+      DATABASE_URL: postgresql://postgres:ci@localhost:5432/ci
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "${{ matrix.project }}/uv.lock"
+      - name: Install
+        run: if [ -f uv.lock ]; then uv sync --locked; else uv sync; fi
+      # Lint where the project configures ruff, so CI doesn't impose rules a project hasn't adopted.
+      - name: Lint
+        run: if grep -q '^\[tool.ruff' pyproject.toml; then uvx ruff check .; else echo "no [tool.ruff]; skipped"; fi
+      - name: Test
+        run: if [ -d tests ]; then uv run --with pytest pytest -q; else echo "no tests/; skipped"; fi
+
+  gateway:
+    needs: changes
+    if: needs.changes.outputs.gateway == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/gateway/go.mod
+          cache-dependency-path: services/gateway/go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - id: present
+        working-directory: .
+        run: echo "present=$([ -f apps/web/package.json ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        if: steps.present.outputs.present == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - if: steps.present.outputs.present == 'true'
+        run: npm ci
+      - if: steps.present.outputs.present == 'true'
+        run: npm run lint
+      - if: steps.present.outputs.present == 'true'
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  deploy-scripts:
+    needs: changes
+    if: needs.changes.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -x -e SC1091 deploy/*.sh
+      - name: Python syntax
+        run: python3 -m py_compile deploy/monitoring.py
+      - name: YAML
+        run: pip install --quiet pyyaml && python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" deploy/*.yaml .github/workflows/*.yml
+
+  # The one required check. It runs even when jobs were skipped, and fails if any job failed.
+  ci-ok:
+    if: always()
+    needs: [changes, python, gateway, web, deploy-scripts]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo '${{ toJSON(needs) }}' | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if echo '${{ toJSON(needs) }}' | jq -e 'to_entries | any(.value.result == "failure" or .value.result == "cancelled")' >/dev/null; then
+            exit 1
+          fi

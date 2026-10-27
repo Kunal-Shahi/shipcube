@@ -1,0 +1,86 @@
+{
+  "machine": {
+    "os": "macOS-26.6-arm64-arm-64bit",
+    "cpu": "Apple M5",
+    "ncpu": 10,
+    "go": "go version go1.27.3 darwin/arm64",
+    "node": "v22.23.4",
+    "python": "Python 3.12.16",
+    "oha": "oha 1.16.0",
+    "runs": 20,
+    "duration": "5s",
+    "concurrency": "64"
+  },
+  "results": {
+    "go-http (net/http)": {
+      "rps": 172566,
+      "p50_ms": 0.26,
+      "p99_ms": 2.12,
+      "success": 1.0,
+      "status": {
+        "200": 863306
+      },
+      "rss_after_load_mb": 23.3
+    },
+    "go-http (net/http) GOMAXPROCS=1": {
+      "rps": 123767,
+      "p50_ms": 0.51,
+      "p99_ms": 1.0,
+      "success": 1.0,
+      "status": {
+        "200": 619166
+      },
+      "rss_after_load_mb": 16.9
+    },
+    "py-http (FastAPI+uvicorn)": {
+      "rps": 29813,
+      "p50_ms": 2.07,
+      "p99_ms": 4.13,
+      "success": 1.0,
+      "status": {
+        "200": 149089
+      },
+      "rss_after_load_mb": 60.0
+    },
+    "go-mcp (official go-sdk)": {
+      "rps": 11646,
+      "p50_ms": 4.85,
+      "p99_ms": 15.94,
+      "success": 1.0,
+      "status": {
+        "200": 58190
+      },
+      "rss_after_load_mb": 31.7
+    },
+    "go-mcp (official go-sdk) GOMAXPROCS=1": {
+      "rps": 10456,
+      "p50_ms": 6.21,
+      "p99_ms": 8.67,
+      "success": 1.0,
+      "status": {
+        "200": 52250
+      },
+      "rss_after_load_mb": 20.2
+    },
+    "py-mcp (official python sdk)": {
+      "rps": 3588,
+      "p50_ms": 16.33,
+      "p99_ms": 28.61,
+      "success": 1.0,
+      "status": {
+        "200": 17887
+      },
+      "rss_after_load_mb": 81.0
+    },
+    "ts-mcp (official ts sdk)": {
+      "rps": 12760,
+      "p50_ms": 4.97,
+      "p99_ms": 9.41,
+      "success": 1.0,
+      "status": {
+        "200": 63759
+      },
+      "rss_after_load_mb": 177.7
+    }
+  }
+}
