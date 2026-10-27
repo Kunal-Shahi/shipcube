@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+/* Tokens are documented in docs/design/DESIGN.md. Light values on :root, dark values
+   under prefers-color-scheme (unless the user picked light) and under data-theme="dark". */
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #f1f2f5;
+  --border: #e3e5ea;
+  --border-strong: #cfd2d9;
+  --fg: #15171c;
+  --fg-muted: #5d626d;
+  --fg-subtle: #8a8f9a;
+  --accent: #3355e0;
+  --accent-hover: #2846c4;
+  --accent-fg: #ffffff;
+  --accent-soft: #eceffd;
+  --good: #12844a;
+  --good-soft: #e6f4ec;
+  --warning: #a96800;
+  --warning-soft: #fbf1df;
+  --critical: #c93636;
+  --critical-soft: #fbeaea;
+  --shadow: 0 4px 16px rgb(21 23 28 / 0.08), 0 1px 2px rgb(21 23 28 / 0.06);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d0e11;
+    --surface: #14161a;
+    --surface-2: #1b1d22;
+    --border: #262930;
+    --border-strong: #363a43;
+    --fg: #eceef2;
+    --fg-muted: #9a9fab;
+    --fg-subtle: #6b707c;
+    --accent: #6b8aff;
+    --accent-hover: #8aa2ff;
+    --accent-fg: #0d0e11;
+    --accent-soft: #1a2140;
+    --good: #3fbf7f;
+    --good-soft: #12261b;
+    --warning: #e0a43a;
+    --warning-soft: #2a2010;
+    --critical: #f06a6a;
+    --critical-soft: #2c1414;
+    --shadow: 0 4px 16px rgb(0 0 0 / 0.4), 0 1px 2px rgb(0 0 0 / 0.3);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0d0e11;
+  --surface: #14161a;
+  --surface-2: #1b1d22;
+  --border: #262930;
+  --border-strong: #363a43;
+  --fg: #eceef2;
+  --fg-muted: #9a9fab;
+  --fg-subtle: #6b707c;
+  --accent: #6b8aff;
+  --accent-hover: #8aa2ff;
+  --accent-fg: #0d0e11;
+  --accent-soft: #1a2140;
+  --good: #3fbf7f;
+  --good-soft: #12261b;
+  --warning: #e0a43a;
+  --warning-soft: #2a2010;
+  --critical: #f06a6a;
+  --critical-soft: #2c1414;
+  --shadow: 0 4px 16px rgb(0 0 0 / 0.4), 0 1px 2px rgb(0 0 0 / 0.3);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-critical: var(--critical);
+  --color-critical-soft: var(--critical-soft);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  --shadow-pop: var(--shadow);
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@utility num {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes pulse-soft {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@utility skeleton {
+  background: var(--surface-2);
+  border-radius: 4px;
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
