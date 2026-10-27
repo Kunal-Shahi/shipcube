@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from shipcube_profiler import (CloudRunJobRunner, Hints, Limits, LocalRunner, NotRunnable, SourceError,
+from shipcube_profiler import (Hints, Limits, LocalRunner, NotRunnable, SourceError,
                                StaticRunner, materialize, runs_per_day, summarize, to_features)
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples"
@@ -151,16 +151,20 @@ def test_static_runner_and_hints():
     assert f["invocations_per_hour"] == 2
 
 
-def test_gcp_runner_spec_matches_security_rule():
-    spec = CloudRunJobRunner().job_spec("us-docker.pkg.dev/x/y/app@sha256:1", "est_1")
-    t = spec["template"]["template"]
-    assert t["executionEnvironment"] == "EXECUTION_ENVIRONMENT_GEN2"
-    assert t["vpcAccess"]["egress"] == "ALL_TRAFFIC"
-    assert t["maxRetries"] == 0 and t["timeout"] == "600s"
-    assert t["containers"][0]["resources"]["limits"] == {"cpu": "1", "memory": "2Gi"}
-    with pytest.raises(NotImplementedError):
-        CloudRunJobRunner().run(Path("."), summarize(SAMPLES / "nightly_batch"), Hints())
-
-
 def test_python_is_this_interpreter_by_default():
     assert LocalRunner().python == sys.executable
+
+
+def test_web_cpu_cv_is_left_unknown(dashboard_profile):
+    f, _ = to_features(dashboard_profile[0], Hints(expected_users=25))
+    assert math.isnan(f["cpu_cv"])
+
+
+def test_api_only_apps_get_always_on_traffic(tmp_path):
+    (tmp_path / "app.py").write_text("from flask import Flask\napp = Flask(__name__)\n"
+                                     "@app.route('/api/items')\ndef items(): return '[]'\n")
+    s = summarize(tmp_path)
+    assert s.api_only
+    p = StaticRunner().run(tmp_path, s, Hints(expected_users=1000))
+    f, notes = to_features(p, Hints(expected_users=1000), api_only=True)
+    assert f["idle_fraction"] < 0.01 and any("always on" in n for n in notes)

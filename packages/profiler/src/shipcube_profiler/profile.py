@@ -20,6 +20,15 @@ class Hints:
     schedule: str | None = None          # cron expression
     region: str = "us-central1"
     sample_input: str | None = None      # path mounted read-only as SHIPCUBE_SAMPLE_DIR
+    # Web traffic shape: "office_hours" (people opening a page during the working day)
+    # or "always_on" (other systems calling an API around the clock). When unset it's
+    # inferred: API-only apps are always_on, everything else office_hours.
+    traffic: str | None = None
+
+    def traffic_for(self, api_only: bool) -> str:
+        if self.traffic in ("office_hours", "always_on"):
+            return self.traffic
+        return "always_on" if api_only else "office_hours"
 
     @classmethod
     def from_any(cls, h: "Hints | dict | None") -> "Hints":
@@ -71,6 +80,14 @@ class Profile:
     def to_dict(self) -> dict:
         return asdict(self)
 
+    @classmethod
+    def from_dict(cls, d: dict) -> "Profile":
+        d = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        if isinstance(d.get("requests"), dict):
+            d["requests"] = RequestStats(**{k: v for k, v in d["requests"].items()
+                                            if k in RequestStats.__dataclass_fields__})
+        return cls(**d)
+
 
 def _round(d: dict) -> dict:
     return {k: (round(v, 6) if isinstance(v, float) and not math.isnan(v) else v) for k, v in d.items()}
@@ -90,7 +107,14 @@ def _diurnal_traffic(users: int) -> tuple[float, float, float]:
     return per_hour, cv, idle
 
 
-def to_features(profile: Profile, hints: Hints | dict | None = None) -> tuple[dict[str, float], list[str]]:
+def _always_on_traffic(users: int) -> tuple[float, float, float]:
+    """(invocations/hour, per-minute CV, idle fraction) for round-the-clock Poisson traffic."""
+    lam = users * REQUESTS_PER_ACTIVE_USER_HOUR / 60.0
+    return lam * 60, (1 / math.sqrt(lam) if lam > 0 else float("nan")), math.exp(-lam)
+
+
+def to_features(profile: Profile, hints: Hints | dict | None = None,
+                api_only: bool = False) -> tuple[dict[str, float], list[str]]:
     """Map a profile and hints onto FEATURES. Returns (features, assumptions)."""
     h = Hints.from_any(hints)
     f = empty()
@@ -104,7 +128,7 @@ def to_features(profile: Profile, hints: Hints | dict | None = None) -> tuple[di
         f["cpu_peak_to_mean"] = profile.cpu_p95_cores / profile.cpu_mean_cores
     f["mem_mean_gb"] = profile.mem_mean_gb
     f["mem_peak_gb"] = profile.mem_peak_gb
-    f["mem_per_core_gb"] = profile.mem_peak_gb / max(profile.cpu_p95_cores, 0.05)
+    f["mem_per_core_gb"] = profile.mem_peak_gb / max(profile.cpu_mean_cores, 0.05)
     active = max(profile.active_s, 1e-3)
     if profile.io_source != "none":
         f["io_mb_per_s"] = (profile.io_read_mb + profile.io_write_mb) / active
@@ -113,12 +137,21 @@ def to_features(profile: Profile, hints: Hints | dict | None = None) -> tuple[di
     f["io_per_cpu_s"] = io / max(profile.cpu_mean_cores, 0.01)
 
     if profile.kind == "web":
+        # A few seconds of synthetic load says nothing about how CPU varies over a day
+        # (the traces' CV spans 10 s to 5 min windows over hours or days), so it's left
+        # unknown; burstiness for web apps comes from the traffic model below.
+        f["cpu_cv"] = float("nan")
         users = h.expected_users or 10
         if not h.expected_users:
             notes.append("expected_users not given; assumed 10")
-        f["invocations_per_hour"], f["invocation_cv"], f["idle_fraction"] = _diurnal_traffic(users)
-        notes.append(f"traffic model: {REQUESTS_PER_ACTIVE_USER_HOUR} requests per active user-hour, "
-                     f"{ACTIVE_HOURS_PER_DAY} active hours a day")
+        if h.traffic_for(api_only) == "always_on":
+            f["invocations_per_hour"], f["invocation_cv"], f["idle_fraction"] = _always_on_traffic(users)
+            notes.append(f"traffic model: always on (API callers), {REQUESTS_PER_ACTIVE_USER_HOUR} "
+                         "requests per caller-hour around the clock")
+        else:
+            f["invocations_per_hour"], f["invocation_cv"], f["idle_fraction"] = _diurnal_traffic(users)
+            notes.append(f"traffic model: office hours, {REQUESTS_PER_ACTIVE_USER_HOUR} requests per "
+                         f"active user-hour, {ACTIVE_HOURS_PER_DAY} active hours a day")
         if profile.requests and profile.requests.ok:
             f["duration_s"] = profile.requests.latency_mean_s
     else:

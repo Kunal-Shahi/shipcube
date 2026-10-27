@@ -55,7 +55,7 @@ def test_structural_prior_moves_probability_mass():
 def test_derive_fills_ratios():
     d = derive({"cpu_mean_cores": 0.5, "cpu_p95_cores": 1.0, "mem_peak_gb": 4.0, "io_mb_per_s": 5.0})
     assert d["cpu_peak_to_mean"] == 2.0
-    assert d["mem_per_core_gb"] == 4.0
+    assert d["mem_per_core_gb"] == 8.0      # per core of *mean* CPU
     assert d["io_per_cpu_s"] == 10.0
     assert math.isnan(d["duration_s"])
 
@@ -95,11 +95,21 @@ def test_export_matches_lightgbm_on_synthetic_data():
 
 def test_metrics_report_is_present():
     metrics = json.loads((ARTEFACT.parent / "metrics.json").read_text())
-    for key in ("test", "confusion_matrix", "leave_one_source_out", "test_masked_30pct"):
+    for key in ("trace_held_out", "leave_one_source_out", "traces_to_profiler", "profiler_holdout",
+                "calibration", "low_confidence_gate", "policy_dev_suite"):
         assert key in metrics
-    assert metrics["test"]["macro_f1"] > 0.7
-    cm = metrics["confusion_matrix"]
+    assert metrics["traces_to_profiler"]["macro_f1"] > 0.7
+    cm = metrics["confusion_matrix_trace_held_out"]
     assert cm["labels"] == CLASSES and len(cm["rows_true_cols_pred"]) == len(CLASSES)
+
+
+def test_model_carries_version_and_gate():
+    m = default_model()
+    manifest = json.loads((ARTEFACT.parent / "manifest.json").read_text())
+    assert m.version == manifest["version"] and m.version.startswith("wc-")
+    assert m.temperature >= 1.0 and 0.5 <= m.min_confidence <= 1.0
+    p = classify(EXAMPLES["batch_cron"][0], "script")
+    assert p.model_version == m.version
 
 
 def test_inference_is_fast():

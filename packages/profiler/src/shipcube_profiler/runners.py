@@ -1,14 +1,16 @@
 """Runners execute an app and return a Profile.
 
-- LocalRunner: subprocess + psutil sampling + rlimits. For development and tests.
-  It is NOT a security boundary (no container, no network namespace).
-- CloudRunJobRunner: the production design, a Cloud Run job (gen2 sandbox, no egress).
-  Stubbed: job_spec() is real, run() raises until the deployer can launch jobs.
+- LocalRunner: subprocess + psutil sampling + rlimits. Used inside the Cloud Run job
+  sandbox (by agent.py), and directly only in DEV_MODE: on its own it is NOT a security
+  boundary (no container, no network namespace).
+- CloudRunJobRunner (gcp_runner.py): production, a Cloud Run job (gen2 sandbox, no egress).
 - StaticRunner: no execution; typical numbers from the code summary and hints.
 """
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import json
 import os
 import re
@@ -71,6 +73,32 @@ def _preexec(limits: Limits):
     return fn
 
 
+class _RusageInfoV2(ctypes.Structure):
+    _fields_ = [("ri_uuid", ctypes.c_uint8 * 16)] + [(n, ctypes.c_uint64) for n in (
+        "ri_user_time", "ri_system_time", "ri_pkg_idle_wkups", "ri_interrupt_wkups", "ri_pageins",
+        "ri_wired_size", "ri_resident_size", "ri_phys_footprint", "ri_proc_start_abstime",
+        "ri_proc_exit_abstime", "ri_child_user_time", "ri_child_system_time",
+        "ri_child_pkg_idle_wkups", "ri_child_interrupt_wkups", "ri_child_pageins",
+        "ri_child_elapsed_abstime", "ri_diskio_bytesread", "ri_diskio_byteswritten")]
+
+
+def _darwin_disk_io():
+    """macOS: per-process disk bytes via proc_pid_rusage (psutil has no io_counters there)."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        lib = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib")
+    except OSError:
+        return None
+
+    def read(pid: int) -> tuple[int, int] | None:
+        info = _RusageInfoV2()
+        if lib.proc_pid_rusage(pid, 2, ctypes.byref(info)) != 0:  # RUSAGE_INFO_V2
+            return None
+        return info.ri_diskio_bytesread, info.ri_diskio_byteswritten
+    return read
+
+
 class _Sampler(threading.Thread):
     """Samples CPU, RSS, I/O and process count of a process tree."""
 
@@ -84,6 +112,7 @@ class _Sampler(threading.Thread):
         self.nprocs = 1
         self.io = {}  # pid -> (read, write)
         self.io_supported = hasattr(psutil.Process, "io_counters")
+        self.darwin_io = None if self.io_supported else _darwin_disk_io()
         self.kill_reason: str | None = None
         self.window: tuple[int, int] | None = None   # sample indices of the active window
         self._halt = threading.Event()
@@ -121,6 +150,10 @@ class _Sampler(threading.Thread):
                         if self.io_supported:
                             c = p.io_counters()
                             self.io[p.pid] = (c.read_bytes, c.write_bytes)
+                        elif self.darwin_io:
+                            c = self.darwin_io(p.pid)
+                            if c:
+                                self.io[p.pid] = c
                 except (psutil.Error, AttributeError):
                     continue
             self.cpu.append(cpu)
@@ -137,6 +170,21 @@ class _Sampler(threading.Thread):
 
     def stop(self):
         self._halt.set()
+
+
+CV_BUCKET_S = 1.0
+
+
+def _bucketed_cv(cpu: list[float], interval_s: float) -> float:
+    """CPU coefficient of variation over 1 s buckets. The traces measure variation over
+    10 s (Alibaba) to 5 min (Borg) windows; at 100 ms a lightly loaded server's CPU is
+    mostly scheduler noise, which made steady APIs look bursty."""
+    k = max(1, round(CV_BUCKET_S / interval_s))
+    buckets = [statistics.fmean(cpu[i:i + k]) for i in range(0, len(cpu), k) if len(cpu[i:i + k]) == k]
+    if len(buckets) < 2:
+        buckets = cpu
+    mean = statistics.fmean(buckets) if buckets else 0.0
+    return statistics.pstdev(buckets) / mean if mean > 0 else 0.0
 
 
 def _killpg(pid: int, sig=signal.SIGKILL):
@@ -268,7 +316,12 @@ class LocalRunner:
                 else:
                     win_start = sampler.mark()
                     ta = time.monotonic()
-                    prof.requests = _load(port, summary.routes, **self.load)
+                    load = dict(self.load)
+                    if hints.traffic_for(summary.api_only) == "always_on":
+                        # Steady callers: one continuous stream, no idle gaps.
+                        load.update(bursts=1, per_burst=load["bursts"] * load["per_burst"],
+                                    concurrency=max(1, load["concurrency"] // 2), gap_s=0)
+                    prof.requests = _load(port, summary.routes, **load)
                     prof.active_s = time.monotonic() - ta
                 _killpg(proc.pid, signal.SIGTERM)
                 try:
@@ -303,7 +356,7 @@ class LocalRunner:
             prof.cpu_mean_cores = statistics.fmean(cpu)
             prof.cpu_p95_cores = sorted(cpu)[int(0.95 * (len(cpu) - 1))]
             prof.cpu_peak_cores = max(cpu)
-            prof.cpu_cv = statistics.pstdev(cpu) / prof.cpu_mean_cores if prof.cpu_mean_cores > 0 else 0.0
+            prof.cpu_cv = _bucketed_cv(cpu, self.limits.sample_interval_s)
         if summary.kind != "web" and wall > 0:
             # rusage is exact for CPU time; sampling misses very short runs.
             prof.cpu_mean_cores = max(prof.cpu_mean_cores, prof.cpu_seconds / wall)
@@ -315,10 +368,12 @@ class LocalRunner:
         else:  # too short to sample: ru_maxrss is bytes on macOS, KiB on Linux
             scale = 1 if sys.platform == "darwin" else 1024
             prof.mem_peak_gb = prof.mem_mean_gb = ru1.ru_maxrss * scale / GIB
-        if sampler.io_supported and sampler.io:
+        if sampler.io:
+            # Cumulative per-process counters as last sampled (I/O in the final
+            # <100 ms before exit can be missed).
             prof.io_read_mb = sum(r for r, _ in sampler.io.values()) / 2**20
             prof.io_write_mb = sum(w for _, w in sampler.io.values()) / 2**20
-            prof.io_source = "psutil"
+            prof.io_source = "psutil" if sampler.io_supported else "proc_pid_rusage"
         else:
             blocks = (ru1.ru_inblock - ru0.ru_inblock) + (ru1.ru_oublock - ru0.ru_oublock)
             prof.io_write_mb = (ru1.ru_oublock - ru0.ru_oublock) * 4096 / 2**20
@@ -345,59 +400,17 @@ class LocalRunner:
         return prof
 
 
-class CloudRunJobRunner:
-    """Production profiler: one Cloud Run job execution per estimate.
-
-    Matches security's profiler rule (security-tenancy.md §4): project shipcube-apps,
-    a service account with no roles, no secrets, Direct VPC egress (all-traffic) into
-    a VPC whose only firewall rule denies egress, gen2, 1 vCPU / 2 GiB, 10-minute task
-    timeout, max-retries 0. The image is the app image built by Cloud Build (which has
-    egress for dependencies) plus this package; the job runs
-    `python -m shipcube_profiler.agent` which uses LocalRunner inside the sandbox and
-    writes the Profile JSON to stdout / the operation's GCS prefix.
-    """
-
-    name = "gcp"
-
-    def __init__(self, project: str = "shipcube-apps", region: str = "us-central1",
-                 network: str = "profiler-no-egress", subnet: str = "profiler",
-                 service_account: str = "profiler@shipcube-apps.iam.gserviceaccount.com"):
-        self.project, self.region = project, region
-        self.network, self.subnet, self.sa = network, subnet, service_account
-
-    def job_spec(self, image: str, estimate_id: str) -> dict:
-        """Cloud Run Admin API v2 Job body (projects.locations.jobs.create)."""
-        return {
-            "labels": {"shipcube-role": "profiler", "estimate": estimate_id},
-            "template": {
-                "taskCount": 1,
-                "parallelism": 1,
-                "template": {
-                    "maxRetries": 0,
-                    "timeout": "600s",
-                    "serviceAccount": self.sa,
-                    "executionEnvironment": "EXECUTION_ENVIRONMENT_GEN2",
-                    "vpcAccess": {
-                        "egress": "ALL_TRAFFIC",
-                        "networkInterfaces": [{"network": self.network, "subnetwork": self.subnet}],
-                    },
-                    "containers": [{
-                        "image": image,
-                        "command": ["python", "-m", "shipcube_profiler.agent"],
-                        "env": [{"name": "SHIPCUBE_ESTIMATE_ID", "value": estimate_id}],
-                        "resources": {"limits": {"cpu": "1", "memory": "2Gi"}},
-                    }],
-                },
-            },
-        }
-
-    def run(self, app_dir: Path, summary: CodeSummary, hints: Hints) -> Profile:
-        raise NotImplementedError("GCP profiling needs the deployer's image build; use LocalRunner or StaticRunner")
+def default_runner() -> Runner:
+    """CloudRunJobRunner from the environment; LocalRunner only when SHIPCUBE_DEV_MODE=1."""
+    if os.environ.get("SHIPCUBE_DEV_MODE") == "1":
+        return LocalRunner()
+    from .gcp_runner import CloudRunJobRunner
+    return CloudRunJobRunner()
 
 
 class StaticRunner:
     """No execution: typical numbers by app shape. Used for images, code that fails to
-    start, or when the caller only has hints."""
+    start, or when the caller only has hints. Results are marked mode="static"."""
 
     name = "static"
 

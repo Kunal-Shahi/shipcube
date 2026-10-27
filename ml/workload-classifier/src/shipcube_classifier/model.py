@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
 from .features import CLASSES, FEATURES, vector
@@ -22,14 +21,18 @@ _MISSING_NONE, _MISSING_ZERO, _MISSING_NAN = 0, 1, 2
 _ZERO = 1e-35
 
 
-# Structural prior: the profiler knows whether the code is a long-running server
-# ("web") or runs to completion ("script"). That's the same kind of side signal the
-# weak labels came from (trigger type, VM category), and the features alone can't
-# always recover it: a once-a-day cron and a rarely-opened HTTP endpoint both look
-# idle 99.9% of the day. Probabilities are multiplied by this prior and renormalised.
+# Structural prior: the profiler knows the app's shape, which is the same kind of side
+# signal the weak labels came from (trigger type, VM category) and which features
+# alone don't always recover. A once-a-day cron and a rarely opened HTTP endpoint both
+# look idle 99.9% of the day, and a script that sleeps between steps has the CPU
+# variance the traces associate with bursty services. Probabilities are multiplied by
+# this prior and renormalised.
+# - "script": ran to completion. It can't be an interactive service, so those are 0.
+# - "web": serves HTTP. Very unlikely to be a batch job (scheduled HTTP endpoints exist).
+# - "worker": a script that didn't exit (queue consumer, daemon): no prior.
 STRUCTURAL_PRIOR = {
     "script": {"batch_cron": 1.0, "compute_heavy": 1.0, "memory_heavy": 1.0, "io_bound": 1.0,
-               "bursty_interactive": 0.05, "steady_service": 0.05},
+               "bursty_interactive": 0.0, "steady_service": 0.0},
     "web": {"batch_cron": 0.05, "compute_heavy": 1.0, "memory_heavy": 1.0, "io_bound": 1.0,
             "bursty_interactive": 1.0, "steady_service": 1.0},
 }
@@ -38,8 +41,10 @@ STRUCTURAL_PRIOR = {
 @dataclass(frozen=True)
 class Prediction:
     workload_class: str
-    confidence: float
+    confidence: float                  # calibrated (temperature-scaled) probability
     probabilities: dict[str, float]
+    low_confidence: bool = False       # confidence < the model's min_confidence gate
+    model_version: str = "unversioned"
 
 
 class _Tree:
@@ -75,6 +80,10 @@ class Model:
         self.k = len(self.classes)
         self.trees = [_Tree(t) for t in spec["trees"]]
         self.meta: dict = spec.get("meta", {})
+        self.version: str = self.meta.get("version", "unversioned")
+        # Fitted in train.py on leave-one-app-out predictions for profiled apps.
+        self.temperature: float = float(spec.get("temperature", 1.0))
+        self.min_confidence: float = float(spec.get("min_confidence", 0.0))
 
     @classmethod
     def load(cls, path: Path | str = ARTEFACT) -> "Model":
@@ -87,26 +96,29 @@ class Model:
         return s
 
     def predict_proba(self, features: dict[str, float]) -> dict[str, float]:
-        s = self.raw_scores(vector(features))
+        s = [v / self.temperature for v in self.raw_scores(vector(features))]
         m = max(s)
         e = [math.exp(v - m) for v in s]
         z = sum(e)
         return {c: e[i] / z for i, c in enumerate(self.classes)}
 
     def predict(self, features: dict[str, float], kind: str | None = None) -> Prediction:
-        """kind: "web" or "script" applies STRUCTURAL_PRIOR; None gives the raw model."""
+        """kind: "web" or "script" applies STRUCTURAL_PRIOR; "worker" or None gives the raw model."""
         p = self.predict_proba(features)
         if kind in STRUCTURAL_PRIOR:
             prior = STRUCTURAL_PRIOR[kind]
             z = sum(p[c] * prior[c] for c in p)
             p = {c: p[c] * prior[c] / z for c in p}
         best = max(p, key=p.get)
-        return Prediction(best, round(p[best], 4), {k: round(v, 4) for k, v in p.items()})
+        return Prediction(best, round(p[best], 4), {k: round(v, 4) for k, v in p.items()},
+                          low_confidence=p[best] < self.min_confidence, model_version=self.version)
 
 
-@lru_cache(maxsize=1)
 def default_model() -> Model:
-    return Model.load()
+    """The configured model (SHIPCUBE_MODEL_URI; bundled by default), loaded once and
+    checksum-verified by shipcube_classifier.registry."""
+    from .registry import load_model
+    return load_model().model
 
 
 def classify(features: dict[str, float], kind: str | None = None) -> Prediction:

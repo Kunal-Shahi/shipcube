@@ -13,7 +13,8 @@ from shipcube_profiler import CodeSummary, Hints, Profile, RequestStats
 
 SAMPLES = Path(__file__).resolve().parents[2] / "profiler" / "samples"
 CONTRACT = {"estimate_id", "workload_class", "confidence", "tier", "target", "resources", "monthly_cost_usd",
-            "profile", "recommended_caps", "reasoning", "alternatives", "explained_by"}
+            "profile", "recommended_caps", "reasoning", "alternatives", "explained_by", "decided_by",
+            "low_confidence", "model_version"}
 
 
 def inline(app_dir: Path) -> dict:
@@ -164,16 +165,15 @@ def test_crashing_app_falls_back_to_static():
 
 def test_fallback_without_key(monkeypatch, batch_rules):
     monkeypatch.delenv("META_API_KEY", raising=False)
-    fb = FallbackExplainer()
-    r = estimate(inline(SAMPLES / "nightly_batch"), {"schedule": "0 2 * * *"}, explainer=fb)
+    r = estimate(inline(SAMPLES / "nightly_batch"), {"schedule": "0 2 * * *"}, explainer=FallbackExplainer())
     assert r.explained_by == "rules"
-    assert "META_API_KEY" in fb.last_error
+    assert r.profile["explainer_fallback_reason"].startswith("not_configured")
 
 
 def test_fallback_on_api_error():
-    fb = FallbackExplainer(MuseExplainer(client=FakeClient(error=TimeoutError("boom"))))
+    fb = FallbackExplainer(MuseExplainer(client=FakeClient(error=TimeoutError("boom")), backoff_s=0))
     r = estimate(inline(SAMPLES / "nightly_batch"), {"schedule": "0 2 * * *"}, explainer=fb)
-    assert r.explained_by == "rules" and "TimeoutError" in fb.last_error
+    assert r.explained_by == "rules" and r.profile["explainer_fallback_reason"].startswith("timeout")
 
 
 def test_fallback_on_bad_json():
@@ -230,7 +230,7 @@ def test_api_key_is_never_in_the_result(monkeypatch):
     r = estimate(inline(SAMPLES / "nightly_batch"), {}, explainer=fb)
     assert r.explained_by == "rules"
     assert "sk-test-sentinel-123" not in json.dumps(r.model_dump())
-    assert "[redacted]" in r.profile["explainer_error"]
+    assert "[redacted]" in r.profile["explainer_fallback_reason"]
 
 
 @pytest.mark.skipif(os.environ.get("SHIPCUBE_LIVE_MUSE") != "1", reason="set SHIPCUBE_LIVE_MUSE=1 to call the real API")
@@ -241,3 +241,86 @@ def test_live_muse(batch_rules):
     r = estimate(inline(SAMPLES / "nightly_batch"), {"schedule": "0 2 * * *"}, explainer=fb)
     assert r.explained_by.startswith("muse-spark"), fb.last_error
     assert r.tier == batch_rules.tier
+
+
+# --- low-confidence fallback, versioning, Muse retries --------------------------------
+
+def test_result_carries_model_version(batch_rules):
+    from shipcube_classifier import load_model
+    assert batch_rules.model_version == load_model().version
+    assert batch_rules.decided_by == "classifier" and batch_rules.low_confidence is False
+
+
+def test_low_confidence_falls_back_to_rules_and_is_flagged(monkeypatch):
+    from shipcube_classifier import load_model
+    monkeypatch.setattr(load_model().model, "min_confidence", 1.01)   # nothing clears the gate
+    r = estimate(inline(SAMPLES / "nightly_batch"), {"schedule": "0 2 * * *"}, explainer=RuleExplainer())
+    assert r.decided_by == "rules" and r.low_confidence is True
+    assert r.workload_class == r.profile["rules_class"] == "batch_cron"
+    assert "wasn't confident" in r.reasoning
+    assert r.confidence == r.profile["class_probabilities"]["batch_cron"]
+
+
+def _openai_errors():
+    import httpx2 as httpx
+    import openai
+    req = httpx.Request("POST", "https://api.meta.ai/v1/chat/completions")
+    return {"timeout": openai.APITimeoutError(request=req),
+            "auth": openai.AuthenticationError("bad key", response=httpx.Response(401, request=req), body=None),
+            "rate": openai.RateLimitError("slow down", response=httpx.Response(429, request=req), body=None)}
+
+
+class SequenceClient(FakeClient):
+    """Raises the given errors in order, then returns `reply`."""
+
+    def __init__(self, errors, reply):
+        super().__init__(reply=reply)
+        self.errors = list(errors)
+
+    def _create(self, **kw):
+        self.calls.append(kw)
+        if self.errors:
+            raise self.errors.pop(0)
+        msg = SimpleNamespace(content=self.reply)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg, finish_reason="stop")])
+
+
+GOOD = json.dumps({"reasoning": "A nightly job that runs for about a second on one core and then exits, so a "
+                                "scheduled Cloud Run job fits.", "alternatives": [], "recommended_caps": {}})
+
+
+def test_muse_retries_transient_errors_then_succeeds(batch_rules):
+    errs = _openai_errors()
+    client = SequenceClient([errs["timeout"], errs["rate"]], GOOD)
+    m = MuseExplainer(client=client, model="muse-spark-test", backoff_s=0)
+    r = estimate(inline(SAMPLES / "nightly_batch"), {"schedule": "0 2 * * *"}, explainer=FallbackExplainer(m))
+    assert r.explained_by == "muse-spark-test"
+    assert len(client.calls) == 3
+    assert all(c["timeout"] <= m.timeout_s for c in client.calls)
+
+
+def test_muse_does_not_retry_auth_errors():
+    client = SequenceClient([_openai_errors()["auth"]], GOOD)
+    r = estimate(inline(SAMPLES / "nightly_batch"), {}, explainer=FallbackExplainer(
+        MuseExplainer(client=client, backoff_s=0)))
+    assert r.explained_by == "rules" and len(client.calls) == 1
+    assert r.profile["explainer_fallback_reason"].startswith("auth")
+
+
+def test_muse_gives_up_after_max_attempts():
+    errs = _openai_errors()
+    client = SequenceClient([errs["timeout"]] * 5, GOOD)
+    r = estimate(inline(SAMPLES / "nightly_batch"), {}, explainer=FallbackExplainer(
+        MuseExplainer(client=client, backoff_s=0, max_attempts=3)))
+    assert r.explained_by == "rules" and len(client.calls) == 3
+
+
+def test_production_without_profiler_config_fails_loudly(monkeypatch):
+    import os
+    from shipcube_profiler import ProfilerError
+    monkeypatch.delenv("SHIPCUBE_DEV_MODE")
+    for k in list(os.environ):
+        if k.startswith("SHIPCUBE_PROFILER_"):
+            monkeypatch.delenv(k)
+    with pytest.raises(ProfilerError):
+        estimate(inline(SAMPLES / "nightly_batch"), {}, explainer=RuleExplainer())

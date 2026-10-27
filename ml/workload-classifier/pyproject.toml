@@ -9,6 +9,8 @@ dependencies = []
 [project.optional-dependencies]
 # Only needed to rebuild the dataset and retrain (scripts/). macOS also needs `brew install libomp`.
 train = ["lightgbm>=4.5", "numpy>=2.0", "pandas>=2.2", "scikit-learn>=1.5"]
+# GCS model registry (registry.py) and the shared REST client (gcp.py).
+gcp = ["google-auth>=2.30", "requests>=2.32"]
 test = ["pytest>=8"]
 
 [build-system]

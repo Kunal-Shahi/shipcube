@@ -11,11 +11,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
+from shipcube_classifier.obs import configure_logging
 from shipcube_placement import FallbackExplainer, RuleExplainer, estimate
+from shipcube_profiler import LocalRunner
 
 SAMPLES = Path(__file__).resolve().parents[2] / "profiler" / "samples"
 APPS = [
@@ -34,17 +38,25 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rules", action="store_true", help="skip Muse Spark")
     ap.add_argument("--json", action="store_true", help="print the full result")
+    ap.add_argument("--logs", action="store_true", help="structured JSON logs on stderr")
     a = ap.parse_args()
     load_dotenv(find_dotenv(usecwd=True))
+    if a.logs:
+        configure_logging(stream=sys.stderr)
+    # The demo runs the sample apps on this machine: that's DEV_MODE (LocalRunner).
+    # Production uses CloudRunJobRunner, configured from SHIPCUBE_PROFILER_* variables.
+    os.environ.setdefault("SHIPCUBE_DEV_MODE", "1")
     for name, hints in APPS:
         explainer = RuleExplainer() if a.rules else FallbackExplainer()
-        r = estimate(inline(SAMPLES / name), hints, explainer=explainer)
+        r = estimate(inline(SAMPLES / name), hints, explainer=explainer, runner=LocalRunner())
         if a.json:
             print(json.dumps(r.model_dump(), indent=2))
             continue
         c = r.monthly_cost_usd
         print(f"\n=== {name}  hints={hints}")
-        print(f"class    {r.workload_class}  (confidence {r.confidence:.2f})")
+        flag = "  LOW CONFIDENCE" if r.low_confidence else ""
+        print(f"class    {r.workload_class}  (confidence {r.confidence:.2f}, decided by {r.decided_by}, "
+              f"model {r.model_version}){flag}")
         print(f"tier     {r.tier} -> {r.target}")
         res = r.resources
         print(f"size     cpu {res.cpu}, memory {res.memory}, instances {res.min_instances}-{res.max_instances}"
@@ -56,8 +68,8 @@ def main() -> None:
         for alt in r.alternatives:
             ac = alt.monthly_cost_usd
             print(f"alt      {alt.tier} {alt.target}: ~${ac.expected:.2f}/mo. {alt.tradeoff}")
-        if r.profile.get("explainer_error"):
-            print(f"note     Muse unavailable, used rules ({r.profile['explainer_error']})")
+        if r.profile.get("explainer_fallback_reason"):
+            print(f"note     Muse unavailable, used rules ({r.profile['explainer_fallback_reason']})")
 
 
 if __name__ == "__main__":

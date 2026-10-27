@@ -29,6 +29,7 @@ class CodeSummary:
     kind: str = "script"                 # "web" or "script"
     framework: str | None = None
     routes: list[str] = field(default_factory=list)
+    api_only: bool = False               # every route is under /api, /v1 ... (no pages)
     imports: list[str] = field(default_factory=list)
     requirements: list[str] = field(default_factory=list)
     files: int = 0
@@ -118,4 +119,6 @@ def summarize(root: Path, excerpt_lines: int = 60) -> CodeSummary:
         s.entrypoint = str(entry.relative_to(root))
         s.excerpt = "\n".join(entry.read_text(errors="replace").splitlines()[:excerpt_lines])
     s.routes = sorted(set(s.routes))[:50]
+    api = re.compile(r"^/(api|v\d+|rpc|graphql|health|healthz|metrics)(/|$)")
+    s.api_only = s.kind == "web" and bool(s.routes) and all(api.match(r) for r in s.routes)
     return s

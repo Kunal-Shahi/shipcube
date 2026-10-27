@@ -89,7 +89,6 @@ def azure_vms() -> pd.DataFrame:
         return pd.DataFrame()
     v = pd.read_csv(f)
     cores = pd.to_numeric(v["vmcorecountbucket"].replace(">24", "32"), errors="coerce")
-    mem = pd.to_numeric(v["vmmemorybucket"].replace(">64", "96"), errors="coerce")
     mean = v["avgcpu"] / 100 * cores
     p95 = v["p95maxcpu"] / 100 * cores
     df = _frame(
@@ -97,8 +96,8 @@ def azure_vms() -> pd.DataFrame:
         cpu_p95_cores=p95,
         cpu_util_mean=(v["avgcpu"] / 100).clip(0, 1),
         cpu_peak_to_mean=v["maxcpu"] / v["avgcpu"].clip(lower=0.1),
-        mem_peak_gb=mem,
-        mem_per_core_gb=mem / np.maximum(p95, 0.05),
+        # The memory bucket is the VM's *allocation*, not usage (a 32 GB VM at 1% CPU
+        # isn't memory-heavy), so memory features stay unknown for VMs.
         duration_s=(v["vmdeleted"] - v["vmcreated"]).astype(float),
     )
     df["src"] = "azure_vm"
@@ -202,7 +201,7 @@ def main() -> None:
     df = df.replace([np.inf, -np.inf], np.nan)
     # Fill ratio features the sources didn't compute directly.
     m = df["mem_per_core_gb"].isna()
-    cpu = df["cpu_p95_cores"].fillna(df["cpu_mean_cores"])
+    cpu = df["cpu_mean_cores"]
     df.loc[m, "mem_per_core_gb"] = df["mem_peak_gb"].fillna(df["mem_mean_gb"]) / np.maximum(cpu, 0.05)
     io = df[["io_mb_per_s", "net_mb_per_s"]].sum(axis=1, min_count=1)
     df["io_per_cpu_s"] = df["io_per_cpu_s"].fillna(io / np.maximum(df["cpu_mean_cores"], 0.01))

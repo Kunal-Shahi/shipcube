@@ -26,7 +26,7 @@ FEATURES = [
     "cpu_peak_to_mean",     # max (or p95) CPU over mean CPU
     "mem_mean_gb",          # average resident memory, GiB
     "mem_peak_gb",          # peak resident memory, GiB
-    "mem_per_core_gb",      # mem_peak_gb / max(cpu_p95_cores, 0.05)
+    "mem_per_core_gb",      # mem_peak_gb / max(cpu_mean_cores, 0.05): memory held per core of sustained work
     "io_mb_per_s",          # disk read+write while active, MiB/s
     "net_mb_per_s",         # network in+out while active, MiB/s
     "io_per_cpu_s",         # (disk+net MiB) per CPU-second: high means it waits on I/O
@@ -55,7 +55,7 @@ def derive(f: dict[str, float]) -> dict[str, float]:
     if is_missing(out["cpu_peak_to_mean"]) and not is_missing(p95) and not is_missing(mean) and mean > 0:
         out["cpu_peak_to_mean"] = p95 / mean
     mem = out["mem_peak_gb"] if not is_missing(out["mem_peak_gb"]) else out["mem_mean_gb"]
-    cpu = p95 if not is_missing(p95) else mean
+    cpu = mean
     if is_missing(out["mem_per_core_gb"]) and not is_missing(mem) and not is_missing(cpu):
         out["mem_per_core_gb"] = mem / max(cpu, 0.05)
     if is_missing(out["io_per_cpu_s"]) and not is_missing(mean):

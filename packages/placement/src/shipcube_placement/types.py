@@ -68,3 +68,6 @@ class EstimateResult(_Model):
     reasoning: str
     alternatives: list[Alternative]
     explained_by: str                # Muse model id, or "rules"
+    decided_by: Literal["classifier", "rules"]   # who chose workload_class
+    low_confidence: bool             # classifier under its gate or disagreeing with the rules
+    model_version: str               # classifier version (registry), e.g. wc-20261027-ef8994a9

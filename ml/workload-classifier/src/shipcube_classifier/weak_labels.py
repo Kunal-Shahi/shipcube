@@ -9,9 +9,9 @@ No public trace says "this is a memory-heavy service". Each source carries a coa
 - Google Borg 2019: priority band (free and best-effort batch vs. production)
 
 `kind` is that signal reduced to batch / interactive / io_event / None. The rules
-below combine it with *within-source* quantiles of the features, because units differ
-between traces (normalised CPU, normalised memory) and absolute thresholds would put
-almost every row of one source into one class. Rows with no usable signal are dropped.
+below combine it with fixed physical thresholds (THRESHOLDS) on the features, after
+build_dataset.py converts each trace's units to cores, GiB and MiB/s. Rows with no
+usable signal are dropped.
 
 Rule order matters: resource-dominant classes win over the scheduling class, so a
 nightly job that pins four cores is `compute_heavy`, not `batch_cron`.
@@ -27,53 +27,43 @@ import numpy as np
 import pandas as pd
 
 
-def _q(s: pd.Series, q: float) -> float:
-    s = s.dropna()
-    return float(s.quantile(q)) if len(s) else float("inf")
+from .rules import THRESHOLDS  # noqa: E402  (shared with the runtime rule classifier)
 
 
-def label_source(df: pd.DataFrame) -> pd.Series:
-    """Label the rows of one source. Needs FEATURES columns plus `kind`."""
+def label_source(df: pd.DataFrame, t: dict = THRESHOLDS) -> pd.Series:
+    """Label rows. Needs FEATURES columns plus `kind` (batch/interactive/io_event/None)."""
     out = pd.Series(pd.NA, index=df.index, dtype="object")
     util = df["cpu_util_mean"]
     has_cpu = util.notna()
 
-    # memory_heavy: lots of memory for the CPU it uses (or, with no CPU signal, top memory).
-    mpc = df["mem_per_core_gb"]
-    mem_rule = (mpc >= max(_q(mpc, 0.88), 4.0)) & (~has_cpu | (util <= 0.5))
-    no_cpu_mem = ~has_cpu & (df["mem_peak_gb"] > _q(df["mem_peak_gb"], 0.92))
-    out[mem_rule | no_cpu_mem] = "memory_heavy"
+    mem = ((df["mem_peak_gb"] >= t["memory_min_peak_gb"])
+           & (df["mem_per_core_gb"].isna() | (df["mem_per_core_gb"] >= t["memory_per_core_gb"]))
+           & (~has_cpu | (util <= t["memory_max_util"])))
+    out[mem] = "memory_heavy"
 
-    # compute_heavy: sustained high utilisation of more than one core. A single busy
-    # thread (most Python jobs) isn't enough; that's ordinary batch or service work.
-    comp = has_cpu & (util >= max(_q(util, 0.85), 0.55)) & (df["cpu_mean_cores"] >= 1.5)
+    comp = has_cpu & (util >= t["compute_min_util"]) & (df["cpu_mean_cores"] >= t["compute_min_cores"])
     out[out.isna() & comp] = "compute_heavy"
 
-    # io_bound: much more I/O per CPU-second than its peers while the CPU sits idle,
-    # or an event/queue/storage-triggered function that runs long (waiting on I/O).
-    ipc = df["io_per_cpu_s"]
-    io = ipc.notna() & (ipc > _q(ipc, 0.88)) & (~has_cpu | (util <= 0.4))
-    ev = df["kind"].eq("io_event")
-    io_ev = ev & (df["duration_s"] >= _q(df.loc[ev, "duration_s"], 0.6))
+    io = (df["io_per_cpu_s"] >= t["io_per_cpu_s"]) & (~has_cpu | (util <= t["io_max_util"]))
+    io_ev = df["kind"].eq("io_event") & (df["duration_s"] >= t["io_event_min_duration_s"])
     out[out.isna() & (io | io_ev)] = "io_bound"
 
     out[out.isna() & df["kind"].eq("batch")] = "batch_cron"
 
-    # Interactive (and the remaining event-driven rows): bursty vs. steady.
     inter = out.isna() & df["kind"].isin(["interactive", "io_event"])
-    burst = df["invocation_cv"].where(df["invocation_cv"].notna(), df["cpu_cv"])
-    burst = burst.where(burst.notna(), df["cpu_peak_to_mean"])
-    cut = _q(burst[inter], 0.5)
-    idle = df["idle_fraction"].fillna(0)
-    bursty = inter & ((burst >= cut) | (idle >= 0.6))
-    out[bursty] = "bursty_interactive"
-    out[inter & ~bursty & burst.notna()] = "steady_service"
+    cv = df["invocation_cv"]
+    ccv = df["cpu_cv"]
+    p2m = df["cpu_peak_to_mean"]
+    bursty = ((df["idle_fraction"] >= t["bursty_idle_fraction"]) | (cv >= t["bursty_invocation_cv"])
+              | (ccv >= t["bursty_cpu_cv"]) | (ccv.isna() & (p2m >= t["bursty_peak_to_mean"])))
+    known = df["idle_fraction"].notna() | cv.notna() | ccv.notna() | p2m.notna()
+    out[inter & bursty] = "bursty_interactive"
+    out[inter & ~bursty & known] = "steady_service"
     return out
 
 
 def label(df: pd.DataFrame) -> pd.Series:
-    parts = [label_source(g) for _, g in df.groupby("src", sort=False)]
-    return pd.concat(parts).reindex(df.index)
+    return label_source(df)
 
 
 def mask_augment(X: pd.DataFrame, y: pd.Series, copies: int = 1, p: float = 0.3,

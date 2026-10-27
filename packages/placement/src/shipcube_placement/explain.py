@@ -16,14 +16,21 @@ above limits what a successful injection could change.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import random
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from pydantic import ValidationError
 
+from shipcube_classifier import obs
+
 from .types import Alternative, Caps
+
+log = logging.getLogger("shipcube.placement")
 
 DEFAULT_MODEL = "muse-spark-1.3"
 DEFAULT_BASE_URL = "https://api.meta.ai/v1"
@@ -51,6 +58,7 @@ class Explanation:
     alternatives: list[Alternative]
     recommended_caps: Caps
     explained_by: str
+    fallback_reason: str | None = None   # why Muse wasn't used (redacted), if it wasn't
 
 
 class Explainer(Protocol):
@@ -67,7 +75,12 @@ class RuleExplainer:
 def rule_reasoning(f: dict) -> str:
     cls, tier = f["workload_class"], f["tier"]
     p = f["measured"]
-    parts = [f"The classifier reads this as {CLASS_TEXT[cls]} (confidence {f['confidence']:.0%})."]
+    if f.get("decided_by") == "rules":
+        parts = [f"This looks like {CLASS_TEXT[cls]}. The classifier wasn't confident about this app, "
+                 f"so the class comes from ShipCube's rule set: treat it as a best guess and check the "
+                 f"measurements below."]
+    else:
+        parts = [f"The classifier reads this as {CLASS_TEXT[cls]} (confidence {f['confidence']:.0%})."]
     if p.get("mode") == "measured":
         if p["kind"] == "web":
             parts.append(
@@ -102,6 +115,7 @@ Rules:
 - Never change or invent numbers. Use only the numbers in FACTS. Don't claim a different class, tier, cost, CPU or memory.
 - Write for a developer deciding whether to deploy: plain, specific, no marketing. Use human units (MiB, ms, vCPU, $/month, percent) rather than raw JSON field names or long decimals.
 - class_probabilities already include a structural prior (script vs. web server); don't second-guess the class.
+- If FACTS.low_confidence is true, the class came from rules because the classifier was unsure: say so plainly in one sentence and point at the measurement that matters most.
 - Reply with ONE JSON object and nothing else:
 {"reasoning": "<=120 words: why this class and tier fit, citing measured numbers from FACTS",
  "alternatives": [{"tier": "<one of the candidate tiers in FACTS>", "tradeoff": "<=40 words"}],
@@ -144,24 +158,67 @@ def _clamp_caps(proposed: dict, rule: Caps) -> Caps:
     return Caps.model_validate(out)
 
 
+class MuseError(Exception):
+    """A Muse call that didn't produce a usable explanation.
+
+    kind: not_configured | auth | rate_limited | timeout | unavailable | bad_request | bad_response
+    """
+
+    RETRYABLE = {"rate_limited", "timeout", "unavailable"}
+
+    def __init__(self, kind: str, message: str, attempts: int = 1):
+        super().__init__(f"{kind}: {message}")
+        self.kind, self.attempts = kind, attempts
+
+
+def _classify_error(e: Exception) -> str:
+    try:
+        import openai
+    except ImportError:  # pragma: no cover
+        return "unavailable"
+    if isinstance(e, openai.APITimeoutError) or isinstance(e, TimeoutError):
+        return "timeout"
+    if isinstance(e, openai.RateLimitError):
+        return "rate_limited"
+    if isinstance(e, (openai.AuthenticationError, openai.PermissionDeniedError)):
+        return "auth"
+    if isinstance(e, openai.BadRequestError):
+        return "bad_request"
+    if isinstance(e, (openai.APIConnectionError, openai.InternalServerError, ConnectionError)):
+        return "unavailable"
+    if isinstance(e, openai.APIStatusError):
+        return "unavailable" if getattr(e, "status_code", 500) >= 500 else "bad_request"
+    return "unavailable"
+
+
 class MuseExplainer:
-    """OpenAI-compatible client against the Meta Model API."""
+    """OpenAI-compatible client against the Meta Model API.
+
+    Each attempt has `timeout_s`; transient failures (timeouts, 429, 5xx, connection
+    errors) are retried with exponential backoff up to `max_attempts`, within an overall
+    `deadline_s`. Bad replies (empty, not JSON, failed validation) are not retried.
+    """
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None,
-                 model: str | None = None, timeout_s: float = 60.0, client: Any = None,
-                 max_tokens: int = 6000, reasoning_effort: str | None = "low"):
+                 model: str | None = None, timeout_s: float | None = None, client: Any = None,
+                 max_tokens: int = 6000, reasoning_effort: str | None = "low",
+                 max_attempts: int = 3, deadline_s: float | None = None, backoff_s: float = 1.0):
         # Muse Spark is a reasoning model: its hidden reasoning tokens count against
         # max_tokens, so leave plenty of room for them plus the JSON answer.
         self.max_tokens = max_tokens
         self.reasoning_effort = reasoning_effort
         self.model = model or os.environ.get("SHIPCUBE_EXPLAINER_MODEL", DEFAULT_MODEL)
+        self.timeout_s = timeout_s or float(os.environ.get("SHIPCUBE_MUSE_TIMEOUT_S", "30"))
+        self.deadline_s = deadline_s or float(os.environ.get("SHIPCUBE_MUSE_DEADLINE_S", "60"))
+        self.max_attempts, self.backoff_s = max_attempts, backoff_s
         if client is None:
             from openai import OpenAI
             key = api_key or os.environ.get("META_API_KEY")
             if not key:
-                raise RuntimeError("META_API_KEY is not set")
+                raise MuseError("not_configured", "META_API_KEY is not set")
+            # Retries are ours (logged, deadline-aware), so the SDK's are off.
             client = OpenAI(api_key=key, base_url=base_url or os.environ.get("META_BASE_URL", DEFAULT_BASE_URL),
-                            timeout=timeout_s, max_retries=1)
+                            timeout=self.timeout_s, max_retries=0)
         self.client = client
 
     def _messages(self, facts: dict, code_excerpt: str) -> list[dict]:
@@ -170,19 +227,48 @@ class MuseExplainer:
             user += f"\n\n<untrusted_code>\n{_excerpt(code_excerpt)}\n</untrusted_code>"
         return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user}]
 
+    def _call(self, messages: list[dict]) -> tuple[str, int]:
+        extra = {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
+        start = time.monotonic()
+        for attempt in range(1, self.max_attempts + 1):
+            t = time.perf_counter()
+            remaining = self.deadline_s - (time.monotonic() - start)
+            try:
+                resp = self.client.chat.completions.create(
+                    model=self.model, messages=messages, temperature=0.2, max_tokens=self.max_tokens,
+                    timeout=max(1.0, min(self.timeout_s, remaining)), **extra)
+            except Exception as e:
+                kind = _classify_error(e)
+                obs.event(log, "muse.call", logging.WARNING, model=self.model, attempt=attempt, outcome=kind,
+                          duration_ms=round((time.perf_counter() - t) * 1000, 1))
+                delay = self.backoff_s * 2 ** (attempt - 1) * (1 + random.random() * 0.25)
+                out_of_time = time.monotonic() - start + delay >= self.deadline_s
+                if kind not in MuseError.RETRYABLE or attempt == self.max_attempts or out_of_time:
+                    raise MuseError(kind, f"{type(e).__name__}: {_redact(str(e))[:200]}", attempt) from None
+                time.sleep(delay)
+                continue
+            choice = resp.choices[0]
+            usage = getattr(resp, "usage", None)
+            obs.event(log, "muse.call", model=self.model, attempt=attempt, outcome="ok",
+                      duration_ms=round((time.perf_counter() - t) * 1000, 1),
+                      finish_reason=choice.finish_reason,
+                      completion_tokens=getattr(usage, "completion_tokens", None),
+                      prompt_tokens=getattr(usage, "prompt_tokens", None))
+            if not choice.message.content:
+                raise MuseError("bad_response", f"empty reply (finish_reason={choice.finish_reason})", attempt)
+            return choice.message.content, attempt
+        raise MuseError("unavailable", "no attempts made")  # pragma: no cover
+
     def explain(self, facts: dict, alternatives: list[Alternative], caps: Caps,
                 code_excerpt: str = "") -> Explanation:
-        extra = {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
-        resp = self.client.chat.completions.create(
-            model=self.model, messages=self._messages(facts, code_excerpt),
-            temperature=0.2, max_tokens=self.max_tokens, **extra)
-        choice = resp.choices[0]
-        if not choice.message.content:
-            raise ValueError(f"empty reply (finish_reason={choice.finish_reason})")
-        data = _parse_json(choice.message.content)
+        content, _ = self._call(self._messages(facts, code_excerpt))
+        try:
+            data = _parse_json(content)
+        except ValueError as e:
+            raise MuseError("bad_response", str(e)) from None
         reasoning = str(data.get("reasoning", "")).strip()
         if not (40 <= len(reasoning) <= 1500):
-            raise ValueError("reasoning missing or out of length bounds")
+            raise MuseError("bad_response", "reasoning missing or out of length bounds")
         tradeoffs = {}
         for a in data.get("alternatives") or []:
             if isinstance(a, dict) and isinstance(a.get("tradeoff"), str) and 10 <= len(a["tradeoff"]) <= 400:
@@ -192,31 +278,30 @@ class MuseExplainer:
         return Explanation(reasoning, alts, new_caps, self.model)
 
 
+def _redact(msg: str) -> str:
+    key = os.environ.get("META_API_KEY")
+    return msg.replace(key, "[redacted]") if key else msg
+
+
 class FallbackExplainer:
-    """Try Muse; on any failure (no key, network, bad JSON, validation) use the rules."""
+    """Try Muse; on any failure (not configured, auth, timeout after retries, bad reply)
+    use the rules. The fallback is logged and reported in Explanation.fallback_reason.
+    Stateless, so one instance can serve concurrent estimates."""
 
     def __init__(self, primary: Explainer | None = None):
         self.primary = primary
-        self.last_error: str | None = None
 
     def explain(self, facts: dict, alternatives: list[Alternative], caps: Caps,
                 code_excerpt: str = "") -> Explanation:
-        primary = self.primary
-        if primary is None:
-            try:
-                primary = MuseExplainer()
-            except Exception as e:  # no key or no client library
-                self.last_error = str(e)
-                primary = None
-        if primary is not None:
-            try:
-                return primary.explain(facts, alternatives, caps, code_excerpt)
-            except Exception as e:
-                # The type and a short message only, with the key redacted in case the
-                # client echoes it back in an error.
-                msg = str(e)[:200]
-                key = os.environ.get("META_API_KEY")
-                if key:
-                    msg = msg.replace(key, "[redacted]")
-                self.last_error = f"{type(e).__name__}: {msg}"
-        return RuleExplainer().explain(facts, alternatives, caps, code_excerpt)
+        reason: str
+        try:
+            primary = self.primary or MuseExplainer()
+            return primary.explain(facts, alternatives, caps, code_excerpt)
+        except MuseError as e:
+            reason = f"{e.kind}: {_redact(str(e))[:200]}"
+        except Exception as e:  # validation bugs etc. must not fail the estimate
+            reason = f"error: {type(e).__name__}: {_redact(str(e))[:200]}"
+        obs.event(log, "explainer.fallback", logging.WARNING, reason=reason)
+        ex = RuleExplainer().explain(facts, alternatives, caps, code_excerpt)
+        ex.fallback_reason = reason
+        return ex
