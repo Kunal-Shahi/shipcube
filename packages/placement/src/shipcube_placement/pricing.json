@@ -1,0 +1,42 @@
+{
+  "currency": "USD",
+  "fetched": "2026-10-27",
+  "source": "Google Cloud Billing Catalog API (cloudbilling.googleapis.com/v1/services/{id}/skus), list prices. Cloud Run service 152E-C115-5142, Kubernetes Engine CCD8-9BF1-090E. Human-readable pages: https://cloud.google.com/run/pricing and https://cloud.google.com/kubernetes-engine/pricing",
+  "regions_checked": ["us-central1", "asia-south1"],
+  "note": "us-central1 and asia-south1 have the same Cloud Run prices. Other regions fall back to these with a note.",
+  "cloud_run": {
+    "request_based": {
+      "cpu_per_vcpu_s": 0.000024,
+      "memory_per_gib_s": 0.0000025,
+      "requests_per_million": 0.40,
+      "min_instance_idle_cpu_per_vcpu_s": 0.0000025,
+      "min_instance_idle_memory_per_gib_s": 0.0000025
+    },
+    "instance_based": {
+      "cpu_per_vcpu_s": 0.000018,
+      "memory_per_gib_s": 0.000002
+    },
+    "jobs": {
+      "cpu_per_vcpu_s": 0.000018,
+      "memory_per_gib_s": 0.000002
+    },
+    "gpu_l4_per_s": 0.0001867,
+    "gpu_l4_note": "L4 without zonal redundancy; with zonal redundancy it is 0.0002909/s. Cloud Run GPU needs at least 4 vCPU and 16 GiB.",
+    "free_tier_per_billing_account_month": {
+      "request_based_vcpu_s": 180000,
+      "request_based_gib_s": 360000,
+      "requests": 2000000,
+      "note": "The catalog shows the 2M free requests as the first pricing tier. Free CPU/memory seconds are shared by every app on the billing account, so the estimate does not subtract them."
+    }
+  },
+  "gke_autopilot": {
+    "pod_vcpu_per_hour": 0.0445,
+    "pod_memory_per_gib_hour": 0.0049225,
+    "cluster_fee_per_hour": 0.10,
+    "cluster_fee_note": "One zonal or Autopilot cluster per billing account is covered by the $74.40/month GKE free tier credit; a ShipCube-wide cluster is shared across apps, so it is not charged to one app."
+  },
+  "cloud_scheduler": {
+    "per_job_month": 0.10,
+    "free_jobs_per_billing_account": 3
+  }
+}
