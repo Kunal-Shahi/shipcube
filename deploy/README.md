@@ -16,8 +16,9 @@ All services: `--min-instances 0`, request-based billing, at most 2 instances, 1
 
 URLs are Cloud Run's deterministic ones, `https://<service>-340481939948.asia-south1.run.app`.
 **Custom domain:** Cloud Run domain mapping isn't offered in asia-south1, and a global load balancer
-costs ≈ $18/month. Firebase Hosting rewrites to these services are the free option when we want
-`shipcube.dev`.
+costs ≈ $18/month. Firebase Hosting rewrites to these services are the free option if we register
+a domain later. Until then no ShipCube domain exists, and nothing may refer to one: the console
+shows users `SHIPCUBE_MCP_URL`, which `deploy.sh` sets to the `shipcube-mcp` URL plus `/mcp`.
 
 ## Deploy
 
@@ -118,8 +119,6 @@ version only after the deploy is healthy.
 ## Known limits
 
 - The console and MCP/API code come from PRs #1 and #3. `deploy.sh` stops if they aren't in the checkout.
-- `NEXT_PUBLIC_MCP_URL` is read by Next.js at build time, so the console image isn't yet fully
-  environment-agnostic (frontend asked to read it at runtime).
 - The gateway reads its app registry from a Secret Manager file until the API serves
   `/internal/gateway/resolve`.
 - There are no `db/migrations` yet: the schema (database-design.md) needs to be written as `0001_…sql`

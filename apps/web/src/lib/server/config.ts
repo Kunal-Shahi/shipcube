@@ -9,8 +9,10 @@ export type AuthProviderId = "identity-platform" | "mock";
 export interface Config {
   /** Local development only: serve typed mock data and allow the mock sign-in. */
   devMode: boolean;
-  /** Base URL of the control-plane API, e.g. https://api.shipcube.dev. */
+  /** Base URL of the control-plane API (the shipcube-mcp Cloud Run service in production). */
   apiUrl: string | null;
+  /** The MCP endpoint users paste into their agent, e.g. https://shipcube-mcp-<n>.<region>.run.app/mcp. */
+  mcpUrl: string;
   /** Per-request timeout for API calls. */
   apiTimeoutMs: number;
   auth: AuthProviderId;
@@ -25,6 +27,9 @@ export interface Config {
 
 let cached: Config | null = null;
 
+/** The local MCP server (services/mcp listens on 8080). Used only when DEV_MODE=1 and SHIPCUBE_MCP_URL is unset. */
+export const DEV_MCP_URL = "http://localhost:8080/mcp";
+
 export function config(): Config {
   if (cached) return cached;
   const env = process.env;
@@ -36,6 +41,7 @@ export function config(): Config {
   const c: Config = {
     devMode,
     apiUrl: env.SHIPCUBE_API_URL?.replace(/\/+$/, "") || null,
+    mcpUrl: env.SHIPCUBE_MCP_URL?.trim() || (devMode ? DEV_MCP_URL : ""),
     apiTimeoutMs: Number(env.SHIPCUBE_API_TIMEOUT_MS ?? 10_000),
     auth,
     identityProject: env.IDENTITY_PLATFORM_PROJECT || env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || null,
@@ -53,6 +59,18 @@ export function config(): Config {
   }
   if (!c.devMode && !c.apiUrl) {
     throw new Error("SHIPCUBE_API_URL is required unless DEV_MODE=1.");
+  }
+  // Users paste their PAT next to this URL, so it must be ours and encrypted. There is no
+  // public default: a wrong or unowned domain would collect those tokens.
+  if (!c.mcpUrl) throw new Error("SHIPCUBE_MCP_URL is required unless DEV_MODE=1.");
+  let mcp: URL;
+  try {
+    mcp = new URL(c.mcpUrl);
+  } catch {
+    throw new Error(`SHIPCUBE_MCP_URL "${c.mcpUrl}" isn't a URL.`);
+  }
+  if (!c.devMode && env.NODE_ENV === "production" && mcp.protocol !== "https:") {
+    throw new Error("SHIPCUBE_MCP_URL must use https in production.");
   }
   if (c.auth === "identity-platform" && !c.identityProject) {
     throw new Error("IDENTITY_PLATFORM_PROJECT (or NEXT_PUBLIC_FIREBASE_PROJECT_ID) is required for Identity Platform sign-in.");

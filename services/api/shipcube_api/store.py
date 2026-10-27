@@ -22,7 +22,7 @@ from .deploy.base import AppRef, Deployer, Target
 from .models import OpError, Operation, Progress, Step
 from .settings import settings
 
-CONSOLE_URL = "https://console.shipcube.dev"
+CONSOLE_URL = settings.console_url
 HOSTED = "shipcube"
 RESTORE_WINDOW = timedelta(days=7)
 APPROVAL_TTL = timedelta(hours=72)

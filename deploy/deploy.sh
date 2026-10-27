@@ -30,7 +30,7 @@ common=(--project "$PROJECT" --region "$REGION" --min-instances 0 --cpu-throttli
 gcloud run deploy shipcube-mcp "${common[@]}" --image "$IMAGES/mcp:$TAG" \
   --service-account "$SA_API" --allow-unauthenticated --max-instances 2 --cpu 1 --memory 512Mi \
   --concurrency 40 --timeout 300 \
-  --set-env-vars "ALLOWED_HOSTS=${MCP_URL#https://},SHIPCUBE_CONSOLE_URL=$WEB_URL,SHIPCUBE_MONITOR=gcp" \
+  --set-env-vars "ALLOWED_HOSTS=${MCP_URL#https://},SHIPCUBE_CONSOLE_URL=$WEB_URL,SHIPCUBE_GATEWAY_URL=$GATEWAY_URL,SHIPCUBE_MONITOR=gcp" \
   --set-secrets "SHIPCUBE_DEV_TOKEN=shipcube-dev-token:latest"
 
 # AI gateway. Public at the Cloud Run level: it verifies the app's Google ID token itself
@@ -41,10 +41,13 @@ gcloud run deploy shipcube-gateway "${common[@]}" --image "$IMAGES/gateway:$TAG"
   --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT,GATEWAY_AUDIENCE=$GATEWAY_URL,GATEWAY_REGISTRY_FILE=/etc/shipcube/registry/registry.json,META_SECRET_REF=projects/$PROJECT/secrets/meta-api-key/versions/1" \
   --set-secrets "/etc/shipcube/registry/registry.json=gateway-registry:latest"
 
-# Console. Public: sign-in happens in the app (Identity Platform).
+# Console. Public: sign-in happens in the app (Identity Platform). Read at runtime, so one image
+# serves every environment. It exits at boot without an https SHIPCUBE_MCP_URL. --update-env-vars
+# keeps values set outside this script (FIREBASE_WEB_API_KEY).
 gcloud run deploy shipcube-console "${common[@]}" --image "$IMAGES/console:$TAG" \
   --service-account "$SA_WEB" --allow-unauthenticated --max-instances 2 --cpu 1 --memory 512Mi \
-  --concurrency 80 --set-env-vars "NEXT_PUBLIC_MCP_URL=$MCP_URL/mcp,SHIPCUBE_API_URL=$MCP_URL"
+  --concurrency 80 \
+  --update-env-vars "SHIPCUBE_API_URL=$MCP_URL,SHIPCUBE_MCP_URL=$MCP_URL/mcp,IDENTITY_PLATFORM_PROJECT=$PROJECT,GOOGLE_CLOUD_PROJECT=$PROJECT"
 
 cat <<URLS
 

@@ -28,14 +28,14 @@ export default async function AccessPage({ params, searchParams }: Props) {
         <PanelHeader title="From your agent" />
         <div className="flex flex-col gap-3 p-4">
           <p className="text-fg-muted">Ask your agent in plain words; it calls the <code className="font-mono text-[12px]">set_access</code> tool:</p>
-          <CodeBlock label="Prompt" wrap code={`Share ${app.name} with finance-team@acme-analytics.com, view only`} />
+          <CodeBlock label="Prompt" wrap code={`Share ${app.name} with finance-team@example.com, view only`} />
           <p className="text-fg-muted">Or call the tool directly:</p>
           <CodeBlock
             label="set_access"
-            code={JSON.stringify({ app: app.name, add: ["group:finance-team@acme-analytics.com"], role: "viewer" }, null, 2)}
+            code={JSON.stringify({ app: app.name, add: ["group:finance-team@example.com"], role: "viewer" }, null, 2)}
           />
           <p className="text-[12px] text-fg-muted">
-            Adding a whole domain (<code className="font-mono">domain:acme.com</code>) waits for your approval under Approvals.
+            Adding a whole domain (<code className="font-mono">domain:example.com</code>) waits for your approval under Approvals.
             People you add here directly don&apos;t need approval.
           </p>
         </div>

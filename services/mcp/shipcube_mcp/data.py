@@ -29,6 +29,9 @@ from mcp_types import ToolAnnotations
 
 from .backend import Api, ApiError
 
+# Where approval links point. Set per environment; the default is the local console.
+CONSOLE_URL = os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000").rstrip("/")
+
 log = logging.getLogger(__name__)
 
 EXPOSED = ("list_cubes", "describe_cube", "query", "search_values", "propose_migration")
@@ -172,7 +175,7 @@ class StubDataBackend:
         if name == "propose_migration":
             mid = f"mig_{uuid.uuid4().hex[:8]}"
             return {"id": mid, "class": "additive", "diff": args["ops"],
-                    "approval_url": f"https://console.shipcube.dev/w/{caller.workspace_id}/data/migrations/{mid}",
+                    "approval_url": f"{CONSOLE_URL}/w/{caller.workspace_id}/data/migrations/{mid}",
                     "auto_approved": False}
         raise DataToolError("unknown_tool", f"no tool named {name}")
 

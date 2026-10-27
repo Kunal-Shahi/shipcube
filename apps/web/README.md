@@ -55,7 +55,8 @@ Everything is read from the environment at request time.
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `SHIPCUBE_API_URL` | Yes, unless `DEV_MODE=1` | Control-plane API base URL, e.g. `https://api.shipcube.dev` |
+| `SHIPCUBE_API_URL` | Yes, unless `DEV_MODE=1` | Control-plane API base URL: the `shipcube-mcp` Cloud Run service URL |
+| `SHIPCUBE_MCP_URL` | Yes, unless `DEV_MODE=1` | The MCP endpoint shown on the setup guide: `<your ShipCube MCP URL>`, the `shipcube-mcp` service URL plus `/mcp`. Must be `https` in production; the server exits at boot without it. `DEV_MODE` defaults to `http://localhost:8080/mcp` |
 | `SHIPCUBE_API_TIMEOUT_MS` | No (10000) | Per-request timeout for API calls |
 | `AUTH_PROVIDER` | No | `identity-platform` (default) or `mock` (`DEV_MODE` only) |
 | `IDENTITY_PLATFORM_PROJECT` | Yes for Identity Platform | Project that hosts Identity Platform, e.g. `shipcube-control-ks` |

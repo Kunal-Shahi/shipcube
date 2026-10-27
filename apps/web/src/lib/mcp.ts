@@ -1,8 +1,8 @@
 // MCP connection details shown on the setup guide. They follow the decided MCP shape
 // (docs/WORKSTREAMS.md, "Decided") and docs/research/networking.md from the networking
-// workstream. Change them here if those documents change.
+// workstream. Change them here if those documents change. The endpoint itself comes from
+// SHIPCUBE_MCP_URL at runtime (lib/server/config.ts) and is passed in, never hard-coded.
 
-export const MCP_URL = "https://mcp.shipcube.dev/mcp";
 export const TOKEN_ENV = "SHIPCUBE_TOKEN";
 
 export const SCOPES = [
@@ -25,7 +25,7 @@ export const TOOLS: { name: string; group: ToolGroup; purpose: string; prompt: s
   { name: "list_apps", group: "Apps", purpose: "Lists your apps with health, tier, URL and spend.", prompt: "What's running right now?" },
   { name: "inspect_app", group: "Apps", purpose: "Status, logs and metrics for one app, in one call.", prompt: "Why is the scorecard returning 503s?" },
   { name: "set_caps", group: "Apps", purpose: "Sets spend, request-rate, concurrency, instance and token limits.", prompt: "Cap it at $20 a month", approval: "Raising a cap above the workspace default" },
-  { name: "set_access", group: "Apps", purpose: "Adds or removes people, Google groups or domains, and returns the full access list.", prompt: "Share it with finance-team@acme.com", approval: "Sharing with a whole domain" },
+  { name: "set_access", group: "Apps", purpose: "Adds or removes people, Google groups or domains, and returns the full access list.", prompt: "Share it with finance-team@example.com", approval: "Sharing with a whole domain" },
   { name: "ai_config", group: "Apps", purpose: "Chooses the model provider the app uses through the AI gateway: Muse by default, or one of your keys.", prompt: "Use our Fireworks key for the triage app" },
   { name: "delete_app", group: "Apps", purpose: "Deletes an app. It can be restored from the console for 7 days.", prompt: "Delete the old ops report", approval: "Always" },
   { name: "data_list_cubes", group: "Data", purpose: "Lists the cubes (tables of business meaning) in your data model.", prompt: "What data can I use?" },
@@ -35,24 +35,24 @@ export const TOOLS: { name: string; group: ToolGroup; purpose: string; prompt: s
   { name: "data_propose_migration", group: "Data", purpose: "Proposes a change to the data model. Muse Spark can draft it. A person reviews the diff and applies it here; agents can't apply.", prompt: "Add a late-delivery rate measure" },
 ];
 
-export function snippets(token?: string) {
+export function snippets(mcpUrl: string, token?: string) {
   const header = `Authorization: Bearer ${token ?? "$" + TOKEN_ENV}`;
   return {
     env: `export ${TOKEN_ENV}=${token ?? "sc_pat_…"}`,
-    claudeCode: `claude mcp add --transport http shipcube ${MCP_URL} \\\n  --scope user \\\n  --header "${header}"`,
+    claudeCode: `claude mcp add --transport http shipcube ${mcpUrl} \\\n  --scope user \\\n  --header "${header}"`,
     claudeProject: JSON.stringify(
-      { mcpServers: { shipcube: { type: "http", url: MCP_URL, headers: { Authorization: "Bearer ${" + TOKEN_ENV + "}" } } } },
+      { mcpServers: { shipcube: { type: "http", url: mcpUrl, headers: { Authorization: "Bearer ${" + TOKEN_ENV + "}" } } } },
       null,
       2,
     ),
     claudeVerify: "claude mcp list",
     cursor: JSON.stringify(
-      { mcpServers: { shipcube: { url: MCP_URL, headers: { Authorization: "Bearer ${env:" + TOKEN_ENV + "}" } } } },
+      { mcpServers: { shipcube: { url: mcpUrl, headers: { Authorization: "Bearer ${env:" + TOKEN_ENV + "}" } } } },
       null,
       2,
     ),
     generic: JSON.stringify(
-      { mcpServers: { shipcube: { type: "http", url: MCP_URL, headers: { Authorization: "Bearer <your token>" } } } },
+      { mcpServers: { shipcube: { type: "http", url: mcpUrl, headers: { Authorization: "Bearer <your token>" } } } },
       null,
       2,
     ),
@@ -61,7 +61,7 @@ export function snippets(token?: string) {
         mcpServers: {
           shipcube: {
             command: "npx",
-            args: ["-y", "mcp-remote", MCP_URL, "--header", "Authorization:${AUTH_HEADER}"],
+            args: ["-y", "mcp-remote", mcpUrl, "--header", "Authorization:${AUTH_HEADER}"],
             env: { AUTH_HEADER: "Bearer <your token>" },
           },
         },

@@ -39,6 +39,10 @@ class Settings:
         "SHIPCUBE_BUILDER_SA", "sc-builder@shipcube-apps-ks.iam.gserviceaccount.com"))
     # Optional: impersonate this deployer for hosted deploys; unset means ADC acts directly.
     hosted_deployer_sa: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_HOSTED_DEPLOYER_SA") or None)
+    # Where approval links point (the console) and the AI gateway apps call. Set per environment;
+    # the defaults are the local dev servers.
+    console_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000").rstrip("/"))
+    gateway_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_GATEWAY_URL", "http://localhost:8090").rstrip("/"))
     builder_image: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_BUILDER", "gcr.io/buildpacks/builder:latest"))
 
 
