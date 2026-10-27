@@ -27,6 +27,8 @@ spec:
           resources: {limits: {cpu: "1", memory: 512Mi}}
           env:
             - {name: SHIPCUBE_API_URL, value: "${MCP_URL}"}
+            # The API scales to zero and takes ~12 s to start (data layer + estimator imports).
+            - {name: SHIPCUBE_API_TIMEOUT_MS, value: "30000"}
             - {name: SHIPCUBE_MCP_URL, value: "${MCP_URL}/mcp"}
             - {name: IDENTITY_PLATFORM_PROJECT, value: "${PROJECT}"}
             - {name: FIREBASE_WEB_API_KEY, value: "${FIREBASE_WEB_API_KEY}"}
