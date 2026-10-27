@@ -148,3 +148,11 @@ resource "google_service_account_iam_member" "migrator_operators" {
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = each.value
 }
+
+# Deploys pin the digest: the hosted deployer reads the pushed tag back from the workspace's
+# repo (ws-<ws_short>). Read-only; builds push as the per-workspace build SA.
+resource "google_project_iam_member" "hosted_deployer_ar_reader" {
+  project = var.apps_project_id
+  role    = "roles/artifactregistry.reader"
+  member  = google_service_account.hosted_deployer.member
+}
