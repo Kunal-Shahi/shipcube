@@ -18,6 +18,14 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   // firebase-admin is a Node package; keep it out of the server bundle.
   serverExternalPackages: ["firebase-admin"],
+  // The API's approval_url is workspace-scoped (/w/<workspace>/approvals/<id>). The console
+  // reads the workspace from the session, so those links land on the plain routes.
+  async redirects() {
+    return [
+      { source: "/w/:ws/approvals/:id", destination: "/approvals/:id", permanent: false },
+      { source: "/w/:ws/data/migrations/:id", destination: "/data/migrations/:id", permanent: false },
+    ];
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

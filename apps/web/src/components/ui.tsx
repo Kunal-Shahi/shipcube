@@ -1,5 +1,5 @@
 import Link from "next/link";
-import type { ComponentProps, ReactNode } from "react";
+import { Children, cloneElement, isValidElement, type ComponentProps, type ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, XCircle } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { Freshness, Health, TierId } from "@/lib/types";
@@ -223,7 +223,7 @@ export function Skeleton({ className }: { className?: string }) {
 
 export function TableSkeleton({ rows = 6, cols = 5 }: { rows?: number; cols?: number }) {
   return (
-    <div aria-busy="true" aria-label="Loading">
+    <div role="status" aria-busy="true" aria-label="Loading">
       <div className="flex gap-6 border-b border-border px-4 py-2.5">
         {Array.from({ length: cols }, (_, i) => (
           <Skeleton key={i} className="h-2.5 flex-1" />
@@ -253,23 +253,40 @@ export function Field({
   error?: string | null;
   children: ReactNode;
 }) {
+  const descId = `${htmlFor}-desc`;
+  const hasDesc = Boolean(error || help);
+  // Point the control at its help or error text, and mark it invalid when there's an error.
+  const kids = Children.map(children, (child, i) =>
+    i === 0 && isValidElement<{ "aria-describedby"?: string; "aria-invalid"?: boolean }>(child)
+      ? cloneElement(child, {
+          "aria-describedby": hasDesc ? descId : undefined,
+          "aria-invalid": error ? true : undefined,
+        })
+      : child,
+  );
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={htmlFor} className="text-[12px] font-medium text-fg">
         {label}
       </label>
-      {children}
+      {kids}
       {error ? (
-        <p className="text-[12px] text-critical">{error}</p>
+        <p id={descId} className="text-[12px] text-critical" role="alert">
+          {error}
+        </p>
       ) : (
-        help && <p className="text-[12px] text-fg-muted">{help}</p>
+        help && (
+          <p id={descId} className="text-[12px] text-fg-muted">
+            {help}
+          </p>
+        )
       )}
     </div>
   );
 }
 
 export const inputClass =
-  "h-8 w-full min-w-0 rounded-md border border-border-strong bg-surface px-2.5 text-[13px] text-fg placeholder:text-fg-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25";
+  "h-8 w-full min-w-0 rounded-md border border-input-border bg-surface px-2.5 text-[13px] text-fg placeholder:text-fg-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25";
 
 export function Input({ className, ...props }: ComponentProps<"input">) {
   return <input className={cn(inputClass, className)} {...props} />;

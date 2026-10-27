@@ -65,7 +65,7 @@ export function ApplyPanel({ m, nextVersion }: { m: Migration; nextVersion: numb
           maxLength={500}
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          className="w-full resize-y rounded-md border border-border-strong bg-surface px-2.5 py-2 text-[13px] focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none"
+          className="w-full resize-y rounded-md border border-input-border bg-surface px-2.5 py-2 text-[13px] focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none"
         />
       </div>
       <Button

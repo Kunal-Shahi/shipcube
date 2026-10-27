@@ -75,7 +75,7 @@ async function AppsTable({ state }: { state: DemoState }) {
     <div className="flex flex-col gap-4">
       <Panel>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-4 py-2.5 text-[12px] text-fg-muted">
-          <span className="num">{apps.length} apps</span>
+          <span className="num">{apps.length} {apps.length === 1 ? "app" : "apps"}</span>
           {attention > 0 && <span className="num text-warning">{attention} need attention</span>}
           {has.spend && <span className="num">{money(spent)} this month</span>}
         </div>

@@ -20,6 +20,9 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
 
   return (
     <div className="md:grid md:min-h-dvh md:grid-cols-[224px_1fr]">
+      <a href="#main" className="sr-only-focusable rounded-md bg-accent px-3 py-1.5 font-medium text-accent-fg">
+        Skip to content
+      </a>
       <aside className="sticky top-0 z-20 flex flex-col gap-3 border-b border-border bg-bg px-4 py-3 md:h-dvh md:gap-6 md:border-r md:border-b-0 md:px-3 md:py-4">
         <div className="flex items-center justify-between md:px-2">
           <Link href="/apps" aria-label="ShipCube home">
@@ -57,7 +60,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
           </div>
         </div>
       </aside>
-      <main className="min-w-0 px-4 py-6 sm:px-6 md:py-8">
+      <main id="main" tabIndex={-1} className="min-w-0 px-4 py-6 focus:outline-none sm:px-6 md:py-8">
         <div className="mx-auto max-w-[1120px]">{children}</div>
       </main>
     </div>

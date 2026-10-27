@@ -13,6 +13,7 @@ export function LogViewer({ logs, streaming }: { logs: LogLine[]; streaming: boo
   const [level, setLevel] = useState("all");
   const [source, setSource] = useState("all");
   const [q, setQ] = useState("");
+  const hasSources = logs.some((l) => l.source);
 
   const shown = useMemo(
     () =>
@@ -21,7 +22,7 @@ export function LogViewer({ logs, streaming }: { logs: LogLine[]; streaming: boo
         .filter((l) => source === "all" || l.source === source)
         .filter((l) => !q || l.message.toLowerCase().includes(q.toLowerCase()))
         .slice()
-        .reverse(),
+        .sort((a, b) => b.ts.localeCompare(a.ts)),
     [logs, level, source, q],
   );
 
@@ -39,7 +40,9 @@ export function LogViewer({ logs, streaming }: { logs: LogLine[]; streaming: boo
           <option value="warn">Warnings and errors</option>
           <option value="error">Errors only</option>
         </Select>
-        <label htmlFor="log-source" className="sr-only">Source</label>
+{hasSources && (
+          <>
+                  <label htmlFor="log-source" className="sr-only">Source</label>
         <Select id="log-source" value={source} onChange={(e) => setSource(e.target.value)} className="w-[130px]">
           <option value="all">All sources</option>
           <option value="build">Build</option>
@@ -47,6 +50,8 @@ export function LogViewer({ logs, streaming }: { logs: LogLine[]; streaming: boo
           <option value="runtime">Runtime</option>
           <option value="gateway">Gateway</option>
         </Select>
+          </>
+        )}
         {streaming && (
           <span className="ml-auto flex items-center gap-1.5 text-[12px] text-fg-muted">
             <span className="size-1.5 animate-pulse rounded-full bg-accent" aria-hidden /> Streaming
@@ -65,7 +70,7 @@ export function LogViewer({ logs, streaming }: { logs: LogLine[]; streaming: boo
                 <tr key={l.id} className={cn("border-b border-border last:border-0 align-top", l.level === "error" && "bg-critical-soft/60")}>
                   <td className="num w-[150px] px-4 py-1.5 whitespace-nowrap text-fg-subtle">{time(l.ts)}</td>
                   <td className={cn("w-[52px] py-1.5 uppercase", LEVEL_CLS[l.level])}>{l.level}</td>
-                  <td className="w-[72px] py-1.5 text-fg-muted">{l.source}</td>
+                  {hasSources && <td className="w-[72px] py-1.5 text-fg-muted">{l.source}</td>}
                   <td className="py-1.5 pr-4 break-words">{l.message}</td>
                 </tr>
               ))}

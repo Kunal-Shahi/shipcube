@@ -126,6 +126,17 @@ export function LatencyChart({ data }: { data: { t: string; p50: number; p95: nu
           </Tooltip>
         )}
       </div>
+      <table className="sr-only">
+        <caption>p50 and p95 latency by hour, UTC</caption>
+        <thead>
+          <tr><th scope="col">Hour</th><th scope="col">p50 (ms)</th><th scope="col">p95 (ms)</th></tr>
+        </thead>
+        <tbody>
+          {data.map((d) => (
+            <tr key={d.t}><th scope="row">{hourFmt(d.t)}</th><td>{d.p50}</td><td>{d.p95}</td></tr>
+          ))}
+        </tbody>
+      </table>
     </figure>
   );
 }
@@ -179,6 +190,17 @@ export function CostChart({ data }: { data: { t: string; value: number }[] }) {
           </Tooltip>
         )}
       </div>
+      <table className="sr-only">
+        <caption>Cost by day, US dollars</caption>
+        <thead>
+          <tr><th scope="col">Day</th><th scope="col">Cost</th></tr>
+        </thead>
+        <tbody>
+          {data.map((d) => (
+            <tr key={d.t}><th scope="row">{dayFmt(d.t)}</th><td>${d.value.toFixed(2)}</td></tr>
+          ))}
+        </tbody>
+      </table>
     </figure>
   );
 }

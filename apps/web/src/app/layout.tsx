@@ -17,7 +17,8 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeScript }} />
+        {/* Browsers hide the nonce attribute after load, so the client sees "" here. */}
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body>
     </html>

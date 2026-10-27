@@ -106,7 +106,8 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
       last = await parseError(res, requestId);
       const ra = res.headers.get("retry-after");
       retryAfter = ra ? Number(ra) : undefined;
-      log(last.retryable && attempt + 1 < attempts ? "WARNING" : "ERROR", "api call failed", {
+      // 5xx and exhausted retries are errors; 4xx are the caller's problem and only a warning.
+      log(res.status >= 500 && attempt + 1 >= attempts ? "ERROR" : "WARNING", "api call failed", {
         requestId, trace, method, path, status: res.status, code: last.code, ms, attempt,
       });
     } catch (e) {

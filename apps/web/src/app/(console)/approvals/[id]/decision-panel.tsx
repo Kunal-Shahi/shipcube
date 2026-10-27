@@ -72,7 +72,7 @@ export function DecisionPanel({ approval, hoursLeft }: { approval: Approval; hou
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder={approval.kind === "cap_raise" ? "For example: use $70, that covers the forecast" : "The agent sees this with your decision"}
-          className="w-full resize-y rounded-md border border-border-strong bg-surface px-2.5 py-2 text-[13px] placeholder:text-fg-subtle focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none"
+          className="w-full resize-y rounded-md border border-input-border bg-surface px-2.5 py-2 text-[13px] placeholder:text-fg-subtle focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none"
         />
       </div>
       <div className="flex flex-col gap-2">

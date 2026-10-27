@@ -24,10 +24,11 @@ One cool neutral ramp (slightly blue-biased so it doesn't read as default grey) 
 | `--surface` | `#ffffff` | `#14161a` | Panels, tables, inputs |
 | `--surface-2` | `#f1f2f5` | `#1b1d22` | Hover rows, code blocks, segmented controls |
 | `--border` | `#e3e5ea` | `#262930` | Dividers, panel edges |
-| `--border-strong` | `#cfd2d9` | `#363a43` | Input borders, focused panels |
+| `--border-strong` | `#cfd2d9` | `#363a43` | Secondary button borders, strong dividers |
+| `--input-border` | `#878d99` | `#636875` | Form control borders (3:1 against the surface, WCAG 1.4.11) |
 | `--fg` | `#15171c` | `#eceef2` | Primary text |
 | `--fg-muted` | `#5d626d` | `#9a9fab` | Secondary text, labels |
-| `--fg-subtle` | `#8a8f9a` | `#6b707c` | Placeholders, axis ticks, timestamps |
+| `--fg-subtle` | `#686d79` | `#868b97` | Placeholders, axis ticks, timestamps (still 4.5:1 on `--surface-2`) |
 | `--accent` | `#3355e0` | `#6b8aff` | Primary buttons, links, focus ring, selected nav, chart series 1 |
 | `--accent-fg` | `#ffffff` | `#0d0e11` | Text on accent |
 | `--accent-soft` | `#eceffd` | `#1a2140` | Selected row, accent badges |
@@ -36,11 +37,11 @@ Status (icon + label always accompany the colour):
 
 | Token | Light | Dark | Meaning |
 |---|---|---|---|
-| `--good` | `#12844a` | `#3fbf7f` | Healthy, fresh, within cap |
-| `--warning` | `#a96800` | `#e0a43a` | Degraded, stale, near cap (≥ 80%) |
-| `--critical` | `#c93636` | `#f06a6a` | Down, failed, cap reached |
+| `--good` | `#0f7a43` | `#3fbf7f` | Healthy, fresh, within cap |
+| `--warning` | `#94600a` | `#e0a43a` | Degraded, stale, near cap (≥ 80%) |
+| `--critical` | `#bd2f2f` | `#f06a6a` | Down, failed, cap reached |
 
-Each has a `-soft` background step for pills. Status text colours are stepped to clear 4.5:1 on `--surface` in both themes.
+Each has a `-soft` background step for pills. Every text token clears 4.5:1 on `--bg`, `--surface` and `--surface-2`, and status colours clear 4.5:1 on their own `-soft` step, in both themes. `apps/web/test/contrast.test.ts` checks this on every test run.
 
 Charts use `--accent` for the primary series and `--fg-subtle` for the comparison series (for example p50 under p95). There are never more than two series on a console chart; anything more becomes a table.
 

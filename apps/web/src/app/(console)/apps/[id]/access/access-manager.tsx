@@ -4,6 +4,7 @@ import { Globe, User, Users } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { ActionErrorText } from "@/components/action-error";
+import { Segmented } from "@/components/segmented";
 import { Button, EmptyState, Input, Select } from "@/components/ui";
 import { newIdempotencyKey, useAction } from "@/components/use-action";
 import { cn } from "@/lib/cn";
@@ -89,30 +90,18 @@ export function AccessManager({ appId, initial, owner }: { appId: string; initia
     <div className="flex flex-col">
       <form onSubmit={grant} className="flex flex-col gap-3 border-b border-border p-4" noValidate>
         <div className="flex flex-wrap gap-2">
-          <div className="inline-flex rounded-md border border-border bg-surface-2 p-0.5" role="radiogroup" aria-label="Grant to">
-            {(Object.keys(KIND) as GrantKind[]).map((k) => {
+          <Segmented
+            label="Grant to"
+            value={kind}
+            onChange={(k) => {
+              setKind(k);
+              setTouched(false);
+            }}
+            options={(Object.keys(KIND) as GrantKind[]).map((k) => {
               const Icon = KIND[k].icon;
-              return (
-                <button
-                  key={k}
-                  type="button"
-                  role="radio"
-                  aria-checked={kind === k}
-                  onClick={() => {
-                    setKind(k);
-                    setTouched(false);
-                  }}
-                  className={cn(
-                    "flex h-7 items-center gap-1.5 rounded px-2.5 text-[12px]",
-                    kind === k ? "bg-surface font-medium text-fg shadow-sm" : "text-fg-muted hover:text-fg",
-                  )}
-                >
-                  <Icon className="size-3.5" aria-hidden />
-                  {KIND[k].label}
-                </button>
-              );
+              return { value: k, label: KIND[k].label, icon: <Icon className="size-3.5" aria-hidden /> };
             })}
-          </div>
+          />
         </div>
         <div className="flex flex-wrap items-start gap-2">
           <div className="min-w-[220px] flex-1">

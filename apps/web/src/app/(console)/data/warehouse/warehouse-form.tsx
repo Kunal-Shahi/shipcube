@@ -3,6 +3,7 @@
 import { CheckCircle2, ShieldCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { Segmented } from "@/components/segmented";
 import { useAction } from "@/components/use-action";
 import type { WarehouseInput } from "@/lib/server/data/source";
 import { Button, DescList, Field, Input, Select } from "@/components/ui";
@@ -110,24 +111,16 @@ export function WarehouseForm({ initial }: { initial: Warehouse }) {
       }}
       autoComplete="off"
     >
-      <div className="inline-flex w-fit rounded-md border border-border bg-surface-2 p-0.5" role="radiogroup" aria-label="Warehouse type">
-        {KINDS.map((k) => (
-          <button
-            key={k.id}
-            type="button"
-            role="radio"
-            aria-checked={kind === k.id}
-            onClick={() => {
-              setKind(k.id);
-              setTest("idle");
-              connect.clearError();
-            }}
-            className={cn("h-7 rounded px-3 text-[12px]", kind === k.id ? "bg-surface font-medium text-fg shadow-sm" : "text-fg-muted hover:text-fg")}
-          >
-            {k.label}
-          </button>
-        ))}
-      </div>
+      <Segmented
+        label="Warehouse type"
+        value={kind}
+        onChange={(k) => {
+          setKind(k);
+          setTest("idle");
+          connect.clearError();
+        }}
+        options={KINDS.map((k) => ({ value: k.id, label: k.label }))}
+      />
 
       {kind === "bigquery" ? (
         <div className="grid gap-4 sm:grid-cols-2">
@@ -149,7 +142,7 @@ export function WarehouseForm({ initial }: { initial: Warehouse }) {
                 spellCheck={false}
                 placeholder='{ "type": "service_account", "project_id": "…", … }'
                 className={cn(
-                  "w-full resize-y rounded-md border border-border-strong bg-surface px-2.5 py-2 font-mono text-[12px] placeholder:text-fg-subtle focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none",
+                  "w-full resize-y rounded-md border border-input-border bg-surface px-2.5 py-2 font-mono text-[12px] placeholder:text-fg-subtle focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none",
                   error && "border-critical",
                 )}
               />

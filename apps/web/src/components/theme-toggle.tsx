@@ -2,7 +2,7 @@
 
 import { Monitor, Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
-import { cn } from "@/lib/cn";
+import { Segmented } from "./segmented";
 
 type Theme = "system" | "light" | "dark";
 const KEY = "sc-theme";
@@ -31,31 +31,18 @@ export function ThemeToggle() {
     } catch {}
   }
 
-  const opts: { id: Theme; icon: typeof Sun; label: string }[] = [
-    { id: "system", icon: Monitor, label: "System theme" },
-    { id: "light", icon: Sun, label: "Light theme" },
-    { id: "dark", icon: Moon, label: "Dark theme" },
-  ];
-
   return (
-    <div className="inline-flex rounded-md border border-border p-0.5" role="radiogroup" aria-label="Theme">
-      {opts.map(({ id, icon: Icon, label }) => (
-        <button
-          key={id}
-          type="button"
-          role="radio"
-          aria-checked={theme === id}
-          aria-label={label}
-          title={label}
-          onClick={() => apply(id)}
-          className={cn(
-            "grid size-6 place-items-center rounded text-fg-subtle hover:text-fg",
-            theme === id && "bg-surface-2 text-fg",
-          )}
-        >
-          <Icon className="size-3.5" aria-hidden />
-        </button>
-      ))}
-    </div>
+    <Segmented
+      label="Theme"
+      size="sm"
+      className="bg-transparent"
+      value={theme}
+      onChange={apply}
+      options={[
+        { value: "system", title: "System theme", label: null, icon: <Monitor className="size-3.5" aria-hidden /> },
+        { value: "light", title: "Light theme", label: null, icon: <Sun className="size-3.5" aria-hidden /> },
+        { value: "dark", title: "Dark theme", label: null, icon: <Moon className="size-3.5" aria-hidden /> },
+      ]}
+    />
   );
 }

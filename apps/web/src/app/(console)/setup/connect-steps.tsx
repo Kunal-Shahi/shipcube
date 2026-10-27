@@ -67,13 +67,24 @@ export function ConnectSteps({ canCreateTokens }: { canCreateTokens: boolean }) 
 
       <Step n={3} title="Add ShipCube to your agent">
         <div role="tablist" aria-label="Coding agent" className="-mb-px flex gap-5 overflow-x-auto border-b border-border">
-          {CLIENTS.map((c) => (
+          {CLIENTS.map((c, i) => (
             <button
               key={c.id}
+              id={`client-tab-${c.id}`}
               role="tab"
               type="button"
               aria-selected={client === c.id}
+              aria-controls="client-panel"
+              tabIndex={client === c.id ? 0 : -1}
               onClick={() => setClient(c.id)}
+              onKeyDown={(e) => {
+                const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+                if (!step) return;
+                e.preventDefault();
+                const next = CLIENTS[(i + step + CLIENTS.length) % CLIENTS.length];
+                setClient(next.id);
+                document.getElementById(`client-tab-${next.id}`)?.focus();
+              }}
               className={cn(
                 "h-9 shrink-0 border-b-2 text-[13px]",
                 client === c.id ? "border-accent font-medium text-fg" : "border-transparent text-fg-muted hover:text-fg",
@@ -83,7 +94,7 @@ export function ConnectSteps({ canCreateTokens }: { canCreateTokens: boolean }) 
             </button>
           ))}
         </div>
-        <div role="tabpanel" className="flex flex-col gap-3 pt-4">
+        <div role="tabpanel" id="client-panel" aria-labelledby={`client-tab-${client}`} tabIndex={0} className="flex flex-col gap-3 pt-4 focus-visible:outline-offset-4">
           {client === "claude" && (
             <>
               <p className="text-fg-muted">Run this once. <code className="font-mono text-[12px]">--scope user</code> makes ShipCube available in every project.</p>
