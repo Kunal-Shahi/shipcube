@@ -20,6 +20,7 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from . import db
 from .settings import settings
@@ -121,6 +122,25 @@ def register_dev_session(token: str, user_id: str, workspace_id: str) -> None:
     _dev_sessions[token] = (user_id, workspace_id)
 
 
+# The console sends its Identity Platform *session cookie* (apps/web identity-platform.ts
+# apiCredential). Session cookies are signed with a different key set and carry a different issuer
+# than ID tokens, so both are accepted here; each is checked against its own keys and issuer.
+SESSION_COOKIE_CERTS = "https://www.googleapis.com/identitytoolkit/v3/relyingparty/publicKeys"
+
+
+def _verify_console_jwt(token: str, project: str, id_token: Any, request: Any) -> dict[str, Any]:
+    try:
+        return id_token.verify_firebase_token(token, request, audience=project)
+    except ValueError as id_err:
+        try:
+            claims = id_token.verify_token(token, request, audience=project, certs_url=SESSION_COOKIE_CERTS)
+        except ValueError:
+            raise id_err from None
+        if claims.get("iss") != f"https://session.firebase.google.com/{project}":
+            raise ValueError(f"unexpected session cookie issuer {claims.get('iss')!r}") from None
+        return claims
+
+
 def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
     user_id = None
     workspace_id = workspace_hint
@@ -131,7 +151,7 @@ def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
         from google.oauth2 import id_token
 
         try:
-            claims = id_token.verify_firebase_token(token, Request(), audience=settings.idp_project)
+            claims = _verify_console_jwt(token, settings.idp_project, id_token, Request())
         except ValueError as e:
             log.info("console token rejected", extra={"reason": str(e)[:200]})
             return None
