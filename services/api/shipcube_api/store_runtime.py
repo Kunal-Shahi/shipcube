@@ -33,7 +33,8 @@ def start_embedded_worker() -> None:
     """Run a worker thread inside the API process (one instance with min-instances=1 is enough
     for the hackathon; more API instances or standalone workers can run side by side)."""
     global _worker
-    if _worker is not None or os.environ.get("SHIPCUBE_EMBEDDED_WORKER", "1") != "1":
+    default = "1" if settings.dev_mode else "0"  # production: a separate worker service as sc-worker
+    if _worker is not None or os.environ.get("SHIPCUBE_EMBEDDED_WORKER", default) != "1":
         return
     from .worker import Worker
 

@@ -1,4 +1,5 @@
-"""Operator CLI (runbook in services/api/README.md).
+"""Operator CLI (runbook in services/api/README.md). Everything except `migrate` runs as
+shipcube_worker: in production, sign in as sc-worker. `migrate` runs as sc-migrator via infra/db/migrate.sh.
 
   python -m shipcube_api.admin migrate
   python -m shipcube_api.admin bootstrap --email you@gmail.com --workspace demo --name "Demo"   # prints a PAT once
@@ -35,7 +36,7 @@ def _user(conn, email: str) -> dict:
 
 
 def bootstrap(email: str, slug: str, name: str, firebase_uid: str | None) -> tuple[str, str, str]:
-    with db.tx() as conn:
+    with db.worker_tx() as conn:
         u = conn.execute("select * from users where email = %s", (email,)).fetchone() or conn.execute(
             "insert into users (id, firebase_uid, email, email_verified) values (%s, %s, %s, true) returning *",
             (uuid.uuid4(), firebase_uid or f"pending:{email}", email)).fetchone()
@@ -82,21 +83,22 @@ def main(argv: list[str] | None = None) -> None:
     f.add_argument("--reason", required=True)
     a = p.parse_args(argv)
 
-    if a.cmd == "migrate":
+    if a.cmd == "migrate":  # infra/db/migrate.sh runs this as sc-migrator
         print("applied:", db.migrate() or "nothing")
         return
-    db.migrate()
+    if pending := db.pending_migrations():
+        sys.exit(f"schema not current ({', '.join(pending)}); run infra/db/migrate.sh first")
     if a.cmd == "bootstrap":
         user_id, ws_id, email = bootstrap(a.email, a.workspace, a.name, a.firebase_uid)
         print(json.dumps({"user_id": user_id, "workspace_id": ws_id}))
         if not a.no_token:
             print("PAT (shown once):", auth.mint_pat(user_id, ws_id, [s for s in auth.SCOPES if s != "data:raw"]))
     elif a.cmd == "mint-pat":
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             u, ws = _user(conn, a.email), _workspace(conn, a.workspace)
         print(auth.mint_pat(str(u["id"]), str(ws["id"]), a.scopes.split(","), a.name, a.days))
     elif a.cmd == "link":
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             ws = _workspace(conn, a.workspace)
             row = conn.execute(
                 "insert into gcp_links (id, workspace_id, project_id, deployer_sa, runtime_sa, region, status, linked_by, verified_at)"
@@ -109,18 +111,18 @@ def main(argv: list[str] | None = None) -> None:
         if a.stuck:
             q += (" where (status = 'running' and locked_until < now()) or (status in ('queued','running') and attempts > 2)"
                   " or (status = 'queued' and next_attempt_at < now() - interval '5 minutes')")
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             for row in conn.execute(q + " order by updated_at desc limit %s", (a.limit,)).fetchall():
                 print(json.dumps(row, default=str))
     elif a.cmd == "requeue":
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             row = conn.execute("update operations set status = 'queued', locked_by = null, locked_until = null,"
                                " next_attempt_at = now(), attempts = 0, error = null, error_code = null, finished_at = null,"
                                " updated_at = now() where id = %s and status in ('failed','running','queued') returning id, step_index",
                                (a.id,)).fetchone()
         print(json.dumps(row, default=str) if row else "not requeued (unknown id, or cancelled/succeeded/awaiting approval)")
     elif a.cmd == "fail":
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             row = conn.execute("update operations set status = 'failed', error_code = 'operator', error = %s, locked_by = null,"
                                " locked_until = null, finished_at = now(), updated_at = now() where id = %s and status in"
                                " ('queued','running') returning id", (a.reason, a.id)).fetchone()

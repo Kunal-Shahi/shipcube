@@ -26,7 +26,7 @@ agent ─MCP─> /mcp ─in-process─> /v1 (FastAPI) ──writes desired state
 | `estimator.py` | `estimate_load` engine: load-estimator's `shipcube_placement` if installed, otherwise a typed `estimator_unavailable` error |
 | `telemetry.py` | Logs and metrics interface. The platform workstream installs the real implementation; without it the API answers 501. |
 | `auth.py` | PATs in `api_tokens` (HMAC with a pepper), Identity Platform ID tokens for console users |
-| `db.py`, `migrations/` | Pool, versioned migrations (checksummed, advisory-locked), and per-transaction caller context for row-level security |
+| `db.py`, `migrations/` | Pool, versioned migrations (checksummed, advisory-locked), the startup schema check, and per-transaction role and caller context for row-level security |
 | `obs.py` | JSON logs: `severity`, `message`, `request_id`, `operation_id`, `logging.googleapis.com/trace` |
 | `admin.py` | Operator CLI |
 
@@ -39,8 +39,10 @@ createdb -h localhost -p 5433 -U postgres shipcube
 export SHIPCUBE_DATABASE_URL=postgresql://postgres@localhost:5433/shipcube SHIPCUBE_TOKEN_PEPPER=$(openssl rand -hex 32)
 
 # Production mode against real GCP (ADC: gcloud auth application-default login):
+uv run python -m shipcube_api.admin migrate                # services never migrate on startup outside DEV_MODE
 uv run python -m shipcube_api.admin bootstrap --email you@gmail.com --workspace demo --name "Demo"   # prints a PAT once
-cd ../mcp && uv run python -m shipcube_mcp.server          # /mcp + /v1 + embedded worker on :8080
+uv run python -m shipcube_api.worker &                     # the durable worker
+cd ../mcp && uv run python -m shipcube_mcp.server          # /mcp + /v1 on :8080
 
 # Or DEV_MODE (mock deployer, mock estimator, mock telemetry, dev console sessions): SHIPCUBE_DEV_MODE=1
 ```
@@ -50,7 +52,7 @@ cd ../mcp && uv run python -m shipcube_mcp.server          # /mcp + /v1 + embedd
 | Variable | Default | Meaning |
 |---|---|---|
 | `SHIPCUBE_DATABASE_URL` | required | Postgres. On Cloud SQL, connect as the IAM database user for `shipcube_app` (API) or `shipcube_worker` (standalone worker). |
-| `SHIPCUBE_DB_SET_ROLE` | `1` | `SET LOCAL ROLE shipcube_app` for API transactions, so row-level security applies even as the table owner. Set to `0` when the login user already is `shipcube_app`. |
+| `SHIPCUBE_DB_SET_ROLE` | `1` | `SET LOCAL ROLE shipcube_app` (API) or `shipcube_worker` (worker, CLI) per transaction, for local and test logins that are superusers. **Set to `0` on Cloud SQL**, where each IAM login already starts in its role (`infra/db/bootstrap.sql`). |
 | `SHIPCUBE_TOKEN_PEPPER` | required outside DEV_MODE | HMAC pepper for token digests, from Secret Manager |
 | `SHIPCUBE_IDP_PROJECT` | unset | Identity Platform project for console ID tokens (approvals, restore) |
 | `SHIPCUBE_BACKEND` | `gcp` (`mock` in DEV_MODE) | `mock` is refused outside DEV_MODE |
@@ -59,7 +61,7 @@ cd ../mcp && uv run python -m shipcube_mcp.server          # /mcp + /v1 + embedd
 | `SHIPCUBE_UPLOAD_BUCKET`, `SHIPCUBE_SIGNER_SA`, `SHIPCUBE_BUILDER_SA`, `SHIPCUBE_REPO`, `SHIPCUBE_BUILDER` | see `settings.py` | Upload bucket, URL signer, Cloud Build SA, Artifact Registry repo, buildpacks builder |
 | `SHIPCUBE_HOSTED_DEPLOYER_SA` | unset | Impersonate this SA for hosted deploys (production: `sc-hosted-deployer`) |
 | `SHIPCUBE_PROFILER_JOB` | unset | Profiler sandbox job for `estimate_load`; unset means static analysis only |
-| `SHIPCUBE_EMBEDDED_WORKER` | `1` | Run a worker thread in the API process |
+| `SHIPCUBE_EMBEDDED_WORKER` | `1` in DEV_MODE, else `0` | Run a worker thread in the API process. Not possible in production: the API's login (`shipcube_app`) is confined to the caller's workspace by RLS, and the worker needs `shipcube_worker`. |
 | `SHIPCUBE_LOG_LEVEL` | `INFO` | |
 
 ## Deploy (Cloud Run, in `shipcube-control-ks`)
@@ -73,11 +75,11 @@ cd ../mcp && uv run python -m shipcube_mcp.server          # /mcp + /v1 + embedd
 printf 'access_settings:\n  oauth_settings:\n    client_id: CLIENT_ID\n    client_secret: CLIENT_SECRET\n' > /tmp/iap.yaml && gcloud iap settings set /tmp/iap.yaml --project=shipcube-apps-ks && rm /tmp/iap.yaml
 ```
 
-**Service:**
-- Run one image for both, `python -m shipcube_mcp.server` (MCP + API + embedded worker).
-- Use `min-instances=1`, so the worker always runs and there are no cold starts for agents.
-- Run as `sc-api`, with `SHIPCUBE_DATABASE_URL` pointing at Cloud SQL through the connector, and `SHIPCUBE_TOKEN_PEPPER` from Secret Manager.
-- More workers: deploy the same image with `python -m shipcube_api.worker` as a second service, or scale the API. Workers coordinate through the database.
+**Schema:** `API_DIR=services/api infra/db/migrate.sh` (security's script) applies pending migrations as `sc-migrator`, using `python -m shipcube_api.admin migrate`, before new code rolls out. Services check the schema at startup and refuse to start if a migration is pending.
+
+**Services:** one image, two Cloud Run services, both with `SHIPCUBE_DB_SET_ROLE=0`, `SHIPCUBE_TOKEN_PEPPER` from Secret Manager and Cloud SQL through the connector with IAM authentication.
+- `shipcube-api`: `python -m shipcube_mcp.server` (MCP + API), running as **`sc-api`**, with `min-instances=1`.
+- `shipcube-worker`: `python -m shipcube_api.worker`, running as **`sc-worker`**, with `min-instances=1` and CPU always allocated (it polls the queue). Add instances to deploy in parallel; workers coordinate through row locks.
 
 Hosting ShipCube itself is the platform workstream's job; this section says what the API needs.
 
@@ -94,7 +96,7 @@ Hosting ShipCube itself is the platform workstream's job; this section says what
 | IAP answers 502 "Empty Google Account OAuth client ID(s)/secret(s)" | The OAuth client step above wasn't done for that project |
 | Unanswered approvals | They expire after 72 h; housekeeping (every minute) cancels the operation with `approval_expired` |
 | Deleted apps | A soft delete removes IAP access and makes ingress internal-only. `POST /v1/apps/{app}/restore` (console) undoes it within 7 days. After that, housekeeping enqueues a `purge`, which deletes the service, its runtime SA and its images. |
-| Migrations | They run at startup under an advisory lock. Never edit an applied file: the checksum check refuses to start. Add `migrations/000N_*.sql` instead. |
+| Migrations | Only through `infra/db/migrate.sh` as `sc-migrator` (advisory-locked, checksummed). A service that finds a pending or changed migration refuses to start, naming it. Never edit an applied file; add `migrations/000N_*.sql` instead. `0001` and `0003` are security's (verbatim), `0002` and `0004` are networking's. |
 
 ## Tests
 

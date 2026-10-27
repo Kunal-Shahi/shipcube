@@ -68,7 +68,8 @@ ENFORCED_BY = {
     "memory": "Cloud Run resource limits",
     "timeout_s": "Cloud Run request timeout",
 }
-APPROVAL_PRECEDENCE = ["first_linked_deploy", "delete_app", "domain_grant", "cap_raise"]
+# One approval per operation; `approvals.action` holds the most severe (database-design.md, Oct 28).
+APPROVAL_PRECEDENCE = ["delete_app", "first_linked_deploy", "domain_grant", "cap_raise"]
 
 
 class Conflict(Exception):
@@ -319,7 +320,7 @@ def enqueue(conn, caller: Caller | None, workspace_id: str, kind: str, app_id: A
             "insert into approvals (id, workspace_id, action, operation_id, app_id, summary, request, request_hash,"
             " requested_by, requested_via, requested_token, expires_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (uuid.uuid4(), workspace_id, action, op_id, app_id,
-             summary or "; ".join(r for _, r in approvals), Jsonb(payload), request_hash,
+             summary or "; ".join(r for _, r in approvals), Jsonb({**payload, "actions": sorted(actions)}), request_hash,
              caller.user_id if caller else None, caller.via if caller else "console",
              caller.token_id if caller and caller.token_id else None, expires))
     return op_view(row, _slug(conn, app_id))

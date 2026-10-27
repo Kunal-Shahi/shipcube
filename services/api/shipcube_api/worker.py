@@ -10,8 +10,11 @@
 - Housekeeping every minute: expire unanswered approvals, enqueue purges of apps past their 7-day
   restore window.
 
-Runs embedded in the API process (SHIPCUBE_EMBEDDED_WORKER=1, the default) and/or standalone:
-`python -m shipcube_api.worker`. Operate it with `python -m shipcube_api.admin ops ...`.
+Production: run standalone as its own Cloud Run service, signed in as sc-worker (database role
+shipcube_worker, BYPASSRLS): `python -m shipcube_api.worker`. Every transaction here runs as
+shipcube_worker (`db.worker_tx`). The API's own login (sc-api, shipcube_app) can't act for other
+workspaces, so the embedded worker (SHIPCUBE_EMBEDDED_WORKER=1) is only for DEV_MODE and tests.
+Operate it with `python -m shipcube_api.admin ops ...`.
 """
 
 from __future__ import annotations
@@ -78,7 +81,7 @@ class Worker:
         return t
 
     def claim(self) -> dict[str, Any] | None:
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             return conn.execute(
                 "update operations set status = 'running', locked_by = %s, locked_until = now() + make_interval(secs => %s),"
                 " attempts = attempts + 1, started_at = coalesce(started_at, now()), updated_at = now()"
@@ -144,12 +147,12 @@ class Worker:
 
     def _heartbeat(self, op_id: Any, done: threading.Event) -> None:
         while not done.wait(HEARTBEAT_S):
-            with db.tx() as conn:
+            with db.worker_tx() as conn:
                 conn.execute("update operations set locked_until = now() + make_interval(secs => %s) where id = %s and locked_by = %s",
                              (LEASE_S, op_id, self.id))
 
     def _cancel_requested(self, op_id: Any) -> bool:
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             return bool(conn.execute("select cancel_requested from operations where id = %s", (op_id,)).fetchone()["cancel_requested"])
 
     @staticmethod
@@ -158,19 +161,19 @@ class Worker:
                 for j, n in enumerate(names)]
 
     def _progress(self, op_id: Any, names: list[str], i: int, message: str) -> None:
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             conn.execute("update operations set step = %s, step_index = %s, steps = %s, progress_message = %s, updated_at = now()"
                          " where id = %s", (names[i], i, Jsonb(self._steps(names, i, names[i])), message, op_id))
 
     def _save(self, op_id: Any, names: list[str], next_index: int, state: dict, timings: dict, result: Any) -> None:
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             conn.execute("update operations set step_index = %s, step_state = %s, timings = %s, result = %s,"
                          " steps = %s, updated_at = now() where id = %s",
                          (next_index, Jsonb(state), Jsonb(timings), Jsonb(result) if result is not None else None,
                           Jsonb(self._steps(names, next_index, None)), op_id))
 
     def _retry(self, op_id: Any, names: list[str], i: int, error: str, code: str, delay: float) -> None:
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             conn.execute("update operations set status = 'queued', locked_by = null, locked_until = null,"
                          " next_attempt_at = now() + make_interval(secs => %s), progress_message = %s, error = %s, error_code = %s,"
                          " steps = %s, updated_at = now() where id = %s",
@@ -185,7 +188,7 @@ class Worker:
         if isinstance(result, dict) and status == "succeeded":
             result = {**result, "timings_s": timings}
         message = "Done" if status == "succeeded" else f"{status.capitalize()}: {(error or '')[:250]}"
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             conn.execute("update operations set status = %s, error_code = %s, error = %s, result = %s, steps = %s, timings = %s,"
                          " progress_message = %s, locked_by = null, locked_until = null, finished_at = now(), updated_at = now()"
                          " where id = %s", (status, code, error and error[:4000], Jsonb(result) if result is not None else None,
@@ -205,18 +208,18 @@ class Worker:
     # --- step plans -----------------------------------------------------------------------------
 
     def _app(self, app_id: Any) -> tuple[dict[str, Any], AppRef]:
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             row = conn.execute("select * from apps where id = %s", (app_id,)).fetchone()
             return row, app_ref(conn, row)
 
     def _principals(self, app_id: Any) -> list[str]:
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             return [f"{g['principal_type']}:{g['principal']}" for g in grants(conn, app_id)]
 
     def _push_access(self, app_id: Any, ref: AppRef) -> list[str]:
         principals = self._principals(app_id)
         self.d.set_access(ref, principals)
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             conn.execute("update access_grants set sync_state = 'applied', last_synced_at = now() where app_id = %s and"
                          " revoked_at is null", (app_id,))
             conn.execute("update access_grants set sync_state = 'applied', last_synced_at = now() where app_id = %s and"
@@ -239,14 +242,14 @@ class Worker:
             def validate() -> None:
                 if "staged" not in state:
                     state["staged"] = self.d.stage_source(ref, inp["source"], str(op["id"]))
-                with db.tx() as conn:
+                with db.worker_tx() as conn:
                     conn.execute("update apps set status = 'deploying' where id = %s", (app_id,))
                     conn.execute("update deployments set status = 'building' where id = %s", (dep_id,))
 
             def build() -> None:
                 def on_build(build_id: str) -> None:  # saved at once so a retry re-attaches instead of rebuilding
                     state["build_id"] = build_id
-                    with db.tx() as conn:
+                    with db.worker_tx() as conn:
                         conn.execute("update operations set step_state = %s where id = %s", (Jsonb(state), op["id"]))
 
                 state["image"] = self.d.build(ref, state["staged"], str(op["id"]), lambda: self._cancel_requested(op["id"]),
@@ -256,7 +259,7 @@ class Worker:
                 return {"app": ref.name, "image": state["image"], "build_id": state.get("build_id")}
 
             def deploy() -> None:
-                with db.tx() as conn:
+                with db.worker_tx() as conn:
                     conn.execute("update deployments set status = 'deploying' where id = %s", (dep_id,))
                     caps = {**self._app_caps(conn, app), **{k: v for k, v in (inp.get("caps") or {}).items() if v is not None}}
                 d = self.d.deploy(ref, state["image"], caps, inp.get("env") or {})
@@ -269,7 +272,7 @@ class Worker:
                 st = self.d.status(ref)
                 if not st.get("ready"):
                     raise DeployError("unavailable", f"service not ready yet: {st.get('condition')}")
-                with db.tx() as conn:
+                with db.worker_tx() as conn:
                     if inp.get("caps"):
                         write_app_caps(conn, str(app["workspace_id"]), app_id, inp["caps"], op["requested_by"])
                     conn.execute("update apps set status = 'running', url = %s, tier = coalesce(%s, tier), service_name = %s,"
@@ -292,7 +295,7 @@ class Worker:
                 st = self.d.status(ref)
                 if not st.get("ready"):
                     raise DeployError("unavailable", f"service not ready yet: {st.get('condition')}")
-                with db.tx() as conn:
+                with db.worker_tx() as conn:
                     conn.execute("update deployments set status = 'rolled_back' where id = %s", (inp["from_deployment"],))
                     conn.execute("update deployments set finished_at = now() where id = %s", (inp["to_deployment"],))
                 return {"app": ref.name, "revision": inp["to_revision"], "url": app["url"]}
@@ -304,7 +307,7 @@ class Worker:
                 self.d.soft_delete(ref)
 
             def soft_delete() -> dict[str, Any]:
-                with db.tx() as conn:
+                with db.worker_tx() as conn:
                     row = conn.execute("update apps set status_before_delete = status, status = 'deleted', deleted_at = now(),"
                                        " deleted_by = %s, purge_after = now() + interval '7 days' where id = %s returning purge_after",
                                        (op["requested_by"], app_id)).fetchone()
@@ -315,7 +318,7 @@ class Worker:
         if kind == "restore":
             def restore() -> dict[str, Any]:
                 self.d.restore(ref, self._principals(app_id))
-                with db.tx() as conn:
+                with db.worker_tx() as conn:
                     conn.execute("update apps set status = coalesce(status_before_delete, 'running'), status_before_delete = null,"
                                  " deleted_at = null, deleted_by = null, purge_after = null where id = %s", (app_id,))
                 return {"app": ref.name, "restored": True, "url": app["url"]}
@@ -325,7 +328,7 @@ class Worker:
         if kind == "purge":
             def purge() -> dict[str, Any]:
                 self.d.purge(ref)
-                with db.tx() as conn:
+                with db.worker_tx() as conn:
                     conn.execute("update apps set purged_at = now() where id = %s", (app_id,))
                 return {"app": ref.name, "purged": True}
 
@@ -333,7 +336,7 @@ class Worker:
 
         if kind == "set_caps":
             def apply_caps() -> dict[str, Any]:
-                with db.tx() as conn:
+                with db.worker_tx() as conn:
                     if not inp.get("push_only"):
                         write_app_caps(conn, str(app["workspace_id"]), app_id, inp["caps"], op["requested_by"])
                     caps = self._app_caps(conn, app)
@@ -346,7 +349,7 @@ class Worker:
         if kind == "set_access":
             def apply_access() -> dict[str, Any]:
                 if not inp.get("push_only"):
-                    with db.tx() as conn:
+                    with db.worker_tx() as conn:
                         write_grants(conn, str(app["workspace_id"]), app_id, inp.get("add", []), inp.get("remove", []),
                                      op["requested_by"])
                 principals = self._push_access(app_id, ref) if app["status"] == "running" else self._principals(app_id)
@@ -365,7 +368,7 @@ class Worker:
     # --- housekeeping ------------------------------------------------------------------------
 
     def housekeeping(self) -> None:
-        with db.tx() as conn:
+        with db.worker_tx() as conn:
             expired = conn.execute(
                 "update operations set status = 'cancelled', error_code = 'approval_expired', error = 'No decision within 72 hours',"
                 " progress_message = 'No decision within 72 hours', finished_at = now(), updated_at = now()"
@@ -384,7 +387,7 @@ class Worker:
 
 
 def current_deployment_exists(app_id: Any) -> bool:
-    with db.tx() as conn:
+    with db.worker_tx() as conn:
         return current_deployment(conn, app_id) is not None
 
 
@@ -392,7 +395,7 @@ def main() -> None:
     from .store_runtime import deployer
 
     obs.setup_logging()
-    db.migrate()
+    db.check_schema(migrate_if_dev=settings.dev_mode)
     Worker(deployer()).run_forever()
 
 

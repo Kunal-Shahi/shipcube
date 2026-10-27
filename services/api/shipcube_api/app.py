@@ -37,10 +37,10 @@ log = logging.getLogger("shipcube.api")
 def startup() -> None:
     """Also called by the combined MCP + API server, whose lifespan the API app doesn't get."""
     obs.setup_logging()
-    db.migrate()
+    db.check_schema(migrate_if_dev=settings.dev_mode)  # production: migrations run via infra/db/migrate.sh
     deployer()  # fail at startup, not on the first request, if the backend is misconfigured
     if settings.dev_mode and (tok := os.environ.get("SHIPCUBE_DEV_CONSOLE_TOKEN")):
-        with db.tx() as conn:  # DEV_MODE stand-in for a console login, for the bootstrap user
+        with db.tx(role=db.APP) as conn:  # DEV_MODE stand-in for a console login, for the bootstrap user
             m = conn.execute("select m.user_id, m.workspace_id from memberships m join users u on u.id = m.user_id"
                              " where u.email = %s order by m.created_at limit 1",
                              (os.environ.get("SHIPCUBE_DEV_CONSOLE_EMAIL", ""),)).fetchone()
@@ -174,7 +174,7 @@ def accepted(op: Operation, response: Response) -> Operation:
 
 @app.get("/healthz", include_in_schema=False)
 def healthz() -> dict:
-    with db.tx() as conn:
+    with db.tx(role=db.APP) as conn:
         conn.execute("select 1")
     return {"ok": True}
 

@@ -68,7 +68,7 @@ def mint_pat(user_id: str, workspace_id: str, scopes: list[str], name: str = "mc
     m = TOKEN_RE.match(token)
     if not m or m[1] != "pat":
         raise ValueError("token must look like sc_pat_<8 alphanumerics>_<32+ url-safe chars>")
-    with db.tx() as conn:
+    with db.worker_tx() as conn:  # operator tooling (admin CLI); the console will mint through its own session
         conn.execute(
             "insert into api_tokens (id, workspace_id, user_id, kind, name, prefix, token_hmac, scopes, expires_at)"
             " values (%s, %s, %s, 'pat', %s, %s, %s, %s, now() + make_interval(days => %s))",
@@ -90,13 +90,16 @@ def verify_pat(token: str) -> Caller | None:
     m = TOKEN_RE.match(token)
     if not m or m[1] != "pat":
         return None
-    with db.tx() as conn:
+    secret_hmac = digest(m[3])
+    # Runs as shipcube_app under row-level security: migration 0004 exposes only the row whose
+    # HMAC this request presents.
+    with db.tx(role=db.APP, settings={"app.token_hmac": secret_hmac.hex()}) as conn:
         row = conn.execute(
             "update api_tokens t set last_used_at = now() from users u"
             " where t.token_hmac = %s and t.prefix = %s and t.revoked_at is null and t.expires_at > now()"
             " and u.id = t.user_id and u.disabled_at is null"
             " returning t.id, t.user_id, t.workspace_id, t.scopes, extract(epoch from t.expires_at)::bigint as exp, u.email",
-            (digest(m[3]), f"sc_pat_{m[2]}")).fetchone()
+            (secret_hmac, f"sc_pat_{m[2]}")).fetchone()
         if row is None:
             return None
         mem = _membership(conn, row["user_id"], row["workspace_id"])
@@ -132,13 +135,13 @@ def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
         except ValueError as e:
             log.info("console token rejected", extra={"reason": str(e)[:200]})
             return None
-        with db.tx() as conn:
+        with db.tx(role=db.APP) as conn:
             u = conn.execute("select id from users where firebase_uid = %s and disabled_at is null",
                              (claims["sub"],)).fetchone()
         user_id = str(u["id"]) if u else None
     if user_id is None:
         return None
-    with db.tx() as conn:
+    with db.tx(role=db.APP) as conn:
         mem = _membership(conn, user_id, workspace_id)
     if mem is None:
         return None
