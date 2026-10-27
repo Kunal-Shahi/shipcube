@@ -2,6 +2,7 @@
 # Build ShipCube's images on Cloud Build and deploy the four Cloud Run services.
 #
 #   DATA_WORKSPACE=<workspace uuid> deploy/deploy.sh             build + deploy everything
+#                                       (without DATA_WORKSPACE the data_* MCP tools aren't mounted)
 #   DATA_WORKSPACE=... deploy/deploy.sh --no-build                redeploy the images for $TAG
 #   deploy/deploy.sh --only gateway [--no-build]                  one service (console|mcp|worker|gateway)
 #
@@ -62,8 +63,10 @@ export IMAGE_API="$IMAGES/api:$TAG" IMAGE_GATEWAY="$IMAGES/gateway:$TAG" IMAGE_C
 export MCP_HOST="${MCP_URL#https://}"
 
 if want mcp; then
-  : "${DATA_WORKSPACE:?set DATA_WORKSPACE to the workspace id the data_* tools serve (python -m shipcube_api.admin workspaces)}"
-  export DATA_WORKSPACE
+  if [ -z "${DATA_WORKSPACE:-}" ]; then
+    echo "warning: DATA_WORKSPACE is unset, so the data_* tools are not mounted (11 of 16 MCP tools)" >&2
+  fi
+  export DATA_WORKSPACE="${DATA_WORKSPACE:-}"
   apply mcp
   public shipcube-mcp
 fi
