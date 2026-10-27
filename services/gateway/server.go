@@ -1,0 +1,215 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
+	"math"
+	"net/http"
+	"strconv"
+	"time"
+)
+
+const maxRequestBody = 8 << 20
+
+// Gateway is the OpenAI-compatible AI gateway that deployed apps call (services/gateway/DESIGN.md §1).
+type Gateway struct {
+	Auth     *Authenticator
+	Registry Registry
+	Secrets  SecretSource
+	Limiter  *Limiter
+	Usage    UsageSink
+	Upstream *http.Client
+	Prices   map[string][2]float64
+	Log      *slog.Logger
+
+	MetaBaseURL      string
+	OpenAIBaseURL    string
+	AnthropicBaseURL string
+	// MetaSecretRef is the platform's Meta key (Secret Manager). Empty means Meta calls are served
+	// by the built-in mock, so apps work before the key arrives.
+	MetaSecretRef string
+	// AllowPrivate lets BYOK base URLs reach private addresses. Tests and local development only.
+	AllowPrivate bool
+}
+
+func (g *Gateway) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/chat/completions", g.chat)
+	mux.HandleFunc("GET /v1/models", g.models)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok\n")
+	})
+	return mux
+}
+
+// resolve authenticates the caller and finds its app. It writes the error response itself.
+func (g *Gateway) resolve(w http.ResponseWriter, r *http.Request) *AppConfig {
+	subject, err := g.Auth.Authenticate(r.Context(), r)
+	if err != nil {
+		g.Log.Info("auth failed", "error", err.Error(), "remote", r.RemoteAddr)
+		openAIError(w, http.StatusUnauthorized, "invalid_request_error", "unauthenticated",
+			"send a Google ID token for the app's service account (audience = gateway URL) or a gateway token")
+		return nil
+	}
+	cfg, err := g.Registry.Lookup(r.Context(), Principal{Subject: subject, AppHeader: r.Header.Get("X-ShipCube-App")})
+	switch {
+	case errors.Is(err, ErrUnknownApp):
+		openAIError(w, http.StatusForbidden, "invalid_request_error", "unknown_app",
+			"no ShipCube app is registered for this identity (set X-ShipCube-App if apps share a service account)")
+		return nil
+	case err != nil:
+		g.Log.Error("registry lookup failed", "error", err.Error())
+		openAIError(w, http.StatusServiceUnavailable, "api_error", "registry_unavailable", "try again shortly")
+		return nil
+	}
+	return cfg
+}
+
+func (g *Gateway) models(w http.ResponseWriter, r *http.Request) {
+	cfg := g.resolve(w, r)
+	if cfg == nil {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []any{
+		map[string]any{"id": cfg.Provider.Model, "object": "model", "owned_by": cfg.Provider.Kind},
+	}})
+}
+
+func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	cfg := g.resolve(w, r)
+	if cfg == nil {
+		return
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if err != nil {
+		openAIError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "body_too_large", "request body is too large")
+		return
+	}
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		openAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", "request body must be JSON")
+		return
+	}
+	if msgs, _ := body["messages"].([]any); len(msgs) == 0 {
+		openAIError(w, http.StatusBadRequest, "invalid_request_error", "missing_messages", "messages is required")
+		return
+	}
+
+	pc := cfg.Provider
+	kind := pc.Kind
+	if kind == "" {
+		kind = ProviderMeta
+	}
+	model, _ := body["model"].(string)
+	if model == "" || model == "default" || model == "shipcube-default" {
+		model = pc.Model
+	}
+	stream, _ := body["stream"].(bool)
+	c := &call{cfg: cfg, model: model, body: body, stream: stream}
+
+	ev := UsageEvent{AppID: cfg.AppID, WorkspaceID: cfg.WorkspaceID, App: cfg.App, Provider: kind, Model: model,
+		Stream: stream, OccurredAt: start.UTC()}
+	defer func() {
+		ev.Provider, ev.InputTokens, ev.OutputTokens, ev.Status = kind, c.inTok, c.outTok, c.status
+		ev.CostUSD, ev.Priced = cost(g.Prices, kind, model, c.inTok, c.outTok)
+		ev.LatencyMS = time.Since(start).Milliseconds()
+		if ev.CapHit == "" {
+			g.Limiter.Record(cfg, c.inTok+c.outTok, ev.CostUSD)
+		}
+		g.Usage.Record(ev)
+	}()
+
+	remaining, capErr := g.Limiter.Allow(cfg)
+	if capErr != nil {
+		c.status, ev.CapHit = http.StatusTooManyRequests, capErr.Cap
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(time.Until(capErr.ResetsAt).Seconds()))))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": map[string]any{
+			"message": capErr.Error(), "type": "rate_limit_exceeded", "code": "cap_exceeded",
+			"cap": capErr.Cap, "limit": capErr.Limit, "resets_at": capErr.ResetsAt.UTC().Format(time.RFC3339),
+		}})
+		return
+	}
+	maxTokens := clampMaxTokens(body, kind, remaining)
+
+	// Pick the upstream and its key.
+	ref := pc.SecretRef
+	switch kind {
+	case ProviderMeta:
+		c.baseURL, ref = g.MetaBaseURL, g.MetaSecretRef
+		if ref == "" {
+			kind = ProviderMock
+		}
+	case ProviderOpenAI:
+		c.baseURL = g.OpenAIBaseURL
+	case ProviderAnthropic:
+		c.baseURL = g.AnthropicBaseURL
+	case ProviderOpenAICompatible:
+		u, err := validateBaseURL(pc.BaseURL, g.AllowPrivate)
+		if err != nil {
+			c.status = http.StatusBadRequest
+			openAIError(w, c.status, "invalid_request_error", "invalid_base_url", err.Error())
+			return
+		}
+		c.baseURL = u.String()
+	case ProviderMock:
+	default:
+		c.status = http.StatusInternalServerError
+		openAIError(w, c.status, "api_error", "unknown_provider", "the app's provider is not supported")
+		return
+	}
+	if kind != ProviderMock {
+		if ref == "" {
+			c.status = http.StatusFailedDependency
+			openAIError(w, c.status, "invalid_request_error", "no_key", "no API key is configured for this provider")
+			return
+		}
+		c.key, err = g.Secrets.Get(r.Context(), ref)
+		if err != nil {
+			g.Log.Error("secret lookup failed", "app", cfg.App, "error", err.Error())
+			c.status = http.StatusServiceUnavailable
+			openAIError(w, c.status, "api_error", "secret_unavailable", "the provider key could not be read")
+			return
+		}
+	}
+
+	w.Header().Set("X-ShipCube-Provider", kind)
+	w.Header().Set("X-ShipCube-Model", model)
+	switch kind {
+	case ProviderMock:
+		g.serveMock(w, c)
+	case ProviderAnthropic:
+		g.forwardAnthropic(r.Context(), w, c, maxTokens)
+	default:
+		g.forwardOpenAI(r.Context(), w, c)
+	}
+	g.Log.Info("chat", "app", cfg.App, "provider", kind, "model", model, "status", c.status, "stream", stream,
+		"input_tokens", c.inTok, "output_tokens", c.outTok, "ms", time.Since(start).Milliseconds())
+}
+
+// clampMaxTokens caps the request's output tokens at what's left of the daily token cap and
+// returns the value to use for Anthropic (which requires one). remaining < 0 means no cap.
+func clampMaxTokens(body map[string]any, kind string, remaining int64) int64 {
+	field := "max_tokens"
+	if _, ok := body["max_completion_tokens"]; ok || kind == ProviderOpenAI {
+		field = "max_completion_tokens"
+	}
+	requested := int64(-1)
+	if v, ok := body[field].(float64); ok && v > 0 {
+		requested = int64(v)
+	}
+	out := requested
+	if remaining >= 0 && (out < 0 || out > remaining) {
+		out = remaining
+	}
+	if out >= 0 && kind != ProviderAnthropic {
+		body[field] = out
+	}
+	if out < 0 {
+		return anthropicDefaultMaxTokens
+	}
+	return out
+}
