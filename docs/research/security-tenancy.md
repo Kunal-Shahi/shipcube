@@ -153,7 +153,7 @@ GCP budgets **do not cap spending**: they alert, and cost data arrives hours lat
 | Layer | Control | Default (free plan) |
 |---|---|---|
 | Signup | `beforeCreate` blocking function: allow only invited emails or an invite code during the hackathon; one free workspace per Google account | Invite-only |
-| Workspace | Max apps, max deploys per day, AI-gateway token budget per day | 3 apps, 20 deploys/day, 200k Muse tokens/day |
+| Workspace | Max apps, max deploys per day, AI-gateway token budget per day, spend per app per month | 5 apps, 20 deploys/day, 200k Muse tokens/day, $5 per app per month (same defaults as networking) |
 | App (Cloud Run) | `--max-instances`, `--concurrency`, CPU/memory, request timeout, `--cpu-throttling` (CPU only during requests), job `--task-timeout`, `--max-retries` | max 2 instances, 1 vCPU, 512 MiB, 60 s request timeout; jobs 10 min, 0 retries |
 | App (gateway) | Requests per minute and token budget per app, enforced before forwarding to the model | 60 rpm |
 | Project | Lower Cloud Run quotas on `shipcube-apps` (quota decreases are allowed even when increases aren't) | e.g. 20 instances in total |
@@ -181,6 +181,7 @@ Credit pool math: Cloud Run's free tier is 180,000 vCPU-seconds and 360,000 GiB-
 | T11 | **Supply chain in user builds** | Malicious base image | Builds isolated per project; we don't run user images with any privileged identity; Artifact Analysis scanning can be turned on later |
 | T12 | **SSRF through the AI gateway** | BYOK "OpenAI-compatible base URL" set to `http://metadata.google.internal` | Gateway resolves and rejects private, link-local and metadata IP ranges, allows only `https`, and runs with no VPC |
 | T13 | **Slow revocation** | Ex-employee removed from a group still opens the app for hours [S6] | UI warns; "revoke now" can pause the app until propagation finishes; per-user grants revoke in minutes |
+| T14 | **Shared static egress IP** | A customer allow-lists ShipCube's NAT IP for their database, which also lets in every other hosted app that uses static egress | Apps get static egress only when they opt in; the console warns that the IP is shared; customers who need a dedicated IP use a linked project (networking §5.5) |
 
 ## Open questions for other workstreams
 

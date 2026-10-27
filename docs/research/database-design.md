@@ -350,7 +350,7 @@ create table caps (
   workspace_id uuid not null references workspaces(id) on delete cascade,
   app_id       uuid references apps(id) on delete cascade,
   kind         text not null check (kind in (
-                 'max_instances','cpu','memory_mib','request_timeout_s','job_timeout_s',
+                 'max_instances','concurrency','cpu','memory_mib','request_timeout_s','job_timeout_s',
                  'requests_per_minute','ai_tokens_per_day','spend_usd_per_month','deploys_per_day','max_apps')),
   limit_value  numeric not null check (limit_value >= 0),
   period       text check (period in ('minute','day','month')),
@@ -370,7 +370,9 @@ create table api_tokens (
   name         text not null,
   prefix       text not null,                -- first 8 chars, shown in UI
   token_hmac   bytea not null unique,        -- HMAC-SHA-256(pepper, secret)
-  scopes       text[] not null,
+  scopes       text[] not null check (scopes <@ array[
+                 'apps:read','apps:deploy','access:write','caps:write','secrets:write',
+                 'data:read','data:migrate','data:raw']),
   client_id    text,                         -- MCP OAuth client, if any
   expires_at   timestamptz not null,
   last_used_at timestamptz,
@@ -437,6 +439,29 @@ create table usage_daily (
   primary key (app_id, day, metric)
 );
 
+-- Long-running operations (networking's step machine, driven by Cloud Tasks) ----
+
+create table operations (
+  id             uuid primary key,
+  workspace_id   uuid not null references workspaces(id) on delete cascade,
+  app_id         uuid references apps(id) on delete set null,
+  kind           text not null check (kind in ('estimate','deploy','delete','profile','link_verify','grant_sync')),
+  target_project text not null,          -- shipcube-apps or the linked project
+  status         text not null check (status in ('pending','running','succeeded','failed','cancelled')),
+  step           text,
+  step_state     jsonb not null default '{}',  -- no secret values
+  attempts       int not null default 0,
+  idem_key       text not null,
+  request_hash   bytea not null,
+  requested_by   uuid references users(id),
+  token_id       uuid,
+  error          text,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  unique (workspace_id, idem_key)
+);
+alter table deployments add column operation_id uuid references operations(id);
+
 -- Audit -----------------------------------------------------------------
 
 create table audit_log (
@@ -476,6 +501,8 @@ create index access_grants_app         on access_grants (app_id) where revoked_a
 create index access_grants_unsynced    on access_grants (sync_state) where sync_state <> 'applied';
 create index access_grants_principal   on access_grants (principal) where revoked_at is null;  -- "what can bob@x see?"
 create index caps_app                  on caps (app_id);
+create index operations_active         on operations (status, updated_at) where status in ('pending','running');
+create index operations_ws_created     on operations (workspace_id, created_at desc);
 create index api_tokens_user           on api_tokens (user_id) where revoked_at is null;
 create index secret_refs_workspace     on secret_refs (workspace_id) where destroyed_at is null;
 create index load_estimates_app        on load_estimates (app_id, created_at desc);
@@ -556,7 +583,56 @@ Each maps to a Cloud SQL IAM database user tied to that service's service accoun
 
 **Testing RLS:** a test fixture creates workspaces A and B and asserts that every API list and get endpoint, called as a user of A, returns nothing from B, and that writes into B fail.
 
-## 6. How decisions map to the schema
+## 6. Tokens and scopes (matches networking, PR #1)
+
+- **Format:** `sc_pat_<id>_<secret>`; the 32-byte secret is shown once. `prefix` stores `sc_pat_<id>` for display.
+- **Lookup:** `token_hmac = HMAC-SHA-256(pepper, full token)`, with the pepper in Secret Manager (`token-hmac-pepper`). A plain `sha256` would let anyone holding a database dump test guessed tokens offline; the pepper stops that. The API does one equality lookup on the unique index.
+- **Scopes** (enforced by the check constraint, so a typo can't mint a token nobody can use):
+
+| Scope | Allows | Used by |
+|---|---|---|
+| `apps:read` | `whoami`, list/describe apps, status, logs, metrics, estimates | MCP, console |
+| `apps:deploy` | `create_upload`, `estimate_load`, `deploy_app`, delete | MCP |
+| `access:write` | `grant_access`, `revoke_access` (risky grants return a confirmation URL) | MCP, console |
+| `caps:write` | `set_caps` (raising a cap above plan defaults returns a confirmation URL) | MCP, console |
+| `secrets:write` | `ai_config` with a BYOK key, `connect_data` | MCP, console |
+| `data:read` | `list_cubes`, `describe_cube`, `query`, `search_values` | data layer |
+| `data:migrate` | `propose_migration`, `apply_migration` (apply returns a confirmation URL) | data layer |
+| `data:raw` | L3 `raw_sql`, only if the workspace setting allows it | data layer |
+
+- **Lifetime:** 30 days by default, 90 at most (check constraint). `last_used_at` and `last_used_ip` are updated at most once a minute per token, to avoid a write on every call.
+- **Console:** the console doesn't use PATs. It sends the Identity Platform ID token as a bearer token (or a Firebase session cookie, which the Admin SDK can mint for up to 14 days). The API treats a console caller as having every scope its membership role allows.
+- **Phase 2 OAuth 2.1:** refresh tokens go in `api_tokens` with `kind = 'oauth_refresh'` and `client_id` set. Access tokens are short-lived JWTs and aren't stored.
+
+## 7. What the data layer reads (shipcube-data)
+
+The data layer never parses tokens. For every request, the API (or the MCP server, in-process) builds the data layer's `Caller` from these tables and hands it over. This is the contract:
+
+| `Caller` field | Source | Notes |
+|---|---|---|
+| `workspace_id`, `workspace_slug` | `workspaces.id`, `workspaces.slug` | Resolved from the token (`api_tokens.workspace_id`) or the console URL. Never from tool arguments |
+| `user_id`, `email`, `hosted_domain` | `users.id`, `users.email`, `users.hosted_domain` | `hosted_domain` is the Google `hd` claim; null for gmail.com |
+| `membership_role` | `memberships.role` | `owner > admin > developer > viewer`; null for someone who only reaches data through an app |
+| `scopes` | `api_tokens.scopes` | Console callers get the scopes their role allows |
+| `app_id` | `apps.id` | Set for traffic from a deployed app (below) |
+| `groups` | not available for now | Neither IAP nor the Google ID token tells us a user's groups. Group principals in `data_role_assignments` only match once someone connects the Cloud Identity Groups API (security-tenancy §1). Until then, data roles should use `user`, `domain` or `workspace_role` |
+| `via` | `console`, `mcp` or `app` | |
+
+**Tenant id for schema routing:** `ws_` followed by the workspace UUID as 32 hex characters (e.g. `ws_0192f0c4…`). It is derived, not stored, so it can't drift, and it is always a valid SQL identifier. A sub-tenant inside a workspace comes from the data layer's own `data_attributes` (key `tenant`), never from the request.
+
+**Principal types line up:** `access_grants.principal_type` (`user`, `group`, `domain`) plus `workspace_role` are exactly the principal types in the data layer's `data_role_assignments` and `data_attributes`. Emails and domains are compared case-insensitively (`citext` here; the data layer lower-cases).
+
+**Requests from deployed apps.** When a viewer opens an app, IAP signs a JWT (`x-goog-iap-jwt-assertion`) naming the viewer's email. If the app calls the data layer for that viewer:
+
+1. The app calls the API with an ID token for its own service account (`apps.runtime_sa` → `app_id`, `workspace_id`) and forwards the IAP assertion header.
+2. The API verifies the IAP JWT (signature from Google's IAP keys, audience = that app's backend) and takes the viewer's email from it. It never trusts a plain email header.
+3. `Caller` = the app's workspace, `app_id`, the viewer's email and domain, and the viewer's `membership_role` if they're also a workspace member (otherwise null). Row policies then filter on the *viewer*, not the app.
+
+Without a valid IAP assertion (for example, a scheduled job), the caller is the app itself: `app_id` set, no email, and only row policies that allow it apply. The data layer fails closed when a `$ctx` value is missing.
+
+**Catalog tables in Postgres:** the data layer's catalog lives in this same Cloud SQL database. Every catalog table gets `workspace_id uuid not null references workspaces(id)` and the same RLS policies built on `app_workspace()` and `app_has_role()` (section 5). Reading the catalog needs `viewer`; migrations need `developer` (and approval through the console); data roles and attributes need `admin`. Catalog changes write to the shared `audit_log` with `action` values prefixed `data.`.
+
+## 8. How decisions map to the schema
 
 | Decision (security-tenancy.md) | Where it lives |
 |---|---|
@@ -566,7 +642,9 @@ Each maps to a Cloud SQL IAM database user tied to that service's service accoun
 | Per-workspace deployer SA | `gcp_links.deployer_sa`; partial unique index stops two workspaces linking the same project |
 | Per-app service accounts | `apps.runtime_sa` |
 | Secret Manager only | `secret_refs`, `provider_configs.secret_ref_id`, `gcp_links.iap_oauth_client_secret_ref` |
-| Hashed, scoped, expiring tokens | `api_tokens` |
+| Hashed, scoped, expiring tokens | `api_tokens` (section 6) |
+| Idempotent long-running work | `operations` (`unique (workspace_id, idem_key)`) |
+| Data-layer identity | section 7 |
 | Caps | `caps` (workspace defaults and per-app overrides), `usage_daily` to enforce spend and token caps |
 | Audit | `audit_log` plus Cloud Audit Logs |
 

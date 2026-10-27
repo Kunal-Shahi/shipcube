@@ -1,6 +1,6 @@
 # Gateway design
 
-`services/gateway` holds two small services. Both run in `shipcube-control` as `sc-gateway`. Security reasoning: [docs/research/security-tenancy.md](../../docs/research/security-tenancy.md).
+`services/gateway` holds two small services, written in Go (the one exception to Python, per the language decision in PR #4). Both run in `shipcube-control` as `sc-gateway`. Security reasoning: [docs/research/security-tenancy.md](../../docs/research/security-tenancy.md).
 
 ## 1. AI gateway (built for the demo)
 
