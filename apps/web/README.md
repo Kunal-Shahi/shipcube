@@ -1,36 +1,76 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ShipCube web console
 
-## Getting Started
+The web console for ShipCube: Google sign-in, an optional "link your GCP project" step, the MCP setup guide, and the console screens (apps, app detail with load estimate, caps, access, monitoring and logs; AI providers; API tokens; billing).
 
-First, run the development server:
+Next.js 15 (App Router), React 19, TypeScript and Tailwind CSS 4. Design tokens and rules are in [`docs/design/DESIGN.md`](../../docs/design/DESIGN.md).
+
+Everything runs on **typed mock data** for now. No backend, Google credentials or GCP project is needed.
+
+## Run it
+
+Requires Node 20 or later.
 
 ```bash
+cd apps/web
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000. You land on the sign-in page. "Continue with Google" signs you in as a demo user through the mock auth provider. Use **Create an account** to go through onboarding (GCP linking) first.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Other scripts:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build   # production build
+npm run start   # serve the production build
+npm run lint    # ESLint (next/core-web-vitals + TypeScript)
+```
 
-## Learn More
+### Seeing empty and error states
 
-To learn more about Next.js, take a look at the following resources:
+Data pages accept a `state` query parameter so you can check the non-happy paths without a backend:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `/apps?state=empty`, `/apps?state=error`
+- `/billing?state=empty`, `/billing?state=error`
+- `/settings/tokens?state=empty`
+- `/apps/<id>/access?state=empty`, `/apps/<id>/logs?state=empty`, `/apps/<id>/monitoring?state=empty`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Loading states (skeletons) show on every navigation because the mock API waits 350 ms.
 
-## Deploy on Vercel
+## Layout
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```
+src/
+  app/
+    (auth)/            sign-in, sign-up and the server actions behind them
+    onboarding/        "Where should your apps run?" step after sign-up
+    (console)/         signed-in shell (sidebar) and every console page
+      apps/            list; [id]/ overview, access, monitoring, logs
+      setup/           MCP setup guide ("Connect your agent")
+      settings/        tokens, ai (providers and BYOK), gcp
+      billing/
+  components/          UI primitives (ui.tsx), charts, code blocks, GCP linker, token creator
+  lib/
+    auth/              AuthProvider interface + mock adapter
+    api.ts             async data functions (mocked); swap for fetch() calls to services/api
+    mock-data.ts       typed demo data built on the Olist dataset
+    types.ts           shared types the API is expected to return
+    mcp.ts             MCP endpoint, scopes, tool list and config snippets
+  middleware.ts        redirects to /sign-in when there is no session cookie
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Swapping the mocks
+
+**Auth.** Pages only use the `AuthProvider` interface in `src/lib/auth/types.ts` (`getSession`, `signInWithGoogle`, `completeOnboarding`, `signOut`). To use Auth.js, Firebase Auth or Identity Platform, add an adapter next to `mock.ts`, register it in `src/lib/auth/index.ts`, and set `AUTH_PROVIDER`. The mock adapter stores an unsigned session in a cookie and must never run in production.
+
+**Data.** Every page reads through `src/lib/api.ts`. Each function has the shape of the control-plane call it stands in for, so replacing a mock with a `fetch()` to `services/api` doesn't touch the pages.
+
+**MCP details.** The endpoint URL, token scopes and tool list live in `src/lib/mcp.ts`. The backend networking workstream owns the final values.
+
+## Environment
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AUTH_PROVIDER` | `mock` | Which auth adapter to use. Only `mock` exists today. |
+
+Never commit `.env` files; `.gitignore` excludes them.

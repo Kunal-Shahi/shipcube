@@ -59,18 +59,17 @@ const owner: AccessGrant = {
   addedAt: "2026-10-14T09:12:00Z",
 };
 
-function logs(appSlug: string, extra: Omit<LogLine, "id">[] = []): LogLine[] {
+function logs(appSlug: string, route: string, extra: Omit<LogLine, "id">[] = []): LogLine[] {
+  const [r1, r2] = [route.replace("{v}", "SP"), route.replace("{v}", "RJ")];
   const base: Omit<LogLine, "id">[] = [
     { ts: hoursAgo(26.2), level: "info", source: "build", message: `Building ${appSlug} from commit 8f3c2d1 (Dockerfile detected)` },
     { ts: hoursAgo(26.1), level: "info", source: "build", message: "Image pushed to us-central1-docker.pkg.dev/shipcube-apps/apps/" + appSlug + ":8f3c2d1 (142 MB)" },
-    { ts: hoursAgo(26.0), level: "info", source: "deploy", message: "Placement: T1 Serverless, 1 vCPU / 512 MiB, max 4 instances" },
     { ts: hoursAgo(25.9), level: "info", source: "deploy", message: "Revision " + appSlug + "-00007-kq2 serving 100% of traffic" },
-    { ts: hoursAgo(3.2), level: "info", source: "runtime", message: "GET /api/revenue?region=SP 200 184ms" },
+    { ts: hoursAgo(3.2), level: "info", source: "runtime", message: `GET ${r1} 200 184ms` },
     { ts: hoursAgo(3.1), level: "info", source: "gateway", message: "Access granted: maria@acme-analytics.com (group finance-team@)" },
     { ts: hoursAgo(2.7), level: "warn", source: "runtime", message: "Cold start 2.4s (instance scaled from 0)" },
-    { ts: hoursAgo(1.4), level: "info", source: "runtime", message: "Semantic query L1 share(orders.revenue) over orders.region compiled in 12ms, cache hit" },
-    { ts: hoursAgo(0.9), level: "info", source: "gateway", message: "AI gateway: muse-spark 1,204 tokens (summary panel)" },
-    { ts: minutesAgo(22), level: "info", source: "runtime", message: "GET /api/revenue?region=RJ 200 161ms" },
+    { ts: hoursAgo(1.4), level: "info", source: "runtime", message: "Semantic query L0 compiled in 12ms, cache hit" },
+    { ts: minutesAgo(22), level: "info", source: "runtime", message: `GET ${r2} 200 161ms` },
     { ts: minutesAgo(9), level: "warn", source: "gateway", message: "Access denied: alex@gmail.com is not on the access list" },
     { ts: minutesAgo(3), level: "info", source: "runtime", message: "GET / 200 48ms" },
     ...extra,
@@ -163,7 +162,10 @@ export const apps: AppDetail[] = [
       { id: "g4", kind: "domain", principal: "olist-partners.com.br", role: "viewer", addedBy: "kunal@acme-analytics.com", addedAt: "2026-10-21T15:20:00Z" },
     ],
     monitoring: monitoring({ latency: latencySeries(7, 70, 0.8, 1.6), dailyCost: dailySeries(3, 0.21) }),
-    logs: logs("regional-revenue-tracker"),
+    logs: logs("regional-revenue-tracker", "/api/revenue?region={v}", [
+      { ts: hoursAgo(26.0), level: "info", source: "deploy", message: "Placement: T1 Serverless, 1 vCPU / 512 MiB, max 4 instances" },
+      { ts: hoursAgo(0.9), level: "info", source: "gateway", message: "AI gateway: muse-spark 1,204 tokens (summary panel)" },
+    ]),
   },
   {
     id: "app_ssc02",
@@ -235,7 +237,7 @@ export const apps: AppDetail[] = [
         proposedMonthly: 22.9,
       },
     }),
-    logs: logs("seller-scorecard", [
+    logs: logs("seller-scorecard", "/sellers?state={v}", [
       { ts: minutesAgo(41), level: "error", source: "runtime", message: "GET /sellers?state=RJ 503 upstream request timeout after 10000ms" },
       { ts: minutesAgo(40), level: "warn", source: "runtime", message: "Concurrency 71/80 (89% of cap)" },
       { ts: minutesAgo(12), level: "warn", source: "runtime", message: "Cold start 3.1s (instance scaled from 0)" },
@@ -294,7 +296,7 @@ export const apps: AppDetail[] = [
       freshnessSlaMinutes: 24 * 60,
       coldStarts24h: 0,
     }),
-    logs: logs("weekly-ops-report"),
+    logs: logs("weekly-ops-report", "/?week=2026-W43&carrier={v}"),
   },
   {
     id: "app_csj04",
@@ -348,7 +350,7 @@ export const apps: AppDetail[] = [
       driftScore: 0.07,
       driftNote: "Share of customers scored high-risk rose from 11.2% to 12.0% over 7 runs. Within the expected range.",
     }),
-    logs: logs("churn-scoring-job"),
+    logs: logs("churn-scoring-job", "/run?segment={v}"),
   },
   {
     id: "app_dsa05",
@@ -458,7 +460,7 @@ export const apps: AppDetail[] = [
       driftScore: 0,
       driftNote: "No successful runs in the last 5 hours.",
     }),
-    logs: logs("support-ticket-triage", [
+    logs: logs("support-ticket-triage", "/tickets?team={v}", [
       { ts: hoursAgo(5.1), level: "error", source: "gateway", message: "LLM token cap reached: 150,000 of 150,000 tokens today. Requests to the AI gateway are blocked until 00:00 UTC." },
       { ts: hoursAgo(4.9), level: "error", source: "runtime", message: "POST /classify 429 ai_gateway: daily token cap reached" },
       { ts: minutesAgo(30), level: "error", source: "runtime", message: "POST /classify 429 ai_gateway: daily token cap reached" },
@@ -486,7 +488,7 @@ export const providers: ProviderConfig[] = [
     connected: true,
     keyHint: "fw_…9Q2c",
     baseUrl: "https://api.fireworks.ai/inference/v1",
-    defaultModel: "accounts/fireworks/models/llama-v4-maverick",
+    defaultModel: "accounts/fireworks/models/llama-v3p3-70b-instruct",
     addedAt: "2026-10-18T19:04:00Z",
   },
   {

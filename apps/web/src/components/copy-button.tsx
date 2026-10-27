@@ -30,14 +30,14 @@ export function CopyButton({ text, label = "Copy", className }: { text: string; 
   );
 }
 
-export function CodeBlock({ code, label, lang }: { code: string; label?: string; lang?: string }) {
+export function CodeBlock({ code, label, lang, wrap }: { code: string; label?: string; lang?: string; wrap?: boolean }) {
   return (
     <div className="overflow-hidden rounded-md border border-border bg-surface-2">
       <div className="flex items-center justify-between border-b border-border px-3 py-1">
         <span className="font-mono text-[11.5px] text-fg-subtle">{label ?? lang}</span>
         <CopyButton text={code} />
       </div>
-      <pre className="overflow-x-auto px-3 py-2.5 font-mono text-[12.5px] leading-5">
+      <pre className={cn("overflow-x-auto px-3 py-2.5 font-mono text-[12.5px] leading-5", wrap && "whitespace-pre-wrap break-words")}>
         <code>{code}</code>
       </pre>
     </div>

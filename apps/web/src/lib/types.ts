@@ -39,6 +39,7 @@ export interface AppSummary {
   sharedWith: number;
   lastDeployAt: string;
   deployedBy: string;
+  aiProvider: string;
 }
 
 export interface LoadEstimate {
@@ -128,7 +129,6 @@ export interface AppDetail extends AppSummary {
   access: AccessGrant[];
   monitoring: Monitoring;
   logs: LogLine[];
-  aiProvider: string;
 }
 
 export type ProviderId = "meta" | "openai-compatible" | "openai" | "anthropic";

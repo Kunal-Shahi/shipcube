@@ -32,7 +32,23 @@ export async function listApps(state?: DemoState): Promise<AppSummary[]> {
   await wait();
   if (state === "error") fail();
   if (state === "empty") return [];
-  return apps.map(({ estimate: _e, caps: _c, access: _a, monitoring: _m, logs: _l, usage: _u, ...summary }) => summary);
+  return apps.map((a) => ({
+    id: a.id,
+    name: a.name,
+    kind: a.kind,
+    tier: a.tier,
+    health: a.health,
+    url: a.url,
+    region: a.region,
+    billing: a.billing,
+    costMonthToDate: a.costMonthToDate,
+    spendCap: a.spendCap,
+    requests24h: a.requests24h,
+    sharedWith: a.sharedWith,
+    lastDeployAt: a.lastDeployAt,
+    deployedBy: a.deployedBy,
+    aiProvider: a.aiProvider,
+  }));
 }
 
 export async function getApp(id: string, state?: DemoState): Promise<AppDetail | null> {
