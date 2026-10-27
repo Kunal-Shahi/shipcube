@@ -95,7 +95,7 @@ class Caps(_Model):
 # --- operations --------------------------------------------------------------------
 
 # Same values as security's `operations` table. A rejected or expired approval cancels the operation.
-OpKind = Literal["estimate", "deploy", "delete", "set_caps", "set_access"]
+OpKind = Literal["estimate", "deploy", "rollback", "delete", "restore", "purge", "set_caps", "set_access"]
 OpStatus = Literal["awaiting_approval", "queued", "running", "succeeded", "failed", "cancelled"]
 ApprovalAction = Literal["first_linked_deploy", "cap_raise", "domain_grant", "delete_app"]
 
@@ -159,6 +159,10 @@ class DeployRequest(_Model):
     env: dict[str, str] | None = Field(None, description="Non-secret environment variables")
     secrets: dict[str, str] | None = Field(None, description="ENV_NAME -> secret name in ShipCube secrets (never values)")
     caps: Caps | None = None
+
+
+class RollbackRequest(_Model):
+    to: str = Field("previous", description='"previous", or a revision name from inspect_app status.revisions')
 
 
 class Grant(_Model):
@@ -231,6 +235,7 @@ class AccessBinding(BaseModel):
     principal: str
     role: str
     granted_at: str
+    sync_state: str | None = Field(None, description="pending until the IAP binding is applied")
 
 
 class AccessList(BaseModel):
@@ -274,6 +279,8 @@ class App(AppSummary):
     ai: AiConfig
     deleted_at: str | None = None
     restorable_until: str | None = Field(None, description="Soft-deleted apps can be restored from the console until then")
+    runtime: dict[str, Any] | None = Field(None, description="Live state from Cloud Run: ready, URL, revision, IAP, scaling")
+    revisions: list[dict[str, Any]] = Field(default_factory=list, description="Recent deployments, newest first (for rollback)")
 
 
 class EstimateResult(BaseModel):

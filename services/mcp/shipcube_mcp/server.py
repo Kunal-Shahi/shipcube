@@ -8,6 +8,7 @@ and tools reach the API in-process. Set SHIPCUBE_API_URL to call a separate API 
 
 from __future__ import annotations
 
+import contextlib
 import os
 
 import uvicorn
@@ -19,8 +20,6 @@ from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
-
-from shipcube_api.store import WORKSPACE_ID
 
 from .backend import Api
 from .data import DataBackend, default_backend, mount_data_tools
@@ -64,7 +63,7 @@ def build_server(api: Api, data: DataBackend | None = None) -> MCPServer:
                           resource_server_url=None),
     )
     register_tools(server, api)
-    mount_data_tools(server, api, data or default_backend(WORKSPACE_ID))
+    mount_data_tools(server, api, data if data is not None else default_backend())
     return server
 
 
@@ -86,6 +85,20 @@ def build_app() -> ASGIApp:
         from shipcube_api.app import app as api_app
 
         other = api_app  # serves /healthz and /v1/*
+
+    if not os.environ.get("SHIPCUBE_API_URL"):
+        from shipcube_api.app import shutdown, startup
+
+        inner_lifespan = mcp_app.router.lifespan_context
+
+        @contextlib.asynccontextmanager
+        async def combined(app_):  # migrations + durable worker, then the MCP session manager
+            startup()
+            async with inner_lifespan(app_):
+                yield
+            shutdown()
+
+        mcp_app.router.lifespan_context = combined
 
     async def app(scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan" or scope.get("path", "").rstrip("/") == "/mcp":

@@ -1,39 +1,93 @@
-"""ShipCube control-plane API: FastAPI skeleton over in-memory mock state.
+"""ShipCube control-plane API (FastAPI). Contract: openapi.yaml (tests/test_api.py keeps the routes
+in sync). The API is the only place that makes authorization decisions: every route checks the
+caller's scope, and Postgres row-level security (security's design) backs it up.
 
-The HTTP contract in openapi.yaml is the stable part (tests/test_contract.py checks the routes
-match it). The API is the only place that makes authorization decisions: every route needs a
-verified token with the right scope.
+Requests only write desired state and enqueue operations; the durable worker (worker.py) talks to
+GCP. Approvals (docs/research/networking.md §2.5): the first deploy to a linked project, a cap raise
+above the workspace default, a domain: grant and delete_app wait for a human in the console.
 """
 
 from __future__ import annotations
 
-import secrets
-from datetime import UTC, datetime, timedelta
+import logging
+import os
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .auth import Caller, tokens
+from . import auth, db, obs, store
+from .auth import Caller
+from .deploy.base import DeployError
 from .models import (
-    AccessChange, AccessResult, AiConfigRequest, AiConfigResult, App, AppList, AppName, AppSummary,
-    ApprovalDecision, Caps, CapsResult, DeployRequest, EstimateRequest, Logs, Me, Metrics, Operation, Upload,
-    UploadRequest,
+    AccessChange, AccessResult, AiConfigRequest, AiConfigResult, App, AppList, AppName, ApprovalDecision, Caps,
+    CapsResult, DeployRequest, EstimateRequest, Logs, Me, Metrics, Operation, RollbackRequest, Upload, UploadRequest,
 )
-from .store import ENFORCED_BY, Conflict, caps_above_default, store
+from .settings import settings
+from .store_runtime import deployer, start_embedded_worker, stop_embedded_worker
+from .telemetry import TelemetryUnavailable, telemetry
 
-app = FastAPI(title="ShipCube control-plane API", version="v1")
+log = logging.getLogger("shipcube.api")
 
-# Approvals (docs/research/networking.md §2.5). Agents act directly on reads, cap reductions, access
-# removals and ShipCube-project deploys within default caps. These wait for a human in the console:
-# the first deploy to a linked GCP project, a cap raise above the workspace default, a domain: grant,
-# and delete_app (a soft delete, restorable for 7 days).
+
+def startup() -> None:
+    """Also called by the combined MCP + API server, whose lifespan the API app doesn't get."""
+    obs.setup_logging()
+    db.check_schema(migrate_if_dev=settings.dev_mode)  # production: migrations run via infra/db/migrate.sh
+    deployer()  # fail at startup, not on the first request, if the backend is misconfigured
+    if settings.dev_mode and (tok := os.environ.get("SHIPCUBE_DEV_CONSOLE_TOKEN")):
+        with db.tx(role=db.APP) as conn:  # DEV_MODE stand-in for a console login, for the bootstrap user
+            m = conn.execute("select m.user_id, m.workspace_id from memberships m join users u on u.id = m.user_id"
+                             " where u.email = %s order by m.created_at limit 1",
+                             (os.environ.get("SHIPCUBE_DEV_CONSOLE_EMAIL", ""),)).fetchone()
+        if m:
+            auth.register_dev_session(tok, str(m["user_id"]), str(m["workspace_id"]))
+    start_embedded_worker()
+    log.info("api started", extra={"dev_mode": settings.dev_mode, "backend": settings.backend})
+
+
+def shutdown() -> None:
+    stop_embedded_worker()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    startup()
+    yield
+    shutdown()
+
+
+app = FastAPI(title="ShipCube control-plane API", version="v1", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    rid = obs.new_request_id(request.headers)
+    t_req, t_trace = obs.request_id.set(rid), obs.trace_id.set(obs.trace_from_headers(request.headers))
+    t0 = time.monotonic()
+    try:
+        response = await call_next(request)
+    finally:
+        obs.request_id.reset(t_req)
+        obs.trace_id.reset(t_trace)
+    response.headers["X-Request-Id"] = rid
+    if request.url.path != "/healthz":
+        log.info("request", extra={"request_id": rid, "method": request.method, "path": request.url.path,
+                                   "status": response.status_code, "ms": round((time.monotonic() - t0) * 1000)})
+    return response
 
 
 class ApiError(HTTPException):
     def __init__(self, status: int, code: str, message: str) -> None:
         super().__init__(status, {"code": code, "message": message})
+
+
+def _err(status: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse({"error": {"code": code, "message": message}}, status_code=status)
 
 
 @app.exception_handler(HTTPException)
@@ -45,21 +99,44 @@ async def _http_error(_: Request, exc: HTTPException) -> JSONResponse:
 @app.exception_handler(RequestValidationError)
 async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
     msg = "; ".join(f"{'.'.join(str(p) for p in e['loc'][1:])}: {e['msg']}" for e in exc.errors())
-    return JSONResponse({"error": {"code": "invalid_argument", "message": msg}}, status_code=400)
+    return _err(400, "invalid_argument", msg)
 
 
-@app.exception_handler(Conflict)
-async def _conflict(_: Request, exc: Conflict) -> JSONResponse:
-    return JSONResponse({"error": {"code": "conflict", "message": str(exc)}}, status_code=409)
+@app.exception_handler(store.Conflict)
+async def _conflict(_: Request, exc: store.Conflict) -> JSONResponse:
+    return _err(409, "conflict", str(exc))
+
+
+@app.exception_handler(store.NotFound)
+async def _not_found(_: Request, exc: store.NotFound) -> JSONResponse:
+    return _err(404, "not_found", str(exc))
+
+
+@app.exception_handler(store.LimitExceeded)
+async def _limit(_: Request, exc: store.LimitExceeded) -> JSONResponse:
+    return _err(429, "resource_exhausted", str(exc))
+
+
+@app.exception_handler(TelemetryUnavailable)
+async def _telemetry(_: Request, exc: TelemetryUnavailable) -> JSONResponse:
+    return _err(501, "telemetry_unavailable", str(exc))
+
+
+@app.exception_handler(DeployError)
+async def _deploy_error(_: Request, exc: DeployError) -> JSONResponse:
+    status = {"not_found": 404, "invalid_argument": 400, "rate_limited": 503, "unavailable": 503}.get(exc.code, 502)
+    log.warning("cloud error on request path", extra={"code": exc.code, "error": str(exc)[:500]})
+    return _err(status, exc.code, str(exc))
 
 
 # --- auth ------------------------------------------------------------------------------
 
 
-def caller(authorization: Annotated[str | None, Header()] = None) -> Caller:
+def caller(authorization: Annotated[str | None, Header()] = None,
+           x_shipcube_workspace: Annotated[str | None, Header()] = None) -> Caller:
     if not authorization or not authorization.startswith("Bearer "):
         raise ApiError(401, "unauthenticated", "missing bearer token")
-    c = tokens.verify(authorization.removeprefix("Bearer ").strip())
+    c = auth.verify(authorization.removeprefix("Bearer ").strip(), x_shipcube_workspace)
     if c is None:
         raise ApiError(401, "unauthenticated", "invalid, expired or revoked token")
     return c
@@ -74,20 +151,15 @@ def scope(required: str):
     return check
 
 
-IdemKey = Annotated[str | None, Header(alias="Idempotency-Key", max_length=64)]
-
-
-def get_app(name: str, include_deleted: bool = False) -> dict:
-    a = store.apps.get(name)
-    if a is None or (a["deleted_at"] and not include_deleted):
-        raise ApiError(404, "not_found", f"app {name} not found")
-    return a
-
-
 def console_session(c: Annotated[Caller, Depends(caller)]) -> Caller:
     if c.via != "console":
         raise ApiError(403, "permission_denied", "only a human console session can do this; approve at the approval_url")
+    if c.role not in ("owner", "admin"):
+        raise ApiError(403, "permission_denied", "approvals need the admin role in this workspace")
     return c
+
+
+IdemKey = Annotated[str | None, Header(alias="Idempotency-Key", max_length=64)]
 
 
 def accepted(op: Operation, response: Response) -> Operation:
@@ -102,159 +174,115 @@ def accepted(op: Operation, response: Response) -> Operation:
 
 @app.get("/healthz", include_in_schema=False)
 def healthz() -> dict:
+    with db.tx(role=db.APP) as conn:
+        conn.execute("select 1")
     return {"ok": True}
 
 
 @app.get("/v1/me", response_model=Me)
 def me(c: Annotated[Caller, Depends(caller)]):
     # No scope needed: any valid token may see who it belongs to and what it can do.
-    return {**store.me, "token": {"id": c.token_id, "scopes": sorted(c.scopes), "expires_at": c.expires_at}}
+    return store.me(c)
 
 
 @app.post("/v1/uploads", response_model=Upload, status_code=201)
 def create_upload(body: UploadRequest, c: Annotated[Caller, Depends(scope("apps:deploy"))]):
-    upload_id = f"upl_{secrets.token_hex(4)}"
-    return {
-        "upload_id": upload_id,
-        "method": "PUT",
-        # Production: a V4 signed URL on a private GCS bucket, one object, 15-minute expiry.
-        "url": f"https://storage.googleapis.com/shipcube-uploads/{upload_id}.tgz?X-Goog-Signature=mock",
-        "headers": {"Content-Type": body.content_type},
-        "max_bytes": 100 * 1024 * 1024,
-        "expires_at": (datetime.now(UTC) + timedelta(minutes=15)).isoformat(timespec="seconds").replace("+00:00", "Z"),
-    }
+    # A V4 signed PUT URL for one object in the private uploads bucket, valid 15 minutes.
+    return deployer().create_upload(c.workspace_id, body.content_type)
 
 
 @app.post("/v1/estimates", response_model=Operation, status_code=202)
 def start_estimate(body: EstimateRequest, response: Response, c: Annotated[Caller, Depends(scope("apps:read"))],
                    idem: IdemKey = None):
-    op = store.start_operation(c.workspace_id, "estimate", body.app, body.model_dump(mode="json"), idem)
-    return accepted(op, response)
+    return accepted(store.start_estimate(c, body.model_dump(mode="json"), idem), response)
 
 
 @app.post("/v1/apps/{app}/deployments", response_model=Operation, status_code=202)
 def deploy(app: AppName, body: DeployRequest, response: Response,
            c: Annotated[Caller, Depends(scope("apps:deploy"))], idem: IdemKey = None):
-    target = body.target or next(t["id"] for t in store.me["gcp_targets"] if t["default"])
-    kind = store.target_kind(target)
-    if kind is None:
-        raise ApiError(400, "invalid_argument", f"unknown target {target}; see whoami")
-    reasons = []
-    if kind == "linked" and (c.workspace_id, target) not in store.approved_targets:
-        reasons.append(("first_linked_deploy", f"first deploy to linked GCP project {target}"))
-    reasons += caps_above_default(body.caps.model_dump(exclude_none=True) if body.caps else {})
-    payload = {**body.model_dump(mode="json"), "target": target}
-    op = store.start_operation(c.workspace_id, "deploy", app, payload, idem, reasons)
-    return accepted(op, response)
+    return accepted(store.start_deploy(c, app, body.model_dump(mode="json"), idem), response)
+
+
+@app.post("/v1/apps/{app}/rollbacks", response_model=Operation, status_code=202)
+def rollback(app: AppName, body: RollbackRequest, response: Response,
+             c: Annotated[Caller, Depends(scope("apps:deploy"))], idem: IdemKey = None):
+    return accepted(store.start_rollback(c, app, body.to, idem), response)
 
 
 @app.get("/v1/operations/{op_id}", response_model=Operation)
 def get_operation(op_id: str, c: Annotated[Caller, Depends(scope("apps:read"))]):
-    op = store.get_operation(op_id)
-    if op is None:
-        raise ApiError(404, "not_found", f"operation {op_id} not found")
-    return op
+    return store.get_operation(c, op_id)
 
 
 @app.post("/v1/operations/{op_id}/cancel", response_model=Operation)
 def cancel_operation(op_id: str, c: Annotated[Caller, Depends(scope("apps:deploy"))]):
-    op = store.cancel_operation(op_id)
-    if op is None:
-        raise ApiError(404, "not_found", f"operation {op_id} not found")
-    return op
+    return store.cancel_operation(c, op_id)
 
 
 @app.post("/v1/operations/{op_id}/approve", response_model=Operation)
 def approve(op_id: str, body: ApprovalDecision, c: Annotated[Caller, Depends(console_session)]):
-    op = store.decide(op_id, approve=True)
-    if op is None:
-        raise ApiError(404, "not_found", f"operation {op_id} not found")
-    return op
+    return store.decide(c, op_id, True, body.comment)
 
 
 @app.post("/v1/operations/{op_id}/reject", response_model=Operation)
 def reject(op_id: str, body: ApprovalDecision, c: Annotated[Caller, Depends(console_session)]):
-    op = store.decide(op_id, approve=False)
-    if op is None:
-        raise ApiError(404, "not_found", f"operation {op_id} not found")
-    return op
+    return store.decide(c, op_id, False, body.comment)
 
 
 @app.get("/v1/apps", response_model=AppList)
 def list_apps(c: Annotated[Caller, Depends(scope("apps:read"))]):
-    return {"apps": [AppSummary.model_validate(a) for a in store.apps.values()]}
+    return {"apps": store.list_apps(c)}
 
 
 @app.get("/v1/apps/{app}", response_model=App)
 def app_status(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))]):
-    return get_app(app, include_deleted=True)
+    view = store.get_app(c, app, include_deleted=True)
+    try:
+        view["runtime"] = store.live_status(deployer(), c, app) if view["revision"] else None
+    except DeployError as e:  # the record is still useful when Cloud Run can't be reached
+        log.warning("live status unavailable", extra={"code": e.code, "error": str(e)[:300]})
+        view["runtime"] = {"error": e.code, "message": str(e)[:300]}
+    return view
 
 
 @app.delete("/v1/apps/{app}", response_model=Operation, status_code=202)
 def delete_app(app: AppName, response: Response, c: Annotated[Caller, Depends(scope("apps:deploy"))],
                idem: IdemKey = None):
-    get_app(app)
-    reasons = [("delete_app", "delete_app always needs approval (soft delete, restorable for 7 days)")]
-    return accepted(store.start_operation(c.workspace_id, "delete", app, {}, idem, reasons), response)
+    return accepted(store.delete_app(c, app, idem), response)
 
 
-@app.post("/v1/apps/{app}/restore", response_model=App)
-def restore(app: AppName, c: Annotated[Caller, Depends(console_session)]):
-    a = get_app(app, include_deleted=True)
-    if not a["deleted_at"]:
-        raise ApiError(409, "conflict", f"app {app} is not deleted")
-    if a["restorable_until"] < datetime.now(UTC).isoformat():
-        raise ApiError(410, "gone", f"app {app} can no longer be restored")
-    return store.restore(app)
+@app.post("/v1/apps/{app}/restore", response_model=Operation, status_code=202)
+def restore(app: AppName, response: Response, c: Annotated[Caller, Depends(console_session)]):
+    return accepted(store.restore_app(c, app), response)
 
 
 @app.get("/v1/apps/{app}/logs", response_model=Logs)
 def logs(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))],
          severity: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = None,
          limit: Annotated[int, Query(ge=1, le=500)] = 50, page_token: str | None = None):
-    get_app(app)
-    return {"entries": store.logs(app, limit, severity), "next_page_token": None}
+    return telemetry().logs(store.get_app(c, app), limit, severity, page_token)
 
 
 @app.get("/v1/apps/{app}/metrics", response_model=Metrics)
 def metrics(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))],
             window: Literal["15m", "1h", "24h", "7d", "30d"] = "1h"):
-    get_app(app)
-    return store.metrics(app, window)
+    return telemetry().metrics(store.get_app(c, app), window)
 
 
 @app.patch("/v1/apps/{app}/caps", response_model=CapsResult)
 def set_caps(app: AppName, body: Caps, c: Annotated[Caller, Depends(scope("caps:write"))], idem: IdemKey = None):
-    a = get_app(app)
-    change = body.model_dump(exclude_none=True)
-    op = None
-    if reasons := caps_above_default(change):
-        # The whole change waits, so the caps never end up half-applied.
-        op = store.start_operation(c.workspace_id, "set_caps", app, {"caps": change}, idem, reasons)
-    else:
-        store.apply_caps(app, change)
-    return {"caps": a["caps"], "enforced_by": {k: ENFORCED_BY.get(k, "not enforced (unknown cap)") for k in a["caps"]},
-            "operation": op}
+    caps, op = store.set_caps(c, app, body.model_dump(exclude_none=True), idem)
+    return {"caps": caps, "enforced_by": {k: store.ENFORCED_BY.get(k, "not enforced") for k in caps}, "operation": op}
 
 
 @app.patch("/v1/apps/{app}/access", response_model=AccessResult)
 def set_access(app: AppName, body: AccessChange, c: Annotated[Caller, Depends(scope("access:write"))],
                idem: IdemKey = None):
-    a = get_app(app)
-    if f"user:{store.me['email']}" in body.remove:
-        raise ApiError(400, "invalid_argument", "cannot remove the owner")
-    domain = [g.model_dump() for g in body.add if g.principal.startswith("domain:")]
-    direct = [g.model_dump() for g in body.add if not g.principal.startswith("domain:")]
-    store.apply_access(app, direct, body.remove)  # removals and user/group grants apply now
-    op = None
-    if domain:
-        reasons = [("domain_grant", f"grant to a whole domain ({g['principal']})") for g in domain]
-        op = store.start_operation(c.workspace_id, "set_access", app, {"add": domain}, idem, reasons)
-    return {"access": a["access"], "operation": op}
+    access, op = store.set_access(c, app, [g.model_dump() for g in body.add], body.remove, idem)
+    return {"access": access, "operation": op}
 
 
 @app.put("/v1/apps/{app}/ai", response_model=AiConfigResult)
 def ai_config(app: AppName, body: AiConfigRequest, c: Annotated[Caller, Depends(scope("secrets:write"))]):
-    a = get_app(app)
-    a["ai"] = {"provider": body.provider, "model": body.model, "key_secret": body.key_secret}
-    return {"ai": a["ai"], "gateway_url": f"https://ai.shipcube.dev/v1/apps/{app}"}
+    ai = store.set_ai(c, app, body.provider, body.model, body.key_secret, body.base_url)
+    return {"ai": ai, "gateway_url": f"https://ai.shipcube.dev/v1/apps/{app}"}
