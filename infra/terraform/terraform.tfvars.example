@@ -1,0 +1,7 @@
+control_project_id = "shipcube-control-ks"
+apps_project_id    = "shipcube-apps-ks"
+billing_account_id = "000000-000000-000000"
+region             = "asia-south1"
+existing_budget_id = "00000000-0000-0000-0000-000000000000"
+# Every project billed to the account, control project last.
+killswitch_projects = ["shipcube-apps-ks", "OTHER-PROJECT", "shipcube-control-ks"]
