@@ -4,7 +4,7 @@ Infrastructure as code for ShipCube's own GCP projects, plus the scripts users r
 
 **Status (Oct 28): applied.** Kunal approved the plan and cost and ran `terraform apply`; a follow-up `terraform plan` shows no changes. State is in `gs://shipcube-control-ks-tfstate` (versioned, prefix `shipcube`). Cloud SQL connection name: `shipcube-control-ks:asia-south1:shipcube-pg`. The budget kill switch is live (see `budget-killswitch/`).
 
-Database (Oct 28): roles bootstrapped and migrations `0001`–`0002` applied; see `db/` below.
+Database (Oct 28): roles bootstrapped; migrations `0001`–`0004` applied and verified with `db/checks/check.sh`; see `db/` below.
 
 | Path | What it is |
 |---|---|
@@ -71,4 +71,10 @@ infra/db/bootstrap.sh                                   # once per instance, as 
 API_DIR=services/api PYTHON=python3.12 infra/db/migrate.sh   # every migration, as sc-migrator
 ```
 
-`migrate.sh` impersonates `sc-migrator`, so the caller must be in `migration_operators` (Terraform). It applies `owner_defaults.sql` first, then the API's checksummed, advisory-locked runner. The `postgres` password is only in Secret Manager (`sql-postgres-password`); rotate it by bumping `postgres_password_version`.
+`migrate.sh` impersonates `sc-migrator`, so the caller must be in `migration_operators` (Terraform). It applies `owner_defaults.sql` first, then the API's checksummed, advisory-locked runner. After any migration, verify as the API's role (everything runs in a rolled-back transaction):
+
+```bash
+LOGIN=sc-api infra/db/checks/check.sh
+```
+
+The `postgres` password is only in Secret Manager (`sql-postgres-password`); rotate it by bumping `postgres_password_version`.
