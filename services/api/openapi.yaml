@@ -1,0 +1,264 @@
+openapi: 3.1.0
+info:
+  title: ShipCube control-plane API
+  version: v1
+  description: |
+    The contract between the MCP server, the web console and the control plane.
+    Long-running work (estimates, deploys, deletes) returns 202 with an Operation,
+    modelled on google.longrunning.Operation (AIP-151). Mutating POST/DELETE calls
+    accept an Idempotency-Key header (draft-ietf-httpapi-idempotency-key-header).
+servers:
+  - url: https://api.shipcube.dev
+  - url: http://127.0.0.1:8081
+security:
+  - bearer: []
+paths:
+  /v1/me:
+    get:
+      summary: Current user, workspace, GCP targets and limits
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+  /v1/uploads:
+    post:
+      summary: Create a signed URL for a source tarball upload
+      requestBody: { content: { application/json: { schema: { type: object, properties: { content_type: { type: string } } } } } }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Upload' } } } }
+  /v1/estimates:
+    post:
+      summary: Start a load estimate (profile + classify + price)
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { $ref: '#/components/schemas/Source' }
+                app: { type: string }
+                expected_users: { type: integer }
+                schedule: { type: string }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '409': { $ref: '#/components/responses/Error' }
+  /v1/apps:
+    get:
+      summary: List apps
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, properties: { apps: { type: array, items: { $ref: '#/components/schemas/AppSummary' } } } } } }
+  /v1/apps/{app}:
+    parameters: [{ $ref: '#/components/parameters/App' }]
+    get:
+      summary: Get one app
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/App' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+    delete:
+      summary: Tear down an app
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+  /v1/apps/{app}/deployments:
+    parameters: [{ $ref: '#/components/parameters/App' }]
+    post:
+      summary: Build and deploy a new revision
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source]
+              properties:
+                source: { $ref: '#/components/schemas/Source' }
+                estimate_id: { type: string }
+                tier: { type: string, enum: [T0, T1, T2, T3, T4] }
+                target: { type: string, description: GCP target id from /v1/me }
+                region: { type: string, default: us-central1 }
+                env: { type: object, additionalProperties: { type: string } }
+                secrets: { type: object, additionalProperties: { type: string }, description: ENV -> secret name }
+                caps: { $ref: '#/components/schemas/Caps' }
+      responses:
+        '202': { $ref: '#/components/responses/Accepted' }
+        '409': { $ref: '#/components/responses/Error' }
+  /v1/operations/{id}:
+    get:
+      summary: Poll an operation
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Operation' } } } }
+  /v1/operations/{id}/cancel:
+    post:
+      summary: Cancel an operation
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Operation' } } } }
+  /v1/apps/{app}/logs:
+    parameters: [{ $ref: '#/components/parameters/App' }]
+    get:
+      summary: Recent logs
+      parameters:
+        - { name: severity, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 500 } }
+        - { name: page_token, in: query, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+  /v1/apps/{app}/metrics:
+    parameters: [{ $ref: '#/components/parameters/App' }]
+    get:
+      summary: Health, cost and cap usage
+      parameters: [{ name: window, in: query, schema: { type: string, enum: [15m, 1h, 24h, 7d, 30d] } }]
+      responses:
+        '200': { description: OK }
+  /v1/apps/{app}/caps:
+    parameters: [{ $ref: '#/components/parameters/App' }]
+    patch:
+      summary: Update caps (merge)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Caps' } } } }
+      responses:
+        '200': { description: OK }
+  /v1/apps/{app}/access:
+    parameters: [{ $ref: '#/components/parameters/App' }]
+    post:
+      summary: Grant access
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [principal], properties: { principal: { type: string }, role: { type: string, enum: [viewer, editor] } } }
+      responses:
+        '201': { description: Created }
+  /v1/apps/{app}/access/{principal}:
+    parameters:
+      - { $ref: '#/components/parameters/App' }
+      - { name: principal, in: path, required: true, schema: { type: string } }
+    delete:
+      summary: Revoke access
+      responses:
+        '200': { description: OK }
+  /v1/apps/{app}/ai:
+    parameters: [{ $ref: '#/components/parameters/App' }]
+    put:
+      summary: Set the AI gateway provider for an app
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider: { type: string, enum: [meta, openai_compatible, openai, anthropic] }
+                model: { type: string }
+                key_secret: { type: string }
+                base_url: { type: string }
+      responses:
+        '200': { description: OK }
+  /v1/datasources:
+    post:
+      summary: Register a data source
+      responses:
+        '201': { description: Created }
+  /v1/query:
+    post:
+      summary: Run a semantic-layer query
+      responses:
+        '200': { description: OK }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: Personal access token (sc_pat_...) in phase 1; OAuth 2.1 access token later.
+  parameters:
+    App: { name: app, in: path, required: true, schema: { type: string, pattern: '^[a-z][a-z0-9-]{1,38}[a-z0-9]$' } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 64 } }
+  responses:
+    Accepted:
+      description: Operation started (or the existing operation for a repeated Idempotency-Key)
+      headers:
+        Location: { schema: { type: string } }
+        Retry-After: { schema: { type: integer } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/Operation' } } }
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { type: object, properties: { error: { type: object, properties: { code: { type: string }, message: { type: string } } } } }
+  schemas:
+    Source:
+      oneOf:
+        - { type: object, required: [kind, upload_id], properties: { kind: { const: upload }, upload_id: { type: string } } }
+        - { type: object, required: [kind, url], properties: { kind: { const: git }, url: { type: string }, ref: { type: string }, subdir: { type: string } } }
+        - { type: object, required: [kind, uri], properties: { kind: { const: image }, uri: { type: string } } }
+        - type: object
+          required: [kind, files]
+          properties:
+            kind: { const: inline }
+            files: { type: array, maxItems: 50, items: { type: object, properties: { path: { type: string }, content: { type: string } } } }
+    Caps:
+      type: object
+      properties:
+        max_instances: { type: integer, minimum: 0, maximum: 10 }
+        concurrency: { type: integer, minimum: 1, maximum: 1000 }
+        requests_per_minute: { type: integer, minimum: 1 }
+        monthly_spend_usd: { type: number, minimum: 0 }
+        cpu: { type: string, enum: ['0.5', '1', '2', '4'] }
+        memory: { type: string }
+        timeout_s: { type: integer, minimum: 1, maximum: 3600 }
+    Operation:
+      type: object
+      required: [id, kind, status, done, progress, poll_after_s]
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [estimate, deploy, delete] }
+        app: { type: [string, 'null'] }
+        status: { type: string, enum: [queued, running, succeeded, failed, cancelled] }
+        done: { type: boolean }
+        progress:
+          type: object
+          properties: { step: { type: string }, completed_steps: { type: integer }, total_steps: { type: integer }, message: { type: string } }
+        steps: { type: array, items: { type: object, properties: { name: { type: string }, status: { type: string } } } }
+        result: { description: Kind-specific result, present when status is succeeded }
+        error: { type: [object, 'null'], properties: { code: { type: string }, message: { type: string } } }
+        poll_after_s: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Upload:
+      type: object
+      properties:
+        upload_id: { type: string }
+        method: { const: PUT }
+        url: { type: string }
+        headers: { type: object, additionalProperties: { type: string } }
+        max_bytes: { type: integer }
+        expires_at: { type: string, format: date-time }
+    Me:
+      type: object
+      properties:
+        user_id: { type: string }
+        email: { type: string }
+        workspace: { type: object, properties: { id: { type: string }, name: { type: string } } }
+        gcp_targets:
+          type: array
+          items: { type: object, properties: { id: { type: string }, project: { type: string }, kind: { type: string, enum: [shipcube, linked] }, default: { type: boolean } } }
+        limits: { type: object, properties: { max_apps: { type: integer }, monthly_spend_usd: { type: number } } }
+    AppSummary:
+      type: object
+      properties: { name: { type: string }, url: { type: string }, tier: { type: string }, status: { type: string }, updated_at: { type: string } }
+    App:
+      allOf:
+        - $ref: '#/components/schemas/AppSummary'
+        - type: object
+          properties:
+            target: { type: string }
+            region: { type: string }
+            revision: { type: string }
+            image: { type: string }
+            caps: { $ref: '#/components/schemas/Caps' }
+            access: { type: array, items: { type: object, properties: { principal: { type: string }, role: { type: string }, granted_at: { type: string } } } }
+            ai: { type: object, properties: { provider: { type: string }, model: { type: string }, key_secret: { type: [string, 'null'] } } }
