@@ -107,7 +107,7 @@ The compiler builds a relational IR on sqlglot and emits SQL for each dialect. E
 | T3 Always-on API | apps other systems call | Cloud Run (min instances) or GKE Autopilot |
 | T4 Heavy compute | ML or GPU work | Cloud Run GPU or GKE Autopilot GPU |
 
-Placement outputs a tier, resource requests, a monthly cost estimate and its reasoning. The user can always override it. For the hackathon, T0–T2 are deployed for real; T3 and T4 are shown as placement decisions only.
+Placement outputs a tier, resource requests, a monthly cost estimate and its reasoning. The user can always override it. T0–T2 run on Cloud Run services and jobs. T3 and T4 run on Cloud Run (minimum instances, GPU) first; GKE Autopilot is added only for workloads Cloud Run cannot serve (see Kubernetes below).
 
 ## 5. Continuous monitoring
 
