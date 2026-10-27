@@ -8,6 +8,39 @@ Each workstream runs in its own Claude Code session, on its own branch, and open
 | **Backend networking** | `docs/research/networking.md`, `services/mcp/**`, `services/api/**` (design and skeleton) | MCP transport and auth; control-plane API; request flow from agent → MCP → API → GCP; how user apps are reached (domains, ingress, proxy) |
 | **Infra and security** | `docs/research/security-tenancy.md`, `docs/research/database-design.md`, `infra/**`, `services/gateway/**` (design) | Who can access what; Google SSO; linking a user's own GCP project; secrets; the database schema that follows from all of this |
 | **Language trade-offs** | `docs/research/language-tradeoffs.md`, `research/bench/**` | Go vs Python 3 for each component, with small benchmarks and a recommendation weighted by how fast we can ship in 10 days |
+| **Data layer** | the separate repo [Kunal-Shahi/shipcube-data](https://github.com/Kunal-Shahi/shipcube-data) | Semantic layer whose models live in a catalog database and change through model migrations; one warehouse database with multiple schemas and partitions; typed query levels L0–L3; MCP tools for data. It replaces `packages/semantic/` in this repo |
+
+## Team roster
+
+Kunal is the lead and makes every product and merge decision. Each teammate is a Claude Code session.
+
+| Teammate | Session name | Branch / PR | Status |
+|---|---|---|---|
+| Frontend | `frontend` | [#3](https://github.com/Kunal-Shahi/shipcube/pull/3) | Console on mock data; auth behind an adapter interface |
+| Backend networking | `networking` | [#1](https://github.com/Kunal-Shahi/shipcube/pull/1) | MCP stub (17 tools) + API skeleton; built in TypeScript |
+| Infra and security | `security` | [#2](https://github.com/Kunal-Shahi/shipcube/pull/2) | Tenancy research, DB schema, Terraform skeleton |
+| Language trade-offs | `language` | [#4](https://github.com/Kunal-Shahi/shipcube/pull/4) | Recommends Python for the backend, Go for the gateway |
+| Data layer | `data-layer` | shipcube-data repo | In progress |
+
+## Interfaces between teammates
+
+- **Frontend ↔ security:** sign-in uses Identity Platform (Google provider). The frontend adds an Identity Platform adapter next to `apps/web/src/lib/auth/mock.ts`. The security doc owns token minting, invites and signup gating.
+- **Frontend ↔ networking:** the console calls the control-plane API (`services/api` OpenAPI spec). The MCP setup guide must match the real endpoint, PAT format (`sc_pat_…`) and tool list in `docs/research/networking.md`.
+- **Networking ↔ security:** the API is the only place that makes authorization decisions. Security owns the token, grant and audit tables in `docs/research/database-design.md`. Networking's access-proxy plans must match the IAP decision and the `services/gateway` design.
+- **Networking ↔ data layer:** the data layer's MCP tools (`list_cubes`, `describe_cube`, `query`, `propose_migration`, `apply_migration`, `search_values`) are mounted on ShipCube's MCP server. The data layer exposes them as a Python package the MCP server can call in-process.
+- **Security ↔ data layer:** warehouse row-level security is injected as filters from the caller's identity and grants. Tenant-to-schema routing uses workspace ids from the security schema.
+- **Everyone ↔ language:** follow the language decision once Kunal approves it.
+
+## Open decisions (Kunal)
+
+1. **Language:** PR #4 recommends Python for the MCP server and API, but PR #1 built them in TypeScript. Until Kunal decides, don't build new code on either side of this.
+2. **Merge order** for PRs #1–#4.
+
+## How to coordinate
+
+- Read this file and the other teammates' docs (on their branches or PRs) before changing an interface.
+- If you need something from another teammate, write it in your PR description under **Needs from other workstreams** and tell Kunal. Don't edit their files.
+- Teammates can't message each other directly. Kunal relays messages, or the lead session does.
 
 ## Shared decisions (already made)
 
