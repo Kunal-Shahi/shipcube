@@ -69,12 +69,21 @@ def mint_pat(user_id: str, workspace_id: str, scopes: list[str], name: str = "mc
     m = TOKEN_RE.match(token)
     if not m or m[1] != "pat":
         raise ValueError("token must look like sc_pat_<8 alphanumerics>_<32+ url-safe chars>")
-    with db.worker_tx() as conn:  # operator tooling (admin CLI); the console will mint through its own session
-        conn.execute(
-            "insert into api_tokens (id, workspace_id, user_id, kind, name, prefix, token_hmac, scopes, expires_at)"
-            " values (%s, %s, %s, 'pat', %s, %s, %s, %s, now() + make_interval(days => %s))",
-            (uuid.uuid4(), workspace_id, user_id, name, f"sc_pat_{m[2]}", digest(m[3]), list(scopes), ttl_days))
+    with db.worker_tx() as conn:  # operator tooling (admin CLI); the console mints through mint_pat_in
+        insert_pat(conn, token, user_id, workspace_id, scopes, name, ttl_days)
     return token
+
+
+def insert_pat(conn, token: str, user_id: str, workspace_id: str, scopes: list[str], name: str,
+               ttl_days: int) -> dict:
+    """Store a PAT (HMAC only) on the given connection and return its row (without the secret)."""
+    m = TOKEN_RE.match(token)
+    assert m and m[1] == "pat"
+    return conn.execute(
+        "insert into api_tokens (id, workspace_id, user_id, kind, name, prefix, token_hmac, scopes, expires_at)"
+        " values (%s, %s, %s, 'pat', %s, %s, %s, %s, now() + make_interval(days => %s))"
+        " returning id, name, prefix, scopes, created_at, expires_at, last_used_at",
+        (uuid.uuid4(), workspace_id, user_id, name, f"sc_pat_{m[2]}", digest(m[3]), list(scopes), ttl_days)).fetchone()
 
 
 def _membership(conn, user_id: str, workspace_id: str | None) -> dict | None:
