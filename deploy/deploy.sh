@@ -83,7 +83,10 @@ for k, v in sorted(json.load(sys.stdin).items()):
     print(f"            - {{name: {k}, value: \"{v}\"}}")')"
   export PROFILER_ENV
   apply worker
-  # The uptime check calls /healthz with an OIDC token minted by the Monitoring service agent.
+  # The uptime check calls /healthz with an OIDC token minted by the Monitoring service agent,
+  # which Google creates on first use; make sure it exists before granting it.
+  curl -fsS -X POST -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "x-goog-user-project: $PROJECT" \
+    "https://serviceusage.googleapis.com/v1beta1/projects/$PROJECT/services/monitoring.googleapis.com:generateServiceIdentity" >/dev/null
   gcloud run services add-iam-policy-binding shipcube-worker --project "$PROJECT" --region "$REGION" \
     --member "serviceAccount:service-$PROJECT_NUMBER@gcp-sa-monitoring-notification.iam.gserviceaccount.com" \
     --role roles/run.invoker --quiet >/dev/null
@@ -110,7 +113,7 @@ echo "Health:"
 for svc in console mcp gateway worker; do
   want "$svc" || continue
   url="$(run_url "shipcube-$svc")"
-  path=/healthz; [ "$svc" = console ] && path=/api/healthz
+  path=/health; [ "$svc" = console ] && path=/sign-in  # /healthz is reserved on run.app URLs
   auth=()
   [ "$svc" = worker ] && auth=(-H "Authorization: Bearer $(gcloud auth print-identity-token)")
   code="$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" "$url$path" || true)"

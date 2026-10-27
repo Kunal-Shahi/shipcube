@@ -75,7 +75,7 @@ async def request_context(request: Request, call_next):
         obs.request_id.reset(t_req)
         obs.trace_id.reset(t_trace)
     response.headers["X-Request-Id"] = rid
-    if request.url.path != "/healthz":
+    if request.url.path not in ("/healthz", "/health"):
         log.info("request", extra={"request_id": rid, "method": request.method, "path": request.url.path,
                                    "status": response.status_code, "ms": round((time.monotonic() - t0) * 1000)})
     return response
@@ -172,7 +172,9 @@ def accepted(op: Operation, response: Response) -> Operation:
 # --- routes ----------------------------------------------------------------------------
 
 
+# /health too: Cloud Run's front end reserves /healthz on run.app URLs, so external checks use /health.
 @app.get("/healthz", include_in_schema=False)
+@app.get("/health", include_in_schema=False)
 def healthz() -> dict:
     with db.tx(role=db.APP) as conn:
         conn.execute("select 1")

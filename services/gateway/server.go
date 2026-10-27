@@ -47,10 +47,13 @@ func (g *Gateway) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/chat/completions", g.chat)
 	mux.HandleFunc("GET /v1/models", g.models)
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+	health := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "ok\n")
-	})
+	}
+	// /health too: Cloud Run's front end reserves /healthz on run.app URLs (external checks use /health).
+	mux.HandleFunc("GET /healthz", health)
+	mux.HandleFunc("GET /health", health)
 	return withRequestContext(g.Log, g.Project, mux)
 }
 

@@ -4,7 +4,7 @@ Cloud Run services must listen on $PORT, and the worker (`shipcube_api.worker`) 
 with no HTTP server. This wrapper:
 - checks the schema like the worker's own main (and never migrates outside DEV_MODE),
 - runs `Worker.run_forever()` in a thread,
-- serves GET /healthz on $PORT: 200 while the loop thread is alive and has iterated in the last
+- serves GET /healthz (probes) and /health (external checks; Cloud Run reserves /healthz) on $PORT: 200 while the loop thread is alive and has iterated in the last
   `SHIPCUBE_WORKER_STALL_S` seconds (default 1800, longer than the slowest step: a build), else 503, so the liveness probe restarts a
   stuck or dead worker,
 - on SIGTERM (scale-in, new revision) stops claiming work and waits up to 8 s for the current step.
@@ -50,7 +50,7 @@ def main() -> None:
 
     class Health(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
-            if self.path != "/healthz":
+            if self.path not in ("/healthz", "/health"):  # /healthz is reserved on run.app URLs
                 self.send_error(404)
                 return
             age = time.monotonic() - HeartbeatWorker.beat
