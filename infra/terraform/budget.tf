@@ -1,5 +1,8 @@
 # Budgets alert; they do not cap spend. The worker subscribes to this topic and,
 # past the last threshold, pauses hosted apps (max-instances=0) and blocks deploys.
+# A hard cap that unlinks billing is already live, created with gcloud: see
+# infra/budget-killswitch/README.md. Import that budget and topic before applying,
+# or this creates duplicates.
 
 resource "google_pubsub_topic" "budget" {
   project    = var.control_project_id
@@ -26,7 +29,7 @@ resource "google_billing_budget" "credits" {
 
   amount {
     specified_amount {
-      currency_code = "USD"
+      currency_code = var.budget_currency
       units         = tostring(var.budget_amount_usd)
     }
   }

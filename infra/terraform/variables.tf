@@ -19,7 +19,13 @@ variable "region" {
 }
 
 variable "budget_amount_usd" {
-  description = "Budget for the credit pool. Alerts at 17%, 50% and 83% (about $50/$150/$250 of $300)."
+  description = "Budget for the credit pool, in budget_currency (the name is historical)."
   type        = number
-  default     = 300
+  default     = 24000
+}
+
+variable "budget_currency" {
+  description = "Must match the billing account's currency."
+  type        = string
+  default     = "INR"
 }
