@@ -9,14 +9,15 @@ This doc covers how a coding agent reaches ShipCube, how ShipCube reaches GCP, a
 | # | Topic | Decision for the 10-day build | Later |
 |---|---|---|---|
 | 1 | MCP transport | One remote **Streamable HTTP** endpoint, `https://mcp.shipcube.dev/mcp`, built on the stateless **2026-07-28** spec. No stdio package. | A stdio shim only if a client can't do remote HTTP |
-| 1 | MCP auth | **Personal access token** (`sc_pat_…`) from the web console, sent as `Authorization: Bearer`. | **OAuth 2.1** per the MCP authorization spec: ShipCube as the authorization server in front of Google sign-in, Client ID Metadata Documents first, DCR as fallback |
+| 1 | MCP auth | **Personal access token** (`sc_pat_<id>_<secret>`, stored as an HMAC per security's `api_tokens` table) from the web console, sent as `Authorization: Bearer`. | **OAuth 2.1** per the MCP authorization spec: ShipCube as the authorization server in front of Google sign-in, Client ID Metadata Documents first, DCR as fallback |
+| 1 | Language | **Python 3.12**: the official `mcp` 2.3.0 SDK (`MCPServer`) plus FastAPI, run as **one service** (`/mcp` and `/v1/*`). Tools call the API in-process. Kunal's decision on PR #4. | Split MCP and API with `SHIPCUBE_API_URL` |
 | 2 | Tools | 17 tools (§2). Long-running tools return an **Operation**, wait up to `wait_s` (≤55 s) while streaming `notifications/progress`, then hand back the id for `get_operation`. **Idempotency keys** on every mutating call. | The MCP `tasks` extension, once Claude Code and Cursor support it |
 | 3 | Control plane | **REST + JSON**, OpenAPI 3.1, `/v1` in the path, AIP-151-style operations. No gRPC. Deploys and profiling run as a **step machine driven by Cloud Tasks**. | Workflows if the step graph grows |
 | 4 | Flow | MCP → API → Cloud Tasks → worker → Cloud Build → Artifact Registry → Cloud Run. In a linked project the worker impersonates a deployer service account there. | |
-| 5 | Reaching apps | `https://<app>.apps.shipcube.dev` → global external ALB (wildcard cert) → **ShipCube access proxy** (`services/gateway`) → app's `run.app` URL using a service-to-service ID token. The app keeps the Cloud Run invoker IAM check. **[security]** | Direct IAP on Cloud Run as a no-domain fallback |
+| 5 | Reaching apps | **IAP directly on each Cloud Run service** (security's decision, PR #2): the app's `run.app` URL, Google sign-in, and `grant_access` writes `access_grants` plus an IAM binding. No load balancer. **[security]** | `<app>.apps.shipcube.dev` through an ALB and the Go access proxy (`services/gateway`), if custom domains or per-request caps are needed |
 | 5 | Egress | Default: none. Apps that need a static IP for a customer database use Direct VPC egress + Cloud NAT with a reserved IP, one per GCP project. | |
-| 6 | Caps | Cloud Run handles instances, concurrency, CPU/memory and timeout. The gateway handles requests per minute. Spend uses ShipCube's own cost meter plus a billing budget, and the kill switch is `max-instances=0`. | Cloud Armor per-app rules |
-| 6 | Budget | About **$25–30/month** fixed (ALB plus NAT), so $300 lasts about 8 months with headroom for builds. GKE Autopilot is placement-only. | |
+| 6 | Caps | Cloud Run handles instances, concurrency, CPU/memory and timeout. Requests per minute applies to AI-gateway calls only while apps sit behind IAP. Spend uses ShipCube's own cost meter plus a billing budget, and the kill switch is `max-instances=0`. | Per-request app caps through the access proxy or Cloud Armor |
+| 6 | Budget | About **$5–20/month** fixed (Cloud SQL, plus NAT once a demo app needs a static IP). The access-proxy option adds ~$18 for the ALB. GKE Autopilot is placement-only. | |
 
 ---
 
@@ -33,7 +34,7 @@ The current MCP revision ([2026-07-28 changelog](https://modelcontextprotocol.io
 - **Required request headers** `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` mirror the body, so a gateway or load balancer can route or rate-limit by tool name without parsing JSON.
 - The old HTTP+SSE transport and the Roots, Sampling and Logging features are **deprecated**.
 
-Clients on 2025-era versions still work: the official TypeScript v2 SDK answers them statelessly from the same endpoint by default (`createMcpHandler`'s `legacy: 'stateless'`; see the [SDK README](https://www.npmjs.com/package/@modelcontextprotocol/server) and the [SDK beta announcement](https://blog.modelcontextprotocol.io/posts/sdk-betas-2026-07-28/)). Our stub was verified both ways: `claude mcp list` (Claude Code 2.1.308) connects to it, and the v2 client in `npm run smoke` lists and calls all the tools.
+Clients on 2025-era versions still work: the official v2 SDKs answer the legacy `initialize` handshake alongside `server/discover` from the same endpoint ([SDK beta announcement](https://blog.modelcontextprotocol.io/posts/sdk-betas-2026-07-28/)). Our Python stub (`mcp` 2.3.0, `stateless_http=True`) was verified both ways: `claude mcp list` (Claude Code 2.1.308) connects to it, and the SDK's own client in `scripts/smoke.py` lists and calls all the tools.
 
 ### 1.2 Streamable HTTP vs stdio
 
@@ -91,9 +92,17 @@ What it costs us: **Google's OAuth server can't be the MCP authorization server.
 ### 1.4 Decision and migration path
 
 **Phase 1 (hackathon): PATs.**
-- Format: `sc_pat_` plus 32 random bytes in base62. The prefix makes them easy for secret scanners to find (GitHub secret scanning supports custom patterns). Store only the hash. Default expiry 30 days. Scopes: `apps:read`, `apps:write`, `data:query`.
+This matches security's `api_tokens` table and token section (PR #2, `database-design.md` and `security-tenancy.md`):
+- **Format:** `sc_pat_<id>_<secret>`, with 32 random bytes for the secret. The prefix makes tokens easy for secret scanners to find.
+- **Storage:** only `HMAC-SHA-256(pepper, secret)`, looked up through a unique index. The pepper lives in Secret Manager.
+- **Lifetime:** 30 days by default, 90 at most. Tokens can be revoked; `last_used_at` is recorded.
+- **Scopes:** `apps:read`, `apps:deploy`, `access:write`, `caps:write`, `secrets:write`. Networking proposes adding `data:read` and `data:migrate` for the data-layer tools (§2.4).
 - The MCP server never sees Google credentials. **[security]** owns the token table and how tokens are minted.
-- The MCP server verifies tokens with the SDK's `verifyBearerToken` (already wired in `services/mcp/src/server.ts`; the stub accepts one dev token). The API re-checks the forwarded token, so the API is the only place that makes authorization decisions.
+
+How it's wired (`services/mcp/shipcube_mcp/server.py`):
+- The SDK's bearer middleware calls `ApiTokenVerifier`, which asks the API whether it recognises the token (`GET /v1/me`). The MCP server then forwards the token on every API call.
+- The API checks the scope on every route (`services/api/shipcube_api/auth.py` and `app.py`), so the API is the only place that makes authorization decisions.
+- Locally, `SHIPCUBE_DEV_TOKEN` registers one dev token with every scope.
 
 **Phase 2: OAuth 2.1, with PATs kept.**
 1. Stand up an authorization server, built or rented, at `auth.shipcube.dev`, with Google as upstream IdP. Support CIMD, and DCR for older clients.
@@ -102,27 +111,33 @@ What it costs us: **Google's OAuth server can't be the MCP authorization server.
 4. Return the RFC 9728 challenge on `401` when no `Authorization` header is present. Clients configured with a PAT keep working. New users just run `claude mcp add --transport http shipcube https://mcp.shipcube.dev/mcp` and finish OAuth in the browser.
 5. Because Claude Code doesn't fall back from a rejected header to OAuth, the setup guide tells PAT users to **remove** the header to switch.
 
-The SDK's `scopeChallenge` hook on `registerTool` supports per-tool step-up later (for example, requiring `apps:delete` for `delete_app`).
+For phase 2, the Python SDK's `AuthSettings(resource_server_url=…)` publishes the Protected Resource Metadata document and the `WWW-Authenticate` challenge. The phase-1 stub sets it to `None`, so it doesn't advertise an authorization server that doesn't exist yet.
 
 ### 1.5 Transport hardening
 
-- **Origin and Host validation:** required by the spec, to stop DNS rebinding. Done with the SDK's `hostHeaderValidation` and `originValidation`. In production the allow-list is `mcp.shipcube.dev`.
-- The server refuses to bind a non-loopback address without a token.
-- TLS terminates at Cloud Run (`*.run.app`) or at the ALB if we put `mcp.shipcube.dev` behind it.
+- **Origin and Host validation:** required by the spec, to stop DNS rebinding. Done with the SDK's `TransportSecuritySettings` (`ALLOWED_HOSTS`). In production the allow-list is the service's own host.
+- The server refuses to bind a non-loopback address unless `ALLOWED_HOSTS` is set. `/mcp` always requires a bearer token.
+- TLS terminates at Cloud Run (`*.run.app`), or at a Cloud Run domain mapping or the ALB if we put `mcp.shipcube.dev` in front.
 - Send `X-Accel-Buffering: no` on SSE responses (the spec recommends it).
 - Set the Cloud Run request timeout to at least 60 s, so a `wait_s=55` call finishes.
 - **Rate limits per token** at the MCP layer (e.g. 60 tool calls/min, and 10 deploys/hour per workspace) live in the API, not in the MCP server.
 
 ### 1.6 SDK and language choice **[language]**
 
-The stub uses the **official TypeScript SDK v2** (`@modelcontextprotocol/server` 2.4.0, stable, implements 2026-07-28).
+**Decision (Kunal, following `docs/research/language-tradeoffs.md`): Python 3.12** for the MCP server and the API, Go only for the access proxy and AI gateway. The first stub was TypeScript; it was ported on Oct 27 with the tool contract, Operation flow, idempotency and auth unchanged.
 
-Why it was quickest to demo:
-- Node 22 is already installed here. The system Python is 3.9, which is below what the `mcp` package needs, and Go isn't installed.
-- The TS SDK is the reference implementation. Its v2 line is stable (released Oct 2026), while Go is at `v1.7.0-pre` for this spec.
-- It ships `createMcpHandler`, legacy-client support, bearer-auth helpers and Host/Origin guards, which we would otherwise write ourselves.
+| | What it uses |
+|---|---|
+| MCP server (`services/mcp/shipcube_mcp`) | Official `mcp` **2.3.0** SDK, `MCPServer` (FastMCP's v2 name). Streamable HTTP with `stateless_http=True`. Bearer auth via `token_verifier` + `AuthSettings`. DNS-rebinding protection via `TransportSecuritySettings`. Progress via `ctx.report_progress`. |
+| API (`services/api/shipcube_api`) | FastAPI + Pydantic v2. The same Pydantic models define the API bodies **and** the MCP tool input/output schemas, so the two contracts can't drift. |
+| Contract | `services/api/openapi.yaml` stays the hand-written contract. `tests/test_api.py` fails if FastAPI's routes stop matching it. |
+| Deploy shape | **One Cloud Run service.** A small ASGI dispatcher sends `/mcp` to the SDK app (with its auth middleware) and everything else to FastAPI. Tools call the API in-process through `httpx.ASGITransport`, so it's the same routes, auth and validation, with no network hop. Set `SHIPCUBE_API_URL` to split them later. PR #4 recommends `min-instances=1` to hide Python's ~0.6 s cold start. |
 
-**Keeping it swappable:** the MCP server is a stateless adapter. Its only dependency is the HTTP contract in `services/api/openapi.yaml`. The tool schemas are plain JSON Schema (Zod is just the authoring format), so a port to Python v2 (`MCPServer`, formerly FastMCP) or to Go is mechanical: same tool names, same schemas, same API calls. If the language research picks Python or Go for the control plane, `services/api/src` is the part to rewrite. I'd still keep the MCP adapter in TypeScript unless one-language-everywhere matters more, because it's about 500 lines with no business logic.
+**Mounting other Python tool packages in-process** (`shipcube_mcp/plugins.py`):
+- A package exposes `register(host)`, discovered through the `shipcube.mcp_tools` entry-point group or `SHIPCUBE_MCP_PLUGINS=module:function`.
+- It registers tools with `host.tool(...)`, which takes the same arguments as `MCPServer.tool` and **replaces** a built-in tool of the same name.
+- Inside a tool, `await host.caller("data:read")` returns the verified user, workspace and scopes, or fails with `permission_denied`.
+- `tests/test_server.py` mounts a stand-in data-layer package this way.
 
 ---
 
@@ -134,7 +149,7 @@ The draft in `docs/ARCHITECTURE.md` §0 had 11 tools. The final list has **17**.
 - `whoami`: lets the agent pick a GCP target.
 - `list_apps` and `delete_app`.
 
-`get_status` also returns the access list, so there is no `list_access`. The source of truth is `services/mcp/src/tools.ts`, and every tool declares an `outputSchema` and returns `structuredContent`.
+`get_status` also returns the access list, so there is no `list_access`. The source of truth is `services/mcp/shipcube_mcp/tools.py`, with schemas from `services/api/shipcube_api/models.py`. Every tool declares an `outputSchema` and returns `structuredContent`. §2.4 covers the six data-layer tools mounted on top, which bring the total to **22**.
 
 ### 2.1 Tool list
 
@@ -160,7 +175,7 @@ The draft in `docs/ARCHITECTURE.md` §0 had 11 tools. The final list has **17**.
 
 Shared types:
 
-```ts
+```text
 Source = { kind: "upload", upload_id } | { kind: "git", url, ref?, subdir? }
        | { kind: "image", uri } | { kind: "inline", files: [{path, content}] /* ≤50 files, ≤256 KB */ }
 Caps   = { max_instances?: 0..10, concurrency?: 1..1000, requests_per_minute?, monthly_spend_usd?,
@@ -206,8 +221,24 @@ The design:
    - The API stores `key → (operation_id, request_hash)`. The same key with the same body returns the **same operation**. The same key with a different body returns `409`.
    - If the agent omits the key, the MCP server derives one from `hash(token, tool, args, 10-minute bucket)`, so a retry after a dropped stream doesn't start a second build.
    - The smoke test shows this: a second run got back the same estimate and deploy operation ids.
-5. **Cancellation.** Closing the SSE stream cancels only the *wait* (the handler watches `ctx.mcpReq.signal`), never the deploy. `cancel_operation` is explicit.
+5. **Cancellation.** Closing the SSE stream cancels only the *wait* (the SDK cancels the tool's task), never the deploy. `cancel_operation` is explicit.
 6. **Later:** advertise the `io.modelcontextprotocol/tasks` extension, so capable clients get a task handle and use `tasks/get`. The Operation maps onto it 1:1.
+
+### 2.4 Data-layer tools (Kunal-Shahi/shipcube-data)
+
+The data layer ships its tools as a Python package that is mounted in-process through the plugin hook (§1.6). Placement in the tool list:
+
+| Tool | Owner | Scope (proposed) | Annotations | Notes |
+|---|---|---|---|---|
+| `connect_data` | networking | `secrets:write` | open-world | Stays ours. It registers the source with the control plane, sets up static egress (§5.5) and returns the IP to allow-list, then hands the connection to the data layer. |
+| `list_cubes` | data layer | `data:read` | read-only | |
+| `describe_cube` | data layer | `data:read` | read-only | |
+| `search_values` | data layer | `data:read` | read-only, open-world | Returns warehouse values, so the results are data, not instructions |
+| `query` | data layer | `data:read` | read-only, open-world | **Replaces** the stub `query` (same name, through `host.tool`) |
+| `propose_migration` | data layer | `data:migrate` | read-only (returns a diff) | |
+| `apply_migration` | data layer | `data:migrate` | destructive | Should follow security's threat-model rule (T1) and return a console confirmation URL rather than applying directly |
+
+Every data tool calls `host.caller(scope)` first. It gets the verified `workspace_id`, which security's schema uses for tenant-to-schema routing and row-level filters. The data layer never parses tokens itself.
 
 ---
 
@@ -219,7 +250,7 @@ The design:
 |---|---|---|---|
 | Clients | MCP server (JSON-RPC, so JSON is native), web console (browser `fetch`), curl | Browsers need gRPC-Web or Connect | Two surfaces to keep in sync |
 | Cloud Run | Works | Works (HTTP/2 end-to-end, h2c) | |
-| Tooling in 10 days | OpenAPI → TS/Go/Python types, Swagger UI for the demo | protoc toolchain in every language | |
+| Tooling in 10 days | FastAPI generates OpenAPI and Swagger UI from the Pydantic models; the console gets TS types from the spec | protoc toolchain in every language | |
 | Streaming | SSE for logs | Native streams | |
 
 **Decision: REST + JSON only.** Every caller already speaks JSON, the API is small, and Cloud Run's HTTP/2 makes gRPC's transport advantage irrelevant at our scale. Internal calls (worker ↔ API) go over the same REST API with service-account ID tokens. If we ever need typed internal RPC, use **Connect** on the same handlers, which serves JSON and gRPC from one definition, rather than adding a second API.
@@ -274,16 +305,16 @@ Why not Workflows: it does exactly this, but it puts the pipeline in YAML that w
 sequenceDiagram
     autonumber
     participant Agent as Coding agent<br/>(Claude Code / Cursor / Muse Code)
-    participant MCP as MCP server<br/>(Cloud Run, mcp.shipcube.dev)
-    participant API as Control-plane API<br/>(Cloud Run)
+    participant MCP as MCP server /mcp<br/>(Python, Cloud Run, shipcube-control)
+    participant API as Control-plane API /v1<br/>(same service, in-process)
     participant DB as Operations DB<br/>[security]
     participant Q as Cloud Tasks
     participant W as Worker<br/>(Cloud Run, internal)
     participant GCS as GCS uploads
     participant CB as Cloud Build
     participant AR as Artifact Registry
-    participant CR as Cloud Run<br/>(user app)
-    participant GW as Access proxy<br/>(services/gateway)
+    participant CR as Cloud Run<br/>(user app, shipcube-apps)
+    participant IAP as IAP on the service
 
     Agent->>MCP: tools/call create_upload (Bearer PAT)
     MCP->>API: POST /v1/uploads
@@ -302,10 +333,10 @@ sequenceDiagram
         W->>CB: builds.get
         W->>DB: update step/progress
     end
-    W->>CR: create/replace service (image digest, caps, ingress, invoker IAM = gateway SA)
-    W->>GW: register route app → run.app URL + ACL
-    W->>CR: health check via gateway
-    W->>DB: status = succeeded, result.url
+    W->>CR: create/replace service (image digest, caps, --no-allow-unauthenticated, --iap)
+    W->>IAP: bind iap.httpsResourceAccessor for owner (access_grants row → sync_state=applied)
+    W->>CR: health check with an ID token for the worker SA
+    W->>DB: status = succeeded, result.url (run.app)
     loop every 1 s while waiting (≤ wait_s)
         MCP->>API: GET /v1/operations/{op}
         MCP-->>Agent: SSE notifications/progress (step k of 6)
@@ -320,23 +351,24 @@ The only differences are **where** Cloud Build, Artifact Registry and Cloud Run 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant W as ShipCube worker SA<br/>(shipcube-hosted)
+    participant W as ShipCube deployer SA<br/>(shipcube-control)
     participant IAM as IAM Credentials API
     participant CB as Cloud Build<br/>(user project)
     participant AR as Artifact Registry<br/>(user project)
     participant CR as Cloud Run<br/>(user project)
-    participant GW as ShipCube access proxy
+    participant IAP as IAP<br/>(user project)
 
-    W->>IAM: generateAccessToken(shipcube-deployer@USER_PROJECT)
-    IAM-->>W: 1 h access token
-    W->>CB: builds.create in USER_PROJECT (billed to user)
+    Note over W,CR: Roles were granted once by the user's link-project.sh (security, PR #2)
+    W->>CB: builds.create in USER_PROJECT as shipcube-builder@ (billed to user)
     CB->>AR: push to USER_PROJECT/shipcube repo
-    W->>CR: deploy service in USER_PROJECT<br/>(runtime SA in user project, max-instances, concurrency)
-    W->>CR: add run.invoker for ShipCube gateway SA
-    W->>GW: route app → https://APP-HASH.run.app
+    W->>CR: deploy service in USER_PROJECT<br/>(runtime SA shipcube-apps@, max-instances, --iap)
+    W->>CR: bind IAP service agent as run.invoker
+    W->>IAP: bind iap.httpsResourceAccessor for the owner and grants
 ```
 
-Roles the deployer SA needs in the user's project:
+*Revised to match security (PR #2):* ShipCube's **per-workspace deployer SA** is granted roles directly on the user's project by a script the user runs. No OAuth refresh tokens are stored. Impersonating an SA inside the user's project (the first draft) is not needed.
+
+Roles the deployer SA needs in the user's project (security's `link-project.sh` is the source of truth; it uses a custom role for `run.services.setIamPolicy` instead of all of `run.admin`):
 - `roles/run.developer`, plus `roles/iam.serviceAccountUser` on the app's runtime SA ([Cloud Run deploy IAM](https://docs.cloud.google.com/run/docs/deploying)).
 - `roles/cloudbuild.builds.editor`.
 - `roles/artifactregistry.writer` on the `shipcube` repo.
@@ -346,7 +378,7 @@ Builds are charged to the project that runs them ([Cloud Build pricing](https://
 
 Keeping the **image in the user's project** avoids cross-project pulls. Pulling from ShipCube's registry would need the Cloud Run service agent of *their* project granted read access to *our* registry.
 
-**Networking consequence:** apps in a linked project still sit behind **ShipCube's** access proxy, so URLs, access control and rate caps work identically. The proxy calls the app's `run.app` URL with an ID token minted for its own SA, which the user's service accepts because of the invoker binding. The user's app can't be private-ingress (`internal`), because that needs a VPC path from our project. It stays IAM-protected instead (§5.3).
+**Networking consequence:** with IAP on each service, apps in a linked project work the same way as hosted ones. Each app has its own `run.app` URL, IAP runs in the user's project and grants are IAM bindings there, while ShipCube's `access_grants` table stays the source of truth (a reconciler syncs them). The one difference is the IAP OAuth client: users outside the project's organization need a custom OAuth client, which the user creates once in the Cloud console (security §2).
 
 ---
 
@@ -363,7 +395,7 @@ Keeping the **image in the user's project** avoids cross-project pulls. Pulling 
 
 A serverless NEG can route with a **URL mask** (e.g. `<service>.example.com`) straight to many Cloud Run services ([serverless NEG concepts](https://docs.cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts)). But a NEG can only target services in **its own project and region**, so masks can't reach apps in linked projects. That's one reason the ALB routes everything to our access proxy instead.
 
-**Decision:** `https://<app>.apps.shipcube.dev` → ALB (wildcard cert) → one backend: the **access proxy**. Apps in ShipCube's project and in linked projects get the same URL scheme. A second host, `<app>--<workspace>.apps…`, is reserved for multi-tenant name clashes. *(Needs a real domain; see the open questions.)*
+**Decision (revised to match security, PR #2): use the `run.app` URLs** returned by `deploy_app` and shown in the console. They're stable per service, cost nothing, and are the only URL IAP-on-the-service supports (IAP can't be on both an ALB and the service). Pretty `<app>.apps.shipcube.dev` URLs come with the access-proxy option below, which needs the ALB and a real domain.
 
 ### 5.2 Access control: IAP vs our own proxy **[security]**
 
@@ -378,9 +410,14 @@ A serverless NEG can route with a **URL mask** (e.g. `<service>.example.com`) st
 | Rate caps / AI gateway / metering | No | Yes: one hop where we can count requests, enforce `requests_per_minute` and inject `X-ShipCube-User` |
 | Effort | Small | Medium: OIDC login, sessions, a streaming reverse proxy |
 
-**Recommendation: build the access proxy.** Caps (§6), per-app usage metering for monitoring and identical behavior in linked projects all need one ShipCube-controlled hop, and IAP gives none of them. Keep **direct IAP as the fallback** if the proxy slips: `deploy_app` can set `--iap` and return the `run.app` URL, and `grant_access` becomes an IAM binding.
+**Decision (security's, PR #2): IAP directly on each Cloud Run service.** This replaces networking's first draft, which preferred the proxy.
+- `grant_access` writes an `access_grants` row and adds `roles/iap.httpsResourceAccessor` for `user:`, `group:` or `domain:`. `revoke_access` removes it. A reconciler fixes drift.
+- It's free, puts no ShipCube code on the request path, and supports Google groups natively.
+- What we give up: custom domains, per-request `requests_per_minute` caps on app traffic, and per-request metering in our own hop. Request counts and latency come from Cloud Monitoring instead (§6).
 
-What networking needs from the gateway design (proposed to **[security]**):
+The **access proxy** (Go, `services/gateway`) remains the fallback. It is built only if IAP setup blocks the demo, or if custom domains or per-request caps become a requirement.
+
+If the proxy is built, networking needs this from its design (security's `services/gateway/DESIGN.md` owns it):
 1. **Routing:** look up `Host` → `{app, target_url (run.app), acl_version}` from the API, cached for 30 s.
 2. **AuthN:**
    - Browser: the OIDC login runs at `auth.shipcube.dev`, which then hands the session to the app's host. The gateway sets a **host-only** session cookie on `<app>.apps.shipcube.dev`. **Never** set a cookie on `.apps.shipcube.dev`: every app is user code on a sibling subdomain and would receive it.
@@ -395,7 +432,7 @@ Ingress options are `all`, `internal` and `internal-and-cloud-load-balancing` ([
 - `internal-and-cloud-load-balancing` would only help if the ALB pointed at the apps directly. Ours points at the gateway, which is a Cloud Run → Cloud Run hop.
 - `internal` would require the gateway to send egress through a VPC and only works within one project's network, so it fails for linked projects.
 
-**Decision:** apps use `ingress=all` plus the **invoker IAM check** (unauthenticated requests are rejected by Google's front end before reaching the container). The gateway itself uses `internal-and-cloud-load-balancing`, so it is reachable only through the ALB. The MCP server and API use `all` (MCP clients call them directly), with the API's internal routes checked against Cloud Tasks' OIDC token.
+**Decision:** apps use `ingress=all`, `--no-allow-unauthenticated` and IAP. Only the IAP service agent holds `run.invoker`, so unauthenticated requests never reach the container. The MCP + API service uses `ingress=all`, because MCP clients call it directly; its internal routes check Cloud Tasks' OIDC token. If the proxy option is built, it would use `internal-and-cloud-load-balancing` behind the ALB.
 
 ### 5.4 WebSockets and SSE
 
@@ -403,7 +440,7 @@ Ingress options are `all`, `internal` and `internal-and-cloud-load-balancing` ([
 - Session affinity is best-effort, so apps must not keep per-socket state that can't be rebuilt.
 - Don't enable end-to-end HTTP/2 for WebSocket services.
 
-For the gateway, this means:
+With IAP, these limits apply to the app directly. If the access proxy is built, it must also:
 - Proxy `Upgrade` and stream responses without buffering. Set `X-Accel-Buffering: no` and flush per chunk.
 - Gateway timeout ≥ app timeout. Set the ALB backend timeout to 3,600 s for the gateway backend.
 - The ALB proxies WebSockets natively, so the ALB → gateway → app chain works.
@@ -431,7 +468,7 @@ Most demo apps read BigQuery or DuckDB, which needs no network setup. For custom
 | `max_instances` | Cloud Run `--max-instances` (default 100; we default to **2**, max 10) ([docs](https://docs.cloud.google.com/run/docs/configuring/max-instances)) | Hard ceiling on compute cost. Excess requests queue, then get `429`. |
 | `concurrency` | Cloud Run `--concurrency` (≤1000; gcloud default 80×vCPU) ([docs](https://docs.cloud.google.com/run/docs/about-concurrency)) | |
 | `cpu`, `memory`, `timeout_s` | Cloud Run resource limits and request timeout | Request-based billing for T1 (CPU only during requests) ([billing modes](https://docs.cloud.google.com/run/docs/configuring/billing-settings)) |
-| `requests_per_minute` | **Gateway token bucket** keyed by `(app)` and `(app, principal)` | In-memory per gateway instance with the gateway capped at 1–2 instances, so it's approximate but free. Later: Cloud Armor per-host rate-limit rules on the ALB (~$5/policy + $1/rule/month; thresholds apply per backend service) ([rate limiting](https://docs.cloud.google.com/armor/docs/rate-limiting-overview), [pricing](https://cloud.google.com/armor/pricing)). Mirrored MCP headers (`Mcp-Name`) let the same component rate-limit MCP tools. |
+| `requests_per_minute` | **AI gateway** (Go, `services/gateway`) for model calls, per app. App HTTP traffic behind IAP has no per-request limiter: `max_instances × concurrency` is the hard ceiling. | Per-request app caps need the access proxy, or Cloud Armor on an ALB (~$5/policy + $1/rule/month) ([rate limiting](https://docs.cloud.google.com/armor/docs/rate-limiting-overview), [pricing](https://cloud.google.com/armor/pricing)). Mirrored MCP headers (`Mcp-Name`) let an edge rate-limit MCP tools too. Security's `caps` table already has `requests_per_minute`. |
 | `monthly_spend_usd` | ShipCube **cost meter** (instance-seconds and requests from Cloud Monitoring × list price, plus AI gateway tokens) checked every 5 min. Over cap → `max-instances=0` (app returns 429/503 via gateway with a "cap reached" page) and an alert. Backstop: a **Cloud Billing budget** with Pub/Sub notifications on the project. | Billing export lags by hours, so our own meter is the primary signal. |
 | Deploys and builds | Cloud Tasks queue `maxConcurrentDispatches` + per-workspace quota in the API (e.g. 20 deploys/day) | Protects the free 2,500 build-minutes |
 | T2 jobs | Cloud Run job `--task-timeout`, `--max-retries`, `--parallelism`; Cloud Scheduler frequency floor (≥15 min) | |
@@ -443,14 +480,14 @@ Fixed monthly costs:
 
 | Item | $/month | Source |
 |---|---|---|
-| Global ALB forwarding rule (`*.apps` + `mcp`/`api` on one rule via host routing) | ~18.00 | [LB pricing](https://cloud.google.com/load-balancing/pricing) |
+| Global ALB forwarding rule | 0 with IAP on each service (~18.00 only if the access-proxy option is built) | [LB pricing](https://cloud.google.com/load-balancing/pricing) |
 | Cloud NAT static IP (only once a demo app needs static egress) | ~3.60 + data | [NAT pricing](https://cloud.google.com/nat/pricing) |
 | Reserved global IP for the ALB | 0 (free while attached) | [IP pricing](https://cloud.google.com/vpc/network-pricing) |
 | Certificate Manager (1 wildcard cert) | ~0 (first certs free; **unverified**) | |
 | Cloud Run: MCP, API, worker, gateway at min-instances 0 | ~0 within free tier (180k vCPU-s, 360k GiB-s, 2M requests) | [Run pricing](https://cloud.google.com/run/pricing) |
 | Database **[security]**: Firestore free tier vs Cloud SQL db-f1-micro | 0 vs ~7.70 | [Firestore](https://cloud.google.com/firestore/pricing), [Cloud SQL](https://cloud.google.com/sql/pricing) |
 | Cloud Tasks, Pub/Sub, Scheduler (3 jobs), Secret Manager (6 versions), Logging (50 GiB) | ~0 (free tiers) | linked pricing pages above |
-| **Fixed total** | **≈ $22–30** | |
+| **Fixed total** | **≈ $8–12** (Cloud SQL + NAT); ≈ $26–30 with the ALB option | |
 
 Variable costs:
 - Cloud Build: 2,500 free minutes/month, then $0.006/min on e2-standard-2.
@@ -461,7 +498,7 @@ Excluded:
 - **GKE Autopilot:** the $0.10/h cluster fee is covered for one cluster by the $74.40/month free-tier credit, but pods are billed per resource ([GKE pricing](https://cloud.google.com/kubernetes-engine/pricing)). T3/T4 stay placement-only, as ARCHITECTURE §4 says.
 - Cloud Armor (~$6+/month) is off until needed.
 
-**Result:** about $30/month fixed, so $300 covers the hackathon several times over. The real risk is a runaway app or build loop, which the caps above bound.
+**Result:** about $10/month fixed, plus ~$13 for an always-warm MCP + API instance over the 8 days if we follow PR #4's `min-instances=1` advice. $300 covers the hackathon many times over. The real risk is a runaway app or build loop, which the caps above bound.
 
 Guardrails on ShipCube's project:
 - A billing budget at $25/$50/$100 with email alerts.
@@ -472,10 +509,10 @@ Guardrails on ShipCube's project:
 
 ## Open questions
 
-1. **Domain.** `shipcube.dev` is a placeholder. A real domain (~$12/year) is needed before the ALB, wildcard cert and OAuth redirect URIs exist. Until then, demo with `run.app` URLs and direct IAP (§5.2 fallback). Who buys it, and which name?
+1. **Domain.** Not needed for the IAP plan (apps use `run.app` URLs). A real domain (~$12/year) is only needed for `mcp.shipcube.dev`, OAuth redirect URIs in phase 2, or the access-proxy option.
 2. **Muse Code MCP support** (remote HTTP? headers? OAuth?) is undocumented publicly. Test it on day 2.
-3. **[security]** Gateway session design (§5.2 items 2–4), the PAT table, the linked-project deployer SA and roles (§4.2), and the shared static egress IP risk (§5.5).
-4. **[language]** If the control plane goes Go or Python, rewrite `services/api/src` against `openapi.yaml`. The MCP adapter can stay TypeScript.
+3. **[security]** Add the `data:read` and `data:migrate` scopes and an `operations` table: id, kind, workspace, status, step, step_state, idempotency key and request hash, unique per workspace. The `deployments` table alone doesn't cover estimates and deletes. Rename the caps (`memory` → `memory_mib`, `timeout_s` → `request_timeout_s`, `monthly_spend_usd` → `spend_usd_per_month`), and either add `concurrency` to the `caps` table or keep it as a per-app setting. Also note the shared static egress IP risk (§5.5).
+4. **[language]** Decided: Python. Only the access proxy and AI gateway are Go, in `services/gateway`.
 
 ## Sources
 

@@ -9,13 +9,13 @@ info:
     accept an Idempotency-Key header (draft-ietf-httpapi-idempotency-key-header).
 servers:
   - url: https://api.shipcube.dev
-  - url: http://127.0.0.1:8081
+  - url: http://127.0.0.1:8080
 security:
   - bearer: []
 paths:
   /v1/me:
     get:
-      summary: Current user, workspace, GCP targets and limits
+      summary: Current user, workspace, GCP targets, limits and the calling token's scopes (any valid token)
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
   /v1/uploads:
@@ -173,7 +173,10 @@ components:
     bearer:
       type: http
       scheme: bearer
-      description: Personal access token (sc_pat_...) in phase 1; OAuth 2.1 access token later.
+      description: |
+        Personal access token sc_pat_<id>_<secret> in phase 1 (stored as HMAC-SHA-256 with a pepper; see
+        docs/research/database-design.md api_tokens). Scopes: apps:read, apps:deploy, access:write, caps:write,
+        secrets:write, data:read, data:migrate. OAuth 2.1 access tokens later.
   parameters:
     App: { name: app, in: path, required: true, schema: { type: string, pattern: '^[a-z][a-z0-9-]{1,38}[a-z0-9]$' } }
     IdempotencyKey: { name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 64 } }
@@ -247,6 +250,7 @@ components:
           type: array
           items: { type: object, properties: { id: { type: string }, project: { type: string }, kind: { type: string, enum: [shipcube, linked] }, default: { type: boolean } } }
         limits: { type: object, properties: { max_apps: { type: integer }, monthly_spend_usd: { type: number } } }
+        token: { type: object, properties: { id: { type: string }, scopes: { type: array, items: { type: string } }, expires_at: { type: integer } } }
     AppSummary:
       type: object
       properties: { name: { type: string }, url: { type: string }, tier: { type: string }, status: { type: string }, updated_at: { type: string } }

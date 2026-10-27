@@ -1,0 +1,24 @@
+[project]
+name = "shipcube-api"
+version = "0.1.0"
+description = "ShipCube control-plane API (skeleton, mock state)"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "pydantic>=2.9",
+    "uvicorn>=0.30",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27", "pyyaml>=6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["shipcube_api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
