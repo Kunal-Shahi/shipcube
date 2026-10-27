@@ -103,10 +103,18 @@ resource "google_project_iam_member" "hosted_deployer" {
   depends_on = [google_project_iam_custom_role.run_iam]
 }
 
+# Legacy shared builder: pushes to every repo in the apps project (C-1). Removed by
+# legacy_shared_builder=false; per-workspace builders get writer on their own repo only.
 resource "google_project_iam_member" "builder_ar_writer" {
+  count   = var.legacy_shared_builder ? 1 : 0
   project = var.apps_project_id
   role    = "roles/artifactregistry.writer"
   member  = google_service_account.builder.member
+}
+
+moved {
+  from = google_project_iam_member.builder_ar_writer
+  to   = google_project_iam_member.builder_ar_writer[0]
 }
 
 # Kill switch: the worker may set max-instances=0 on hosted apps.

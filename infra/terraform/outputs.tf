@@ -6,6 +6,7 @@ output "service_accounts" {
     hosted_deployer = google_service_account.hosted_deployer.email
     migrator        = google_service_account.migrator.email
     builder         = google_service_account.builder.email
+    provisioner     = module.build_isolation.provisioner_sa
   }
 }
 
