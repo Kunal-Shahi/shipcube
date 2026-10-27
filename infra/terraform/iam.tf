@@ -112,11 +112,6 @@ resource "google_project_iam_member" "builder_ar_writer" {
   member  = google_service_account.builder.member
 }
 
-moved {
-  from = google_project_iam_member.builder_ar_writer
-  to   = google_project_iam_member.builder_ar_writer[0]
-}
-
 # Kill switch: the worker may set max-instances=0 on hosted apps.
 resource "google_project_iam_member" "worker_run_developer" {
   project = var.apps_project_id

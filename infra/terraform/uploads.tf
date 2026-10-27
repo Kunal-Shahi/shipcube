@@ -26,8 +26,3 @@ resource "google_storage_bucket_iam_member" "uploads_builder" {
   role   = "roles/storage.objectViewer"
   member = google_service_account.builder.member
 }
-
-moved {
-  from = google_storage_bucket_iam_member.uploads_builder
-  to   = google_storage_bucket_iam_member.uploads_builder[0]
-}
