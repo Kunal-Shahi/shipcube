@@ -43,5 +43,3 @@ next-env.d.ts
 # local preview config
 /.claude/
 
-# The root .gitignore ignores data/ (datasets). The console route folder is source code.
-!src/app/(console)/data/

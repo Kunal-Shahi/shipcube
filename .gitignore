@@ -4,6 +4,6 @@ __pycache__/
 .venv/
 node_modules/
 .next/
-data/
+/data/
 *.duckdb
 .DS_Store
