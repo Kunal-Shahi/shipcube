@@ -238,6 +238,8 @@ class GcpDeployer:
 
     def _service_body(self, app: AppRef, image: str, caps: dict[str, Any], env: dict[str, str], sa: str) -> dict[str, Any]:
         c = normalize_caps(caps)
+        if self.s.ai_gateway_url:
+            env = {"SHIPCUBE_AI_GATEWAY": self.s.ai_gateway_url, **env}
         return {
             "labels": {"shipcube-app": app.name, "shipcube-workspace": app.workspace_id[:8], "managed-by": "shipcube"},
             "ingress": "INGRESS_TRAFFIC_ALL",

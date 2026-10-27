@@ -1,5 +1,6 @@
-# Builds ShipCube's three images in parallel on Cloud Build (no local Docker).
-# Submitted by deploy/deploy.sh with the repo root as the build context.
+# Builds ShipCube's three images in parallel on Cloud Build (no local Docker) and pushes them to the
+# platform repo. Submitted by deploy/deploy.sh with the repo root as the build context, running as
+# sc-platform-build (infra/terraform/platform.tf). One image per commit is promoted unchanged.
 substitutions:
   _IMAGES: asia-south1-docker.pkg.dev/shipcube-control-ks/platform
   _TAG: dev
@@ -7,20 +8,20 @@ options:
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
 steps:
-  - id: web
+  - id: console
     name: gcr.io/cloud-builders/docker
     waitFor: ["-"]
     args: ["build", "-f", "deploy/web.Dockerfile", "-t", "${_IMAGES}/console:${_TAG}", "."]
-  - id: mcp
+  - id: api
     name: gcr.io/cloud-builders/docker
     waitFor: ["-"]
-    args: ["build", "-f", "deploy/mcp.Dockerfile", "-t", "${_IMAGES}/mcp:${_TAG}", "."]
+    args: ["build", "-f", "deploy/api.Dockerfile", "-t", "${_IMAGES}/api:${_TAG}", "."]
   - id: gateway
     name: gcr.io/cloud-builders/docker
     waitFor: ["-"]
     args: ["build", "-t", "${_IMAGES}/gateway:${_TAG}", "services/gateway"]
 images:
   - ${_IMAGES}/console:${_TAG}
-  - ${_IMAGES}/mcp:${_TAG}
+  - ${_IMAGES}/api:${_TAG}
   - ${_IMAGES}/gateway:${_TAG}
-timeout: 1200s
+timeout: 1800s

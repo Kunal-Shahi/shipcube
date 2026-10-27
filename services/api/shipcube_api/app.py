@@ -260,13 +260,13 @@ def restore(app: AppName, response: Response, c: Annotated[Caller, Depends(conso
 def logs(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))],
          severity: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = None,
          limit: Annotated[int, Query(ge=1, le=500)] = 50, page_token: str | None = None):
-    return telemetry().logs(store.get_app(c, app), limit, severity, page_token)
+    return telemetry().logs(store.get_app_for_telemetry(c, app), limit, severity, page_token)
 
 
 @app.get("/v1/apps/{app}/metrics", response_model=Metrics)
 def metrics(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))],
             window: Literal["15m", "1h", "24h", "7d", "30d"] = "1h"):
-    return telemetry().metrics(store.get_app(c, app), window)
+    return telemetry().metrics(store.get_app_for_telemetry(c, app), window)
 
 
 @app.patch("/v1/apps/{app}/caps", response_model=CapsResult)

@@ -240,6 +240,15 @@ def get_app(caller: Caller, slug: str, include_deleted: bool = False) -> dict[st
         return _app_view(conn, _app_row(conn, caller.workspace_id, slug, include_deleted))
 
 
+def get_app_for_telemetry(caller: Caller, slug: str) -> dict[str, Any]:
+    """The app view plus where it runs (project, Cloud Run service, id), for the monitoring provider."""
+    with db.tx(caller) as conn:
+        row = _app_row(conn, caller.workspace_id, slug)
+        ref = app_ref(conn, row)
+        return {**_app_view(conn, row), "gcp_project": ref.target.project,
+                "service_name": row["service_name"] or ref.service, "app_id": str(row["id"])}
+
+
 def app_ref_for(caller: Caller, slug: str, include_deleted: bool = True) -> tuple[AppRef, dict[str, Any]]:
     with db.tx(caller) as conn:
         row = _app_row(conn, caller.workspace_id, slug, include_deleted)
