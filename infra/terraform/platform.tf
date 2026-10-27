@@ -118,3 +118,16 @@ output "platform" {
     build_bucket          = google_storage_bucket.platform_builds.name
   }
 }
+
+# Calls the API and worker make as themselves against the apps project (upload bucket reads and
+# writes, inspect_app's Monitoring/Logging reads, the profiler) bill their quota to that project,
+# which needs serviceusage.services.use there. Deploys themselves impersonate sc-hosted-deployer.
+resource "google_project_iam_member" "apps_service_usage" {
+  for_each = {
+    api    = google_service_account.api.member
+    worker = google_service_account.worker.member
+  }
+  project = var.apps_project_id
+  role    = "roles/serviceusage.serviceUsageConsumer"
+  member  = each.value
+}
