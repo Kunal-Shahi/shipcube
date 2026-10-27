@@ -93,11 +93,14 @@ retry "${G[@]}" artifacts repositories add-iam-policy-binding "$REPO" --project 
 retry "${G[@]}" storage managed-folders add-iam-policy-binding "$FOLDER" \
   --member "serviceAccount:${SA}" --role roles/storage.objectViewer
 
-# Only the worker may mint tokens for the build SA; the hosted deployer may run builds as it.
+# Only the worker may mint tokens for the build SA. The worker and the hosted deployer (whichever
+# submits the build) may run builds as it. Never sc-api.
 retry "${G[@]}" iam service-accounts add-iam-policy-binding "$SA" --project "$APPS_PROJECT" \
   --member "$WORKER" --role roles/iam.serviceAccountTokenCreator
-retry "${G[@]}" iam service-accounts add-iam-policy-binding "$SA" --project "$APPS_PROJECT" \
-  --member "$DEPLOYER" --role roles/iam.serviceAccountUser
+for m in "$WORKER" "$DEPLOYER"; do
+  retry "${G[@]}" iam service-accounts add-iam-policy-binding "$SA" --project "$APPS_PROJECT" \
+    --member "$m" --role roles/iam.serviceAccountUser
+done
 if [[ -n "${EXTRA_IMPERSONATOR:-}" ]]; then
   retry "${G[@]}" iam service-accounts add-iam-policy-binding "$SA" --project "$APPS_PROJECT" \
     --member "$EXTRA_IMPERSONATOR" --role roles/iam.serviceAccountTokenCreator
