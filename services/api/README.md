@@ -58,7 +58,8 @@ cd ../mcp && uv run python -m shipcube_mcp.server          # /mcp + /v1 on :8080
 | `SHIPCUBE_BACKEND` | `gcp` (`mock` in DEV_MODE) | `mock` is refused outside DEV_MODE |
 | `SHIPCUBE_DEV_MODE` | unset | `1` enables every mock; never set in production |
 | `SHIPCUBE_APPS_PROJECT`, `SHIPCUBE_CONTROL_PROJECT`, `SHIPCUBE_REGION` | `shipcube-apps-ks`, `shipcube-control-ks`, `asia-south1` | Where apps run |
-| `SHIPCUBE_UPLOAD_BUCKET`, `SHIPCUBE_SIGNER_SA`, `SHIPCUBE_BUILDER_SA`, `SHIPCUBE_REPO`, `SHIPCUBE_BUILDER` | see `settings.py` | Upload bucket, URL signer, Cloud Build SA, Artifact Registry repo, buildpacks builder |
+| `SHIPCUBE_UPLOAD_BUCKET`, `SHIPCUBE_SIGNER_SA`, `SHIPCUBE_REPO`, `SHIPCUBE_BUILDER` | see `settings.py` | Upload bucket, URL signer, Artifact Registry repo in linked projects, buildpacks builder |
+| `SHIPCUBE_BUILDER_SA_TEMPLATE`, `SHIPCUBE_AR_REPO_TEMPLATE`, `SHIPCUBE_UPLOAD_PREFIX_TEMPLATE` | `wsb-{ws12}@{apps_project}.iam.gserviceaccount.com`, `ws-{ws12}`, `ws/{ws}/` | Per-workspace build isolation: each workspace builds as its own SA, reads only its upload prefix and pushes only to its own repo; deploys pin the digest (`deploy/isolation.py`) |
 | `SHIPCUBE_HOSTED_DEPLOYER_SA` | unset | Impersonate this SA for hosted deploys (production: `sc-hosted-deployer`) |
 | `SHIPCUBE_PROFILER_JOB` | unset | Profiler sandbox job for `estimate_load`; unset means static analysis only |
 | `SHIPCUBE_EMBEDDED_WORKER` | `1` in DEV_MODE, else `0` | Run a worker thread in the API process. Not possible in production: the API's login (`shipcube_app`) is confined to the caller's workspace by RLS, and the worker needs `shipcube_worker`. |

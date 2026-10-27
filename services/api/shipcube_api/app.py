@@ -124,7 +124,8 @@ async def _telemetry(_: Request, exc: TelemetryUnavailable) -> JSONResponse:
 
 @app.exception_handler(DeployError)
 async def _deploy_error(_: Request, exc: DeployError) -> JSONResponse:
-    status = {"not_found": 404, "invalid_argument": 400, "rate_limited": 503, "unavailable": 503}.get(exc.code, 502)
+    status = {"not_found": 404, "invalid_argument": 400, "permission_denied": 403, "rate_limited": 503,
+              "unavailable": 503}.get(exc.code, 502)
     log.warning("cloud error on request path", extra={"code": exc.code, "error": str(exc)[:500]})
     return _err(status, exc.code, str(exc))
 

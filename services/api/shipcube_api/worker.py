@@ -30,6 +30,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from . import db, obs
+from .deploy import isolation
 from .deploy.base import AppRef, Deployer, DeployError
 from .estimator import Estimator, make_estimator
 from .settings import settings
@@ -262,6 +263,7 @@ class Worker:
                 with db.worker_tx() as conn:
                     conn.execute("update deployments set status = 'deploying' where id = %s", (dep_id,))
                     caps = {**self._app_caps(conn, app), **{k: v for k, v in (inp.get("caps") or {}).items() if v is not None}}
+                isolation.check_image(settings, ref.workspace_id, state["image"])  # every deployer, before Cloud Run
                 d = self.d.deploy(ref, state["image"], caps, inp.get("env") or {})
                 state.update(url=d.url, revision=d.revision, caps=caps)
 

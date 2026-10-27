@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
 
-from .base import AppRef, Deployed, ShouldStop
+from ..settings import settings
+from . import isolation
+from .base import AppRef, Deployed, DeployError, ShouldStop
 
 
 class MockDeployer:
@@ -17,6 +20,7 @@ class MockDeployer:
         self.speed = speed
         self.access: dict[str, list[str]] = {}
         self.deleted: set[str] = set()
+        self.uploads: set[str] = set()  # object names; a mock upload counts as PUT at once
 
     def _sleep(self, s: float, should_stop: ShouldStop | None = None) -> None:
         end = time.monotonic() + s * self.speed
@@ -26,24 +30,35 @@ class MockDeployer:
             time.sleep(0.05)
 
     def create_upload(self, workspace_id: str, content_type: str) -> dict[str, Any]:
-        upload_id = f"upl_{secrets.token_hex(4)}"
+        upload_id = f"upl_{secrets.token_hex(6)}"
+        name = isolation.upload_object(settings, workspace_id, upload_id)
+        self.uploads.add(name)
         return {
             "upload_id": upload_id, "method": "PUT",
-            "url": f"https://storage.googleapis.com/shipcube-uploads/{upload_id}.tgz?X-Goog-Signature=mock",
+            "url": f"https://storage.googleapis.com/{settings.upload_bucket}/{name}?X-Goog-Signature=mock",
             "headers": {"Content-Type": content_type}, "max_bytes": 100 * 1024 * 1024,
             "expires_at": (datetime.now(UTC) + timedelta(minutes=15)).isoformat(timespec="seconds").replace("+00:00", "Z"),
         }
 
     def stage_source(self, app: AppRef, source: dict[str, Any], op_id: str) -> dict[str, Any]:
         self._sleep(1)
+        isolation.check_source(settings, app.workspace_id, source)
+        if source.get("kind") == "upload" and isolation.upload_object(settings, app.workspace_id, source["upload_id"]) not in self.uploads:
+            raise DeployError("invalid_argument", f"upload {source['upload_id']} was not found; PUT the tarball first")
+        if source.get("kind") == "image":
+            return {"image": source["uri"]}
         return {"mock": source.get("kind")}
 
     def build(self, app: AppRef, staged: dict[str, Any], op_id: str, should_stop: ShouldStop,
               on_build: Callable[[str], None], existing_build_id: str | None = None) -> str:
         if not existing_build_id:
             on_build(f"mock-build-{op_id}")
+        if "image" in staged:
+            return staged["image"]
         self._sleep(4, should_stop)
-        return f"{app.region}-docker.pkg.dev/{app.target.project}/shipcube/{app.name}:{op_id}"
+        repo = isolation.ar_repo(settings, app.workspace_id) if app.target.kind == "shipcube" else settings.repo
+        digest = hashlib.sha256(f"{app.service}/{op_id}".encode()).hexdigest()
+        return f"{app.region}-docker.pkg.dev/{app.target.project}/{repo}/{app.service}@sha256:{digest}"
 
     def deploy(self, app: AppRef, image: str, caps: dict[str, Any], env: dict[str, str]) -> Deployed:
         self._sleep(3)

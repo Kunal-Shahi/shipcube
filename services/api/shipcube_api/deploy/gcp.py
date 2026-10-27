@@ -1,9 +1,11 @@
 """Real deploys on GCP, over the REST APIs with google-auth (no per-service client libraries).
 
 Flow for one deploy (docs/research/networking.md §4):
-  stage_source  inline -> tar.gz in the uploads bucket; upload -> check the object exists
-  build         Cloud Build, buildpacks (no Dockerfile), runs as the builder SA, publishes to
-                Artifact Registry  <region>-docker.pkg.dev/<project>/shipcube/<app>:<op id>
+  stage_source  inline -> tar.gz in the uploads bucket; upload -> check the object exists. Both
+                live under the workspace's prefix (ws/<workspace>/), derived from the token
+  build         Cloud Build, buildpacks (no Dockerfile), runs as the workspace's builder SA, publishes
+                to the workspace's repo <region>-docker.pkg.dev/<project>/ws-<ws12>/<app>:<op id>;
+                the deploy then pins the pushed digest (isolation.py, red-team C-1)
   deploy        per-app runtime SA with no roles; Cloud Run v2 service, gen2, scale to zero, caps,
                 --no-allow-unauthenticated + IAP; IAP service agent gets run.invoker; wait until ready
   set_access    IAP accessor bindings (roles/iap.httpsResourceAccessor) = the app's access list
@@ -28,6 +30,7 @@ from google.auth import impersonated_credentials
 from google.auth.transport.requests import AuthorizedSession, Request
 
 from ..settings import Settings
+from . import isolation
 from .base import AppRef, Deployed, DeployError, ShouldStop, normalize_caps
 
 log = logging.getLogger(__name__)
@@ -118,9 +121,8 @@ class GcpDeployer:
 
         return storage.Client(project=self.s.apps_project, credentials=self._adc).bucket(self.s.upload_bucket)
 
-    @staticmethod
-    def _object(workspace_id: str, upload_id: str) -> str:
-        return f"uploads/{workspace_id}/{upload_id}.tgz"
+    def _object(self, workspace_id: str, upload_id: str) -> str:
+        return isolation.upload_object(self.s, workspace_id, upload_id)
 
     def create_upload(self, workspace_id: str, content_type: str) -> dict[str, Any]:
         upload_id = f"upl_{secrets.token_hex(6)}"
@@ -136,6 +138,7 @@ class GcpDeployer:
     def stage_source(self, app: AppRef, source: dict[str, Any], op_id: str) -> dict[str, Any]:
         kind = source["kind"]
         if kind == "image":
+            isolation.check_image(self.s, app.workspace_id, source["uri"])
             return {"image": source["uri"]}
         if kind == "git":
             return {"gitSource": {k: v for k, v in {"url": source["url"], "revision": source.get("ref") or "HEAD",
@@ -157,14 +160,27 @@ class GcpDeployer:
                     info = tarfile.TarInfo(f["path"].lstrip("/"))
                     info.size, info.mtime, info.mode = len(data), int(time.time()), 0o644
                     tar.addfile(info, io.BytesIO(data))
-            name = f"inline/{app.workspace_id}/{op_id}.tgz"
+            name = isolation.inline_object(self.s, app.workspace_id, op_id)
             bucket.blob(name).upload_from_string(buf.getvalue(), content_type="application/gzip")
         return {"storageSource": {"bucket": self.s.upload_bucket, "object": name}}
 
     # --- build --------------------------------------------------------------------------
 
+    def _repo(self, app: AppRef) -> str:
+        return isolation.ar_repo(self.s, app.workspace_id) if app.target.kind == "shipcube" else self.s.repo
+
     def image_for(self, app: AppRef, tag: str) -> str:
-        return f"{app.region}-docker.pkg.dev/{app.target.project}/{self.s.repo}/{app.service}:{tag}"
+        return f"{app.region}-docker.pkg.dev/{app.target.project}/{self._repo(app)}/{app.service}:{tag}"
+
+    def _pin(self, sess: AuthorizedSession, app: AppRef, image: str) -> str:
+        """repo/app:tag -> repo/app@sha256:..., read back from Artifact Registry by the control plane."""
+        name, _, tag = image.rpartition(":")
+        t = self._call(sess, "GET", f"{AR}/projects/{app.target.project}/locations/{app.region}/repositories/"
+                                    f"{self._repo(app)}/packages/{app.service}/tags/{tag}")
+        digest = t.get("version", "").rsplit("/", 1)[-1]
+        if not digest.startswith("sha256:"):
+            raise DeployError("build_failed", f"no digest for {image} in Artifact Registry ({t.get('version')})")
+        return f"{name}@{digest}"
 
     def build(self, app: AppRef, staged: dict[str, Any], op_id: str, should_stop: ShouldStop,
               on_build: Callable[[str], None], existing_build_id: str | None = None) -> str:
@@ -173,7 +189,15 @@ class GcpDeployer:
         sess = self._for(app)
         project, region = app.target.project, app.region
         image = self.image_for(app, op_id.replace("_", "-"))
-        builder_sa = app.target.builder_sa or self.s.builder_sa
+        if app.target.kind == "shipcube":
+            builder_sa = isolation.builder_sa(self.s, app.workspace_id)
+        elif app.target.builder_sa:
+            builder_sa = app.target.builder_sa
+        else:
+            raise DeployError("invalid_argument", f"linked target {app.target.id} has no builder service account")
+        if "storageSource" in staged:
+            src = staged["storageSource"]
+            isolation.check_object(self.s, app.workspace_id, src["bucket"], src["object"])
         body = {
             "source": staged,
             "steps": [{
@@ -195,7 +219,7 @@ class GcpDeployer:
         while True:
             b = self._call(sess, "GET", f"{base}/{build_id}")
             if b["status"] in ("SUCCESS",):
-                return image
+                return self._pin(sess, app, image)
             if b["status"] in ("FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED"):
                 raise DeployError("build_failed", f"Cloud Build {build_id} {b['status']}: {b.get('statusDetail', '')} "
                                                   f"(logs: {b.get('logUrl', '')})")
@@ -261,6 +285,7 @@ class GcpDeployer:
         }
 
     def deploy(self, app: AppRef, image: str, caps: dict[str, Any], env: dict[str, str]) -> Deployed:
+        isolation.check_image(self.s, app.workspace_id, image)
         sess = self._for(app)
         sa = self._ensure_runtime_sa(sess, app)
         body = self._service_body(app, image, caps, env, sa)
@@ -308,6 +333,9 @@ class GcpDeployer:
         svc = self._call(sess, "GET", self._service_url(app))
         c = normalize_caps(caps)
         t = svc["template"]
+        # The PATCH makes a new revision from the stored image reference, so it must still be this
+        # workspace's pinned image (apps deployed before per-workspace repos need a redeploy).
+        isolation.check_image(self.s, app.workspace_id, t["containers"][0]["image"])
         t["scaling"] = {**t.get("scaling", {}), "minInstanceCount": 0, "maxInstanceCount": int(c.get("max_instances", 2))}
         t["maxInstanceRequestConcurrency"] = int(c.get("concurrency", 80))
         t["timeout"] = f"{int(c.get('timeout_s', 60))}s"
@@ -379,12 +407,14 @@ class GcpDeployer:
                 raise
         if not app.target.shared_runtime_sa:
             self._call(sess, "DELETE", f"{IAM}/projects/{app.target.project}/serviceAccounts/{app.runtime_sa}", ok=(200, 404))
-        pkg = f"{AR}/projects/{app.target.project}/locations/{app.region}/repositories/{self.s.repo}/packages/{app.service}"
-        try:
-            self._wait_op(sess, AR, self._call(sess, "DELETE", pkg))
-        except DeployError as e:
-            if e.code != "not_found":
-                raise
+        repos = [self._repo(app)] + ([self.s.repo] if app.target.kind == "shipcube" else [])  # + the pre-isolation repo
+        for repo in repos:
+            pkg = f"{AR}/projects/{app.target.project}/locations/{app.region}/repositories/{repo}/packages/{app.service}"
+            try:
+                self._wait_op(sess, AR, self._call(sess, "DELETE", pkg))
+            except DeployError as e:
+                if e.code != "not_found":
+                    raise
         log.info("purged %s in %s", app.service, app.target.project)
 
 
@@ -392,8 +422,8 @@ def describe_resources(s: Settings) -> list[str]:
     """Human-readable list of what a GCP deploy touches (for approval and the README)."""
     return [
         f"GCS bucket gs://{s.upload_bucket} ({s.region}), private, objects deleted after 1 day",
-        f"Artifact Registry repo {s.repo} in {s.apps_project} ({s.region}), keep 5 versions",
-        f"Cloud Build builds in {s.apps_project}, as {s.builder_sa}",
+        f"Artifact Registry repo per workspace ({s.ar_repo_template}) in {s.apps_project} ({s.region})",
+        f"Cloud Build builds in {s.apps_project}, as the workspace's builder SA ({s.builder_sa_template})",
         f"Cloud Run services in {s.apps_project}: gen2, min 0 / max 2 instances, 1 vCPU, 512 MiB, IAP on",
         "One runtime service account per app (app-<hash>@...), no project roles",
     ]
