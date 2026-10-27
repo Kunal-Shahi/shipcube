@@ -34,3 +34,12 @@ export function time(iso: string) {
     timeZone: "UTC",
   });
 }
+
+export const RESTORE_DAYS = 7;
+
+/** When a soft-deleted app stops being restorable, and how many days are left. */
+export function restoreWindow(deletedAt: string, now = MOCK_NOW) {
+  const until = new Date(new Date(deletedAt).getTime() + RESTORE_DAYS * 86_400_000);
+  const daysLeft = Math.max(0, Math.ceil((until.getTime() - now) / 86_400_000));
+  return { until: until.toISOString(), daysLeft };
+}

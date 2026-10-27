@@ -4,12 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
 
-export function RouteTabs({ tabs }: { tabs: { href: string; label: string; count?: number }[] }) {
+export function RouteTabs({ tabs }: { tabs: { href: string; label: string; count?: number; also?: string }[] }) {
   const pathname = usePathname();
   return (
     <nav aria-label="Sections" className="-mb-px flex gap-5 overflow-x-auto border-b border-border">
       {tabs.map((t, i) => {
-        const active = i === 0 ? pathname === t.href : pathname.startsWith(t.href);
+        const active = (i === 0 ? pathname === t.href : pathname.startsWith(t.href)) || (!!t.also && pathname.startsWith(t.also));
         return (
           <Link
             key={t.href}

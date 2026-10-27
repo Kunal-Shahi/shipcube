@@ -83,7 +83,17 @@ Charts use `--accent` for the primary series and `--fg-subtle` for the compariso
 | **Tabs** | Underline style, 13px, accent underline on the active tab. Used for app detail sections and client choice on the MCP guide. |
 | **Empty state** | One sentence saying what will appear here, one sentence saying how to make it appear (usually an agent prompt or an MCP tool), one action. No illustration. |
 | **Error state** | What failed, the likely cause, and a "Try again" button. Shows the request ID in mono so it can be reported. |
+| **Restore window** | A deleted app shows a critical-soft banner with the date it can be restored until and the days left, plus a Restore button. Deleted apps leave the main table and appear under "Recently deleted". |
 | **Loading state** | Skeleton rows that match the final layout (same row heights, same column count). No spinners for page loads; a 14px spinner only inside a pressed button. |
+
+## Decision pages
+
+Approvals (`/approvals/<id>`) and data model changes (`/data/migrations/<id>`) are where a person signs off on something an agent asked for. Agents link straight to them (`approval_url`), so they have to make sense with no other context. They share one layout:
+
+- **Left, the record:** what was asked (the person's own prompt, quoted, when the agent passed it on), what changes (a now → if-approved table, with the risky value in warning or critical colour), why it needs a person, what happens next as numbered steps, Muse Spark's assessment when it has one, and the exact tool call or migration JSON.
+- **Right, the decision:** a sticky panel with the expiry, an optional note to the agent, and two buttons. The approve button names the action ("Approve deploy", "Apply to the model", "Delete app"). Destructive actions use the danger style; breaking migrations need an extra acknowledgement checkbox that names what breaks.
+- After deciding, the panel says what the agent does next. It doesn't redirect anywhere.
+- Migration kinds use the status colours: additive is good, change is warning, breaking is critical. Catalog diffs use `+` / `~` / `−` in the same colours, always with the sign so colour isn't the only signal.
 
 ## Charts
 

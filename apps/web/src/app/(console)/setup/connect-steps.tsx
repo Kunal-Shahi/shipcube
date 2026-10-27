@@ -83,6 +83,11 @@ export function ConnectSteps() {
               <CodeBlock label="Terminal" code={s.claudeCode} />
               <p className="text-fg-muted">Check that it connected. ShipCube should show as <span className="text-good">✓ Connected</span>:</p>
               <CodeBlock label="Terminal" code={s.claudeVerify} />
+              <p className="text-fg-muted">
+                To share the setup with your team instead, commit this as <code className="font-mono text-[12px]">.mcp.json</code> in the
+                repo. Each person keeps their own token in <code className="font-mono text-[12px]">${TOKEN_ENV}</code>.
+              </p>
+              <CodeBlock label=".mcp.json" code={s.claudeProject} />
             </>
           )}
           {client === "cursor" && (
@@ -115,7 +120,7 @@ export function ConnectSteps() {
       <Step n={4} title="Try it">
         <p className="mb-3 text-fg-muted">Open any project and ask your agent:</p>
         <CodeBlock label="Prompt" wrap code="Which ShipCube apps do I have, and are they healthy?" />
-        <p className="mt-3 text-fg-muted">It should call <code className="font-mono text-[12px]">get_status</code> and list your apps. If it says the server isn&apos;t available, restart the agent so it reloads its MCP config.</p>
+        <p className="mt-3 text-fg-muted">It should call <code className="font-mono text-[12px]">list_apps</code> and list your apps. If it says the server isn&apos;t available, restart the agent so it reloads its MCP config.</p>
       </Step>
     </ol>
   );

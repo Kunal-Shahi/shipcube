@@ -40,6 +40,8 @@ export interface AppSummary {
   lastDeployAt: string;
   deployedBy: string;
   aiProvider: string;
+  /** Soft-deleted apps can be restored for 7 days. */
+  deletedAt?: string;
 }
 
 export interface LoadEstimate {
@@ -53,7 +55,10 @@ export interface LoadEstimate {
   monthlyCost: number;
   reasoning: string[];
   signals: { label: string; value: string }[];
+  /** The classifier that produced the numbers. */
   estimatedBy: string;
+  /** The model that wrote the reasoning; "rules" when Muse was unavailable. */
+  explainedBy: string;
   estimatedAt: string;
   overridden: boolean;
 }
@@ -150,6 +155,7 @@ export interface ApiToken {
   prefix: string;
   scopes: string[];
   createdAt: string;
+  expiresAt: string;
   lastUsedAt: string | null;
 }
 
@@ -169,4 +175,103 @@ export interface BillingOverview {
   forecast: number;
   byApp: { appId: string; name: string; billing: Billing; compute: number; data: number; llm: number }[];
   daily: SeriesPoint[];
+}
+
+// Approvals: agent actions that wait for a person in the console (docs/WORKSTREAMS.md, "Decided" §5).
+export type ApprovalKind = "linked_gcp_deploy" | "cap_raise" | "domain_grant" | "delete_app";
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
+
+export interface ImpactRow {
+  label: string;
+  before?: string;
+  after: string;
+  tone?: "warning" | "critical";
+}
+
+export interface Approval {
+  id: string;
+  kind: ApprovalKind;
+  status: ApprovalStatus;
+  title: string;
+  appId?: string;
+  appName: string;
+  requestedBy: { agent: string; tokenName: string; user: string };
+  requestedAt: string;
+  expiresAt: string;
+  /** What the person asked their agent, when the agent passed it along. */
+  prompt?: string;
+  /** Why this action needs approval. */
+  reason: string;
+  /** What happens if it's approved, in order. */
+  effects: string[];
+  impact: ImpactRow[];
+  /** Muse Spark's view, when it had one (for example recommended caps). */
+  museNote?: string;
+  tool: { name: string; args: Record<string, unknown> };
+  decision?: { by: string; at: string; note?: string };
+}
+
+// Data layer (Kunal-Shahi/shipcube-data): warehouse connection, cubes, migrations.
+export type WarehouseKind = "bigquery" | "postgres" | "clickhouse";
+
+export interface Warehouse {
+  connected: boolean;
+  kind?: WarehouseKind;
+  name?: string;
+  details?: { label: string; value: string }[];
+  connectedAt?: string;
+  connectedBy?: string;
+  lastCheckedAt?: string;
+  modelVersion: number;
+}
+
+export interface CubeMember {
+  name: string;
+  type: "string" | "number" | "time" | "boolean" | "count" | "sum" | "avg" | "count_distinct";
+  sql: string;
+  description?: string;
+  deprecated?: string;
+  restrictedTo?: string[];
+}
+
+export interface Cube {
+  name: string;
+  title: string;
+  description: string;
+  table: string;
+  schema: string;
+  dimensions: CubeMember[];
+  measures: CubeMember[];
+  joins: { to: string; relationship: "many_to_one" | "one_to_many" | "one_to_one"; on: string }[];
+  segments: { name: string; sql: string }[];
+  partition?: string;
+  policies: string[];
+  usedBy: string[];
+}
+
+export type MigrationKind = "additive" | "change" | "breaking";
+export type MigrationStatus = "proposed" | "applied" | "rejected";
+
+export interface MigrationImpact {
+  breaks: { query: string; app: string; error: string }[];
+  changes: { query: string; app: string; note: string }[];
+  warnings: { query: string; app: string; warnings: string[] }[];
+  unaffected: number;
+  appsBroken: string[];
+}
+
+export interface Migration {
+  id: string;
+  description: string;
+  status: MigrationStatus;
+  kind: MigrationKind;
+  proposedBy: { agent: string; tokenName: string; user: string };
+  draftedBy?: string;
+  proposedAt: string;
+  baseVersion: number;
+  ops: ({ op: string } & Record<string, unknown>)[];
+  diff: { added: string[]; changed: string[]; removed: string[] };
+  impact: MigrationImpact;
+  applied?: { version: number; at: string; by: string };
+  rejected?: { at: string; by: string; note?: string };
 }

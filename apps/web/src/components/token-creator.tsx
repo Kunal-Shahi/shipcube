@@ -5,15 +5,17 @@ import { useState } from "react";
 import { cn } from "@/lib/cn";
 import { SCOPES } from "@/lib/mcp";
 import { CodeBlock } from "./copy-button";
-import { Button, Field, Input } from "./ui";
+import { Button, Field, Input, Select } from "./ui";
 
+// Same shape as a real token (sc_pat_<id>_<secret>) so the guide looks right. It is
+// random and only exists in this browser; the mock backend never accepts it.
 function generateToken() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return "sc_pat_" + Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("");
+  const pick = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => alphabet[b % alphabet.length]).join("");
+  return `sc_pat_${pick(8)}_${pick(43)}`;
 }
 
-export type CreatedToken = { id: string; name: string; value: string; scopes: string[] };
+export type CreatedToken = { id: string; name: string; value: string; scopes: string[]; expiresAt: string };
 
 export function TokenCreator({
   onCreated,
@@ -26,6 +28,7 @@ export function TokenCreator({
 }) {
   const [name, setName] = useState(defaultName);
   const [scopes, setScopes] = useState<string[]>(SCOPES.map((s) => s.id));
+  const [days, setDays] = useState(30);
   const [pending, setPending] = useState(false);
   const [created, setCreated] = useState<CreatedToken | null>(null);
   const [touched, setTouched] = useState(false);
@@ -71,7 +74,8 @@ export function TokenCreator({
         if (!name.trim() || scopes.length === 0) return;
         setPending(true);
         setTimeout(() => {
-          const t = { id: crypto.randomUUID(), name: name.trim(), value: generateToken(), scopes };
+          const expiresAt = new Date(Date.now() + days * 86_400_000).toISOString();
+          const t = { id: crypto.randomUUID(), name: name.trim(), value: generateToken(), scopes, expiresAt };
           setCreated(t);
           setPending(false);
           onCreated?.(t);
@@ -87,6 +91,13 @@ export function TokenCreator({
           className={cn(compact ? "max-w-[360px]" : "max-w-[420px]", nameError && "border-critical")}
           autoComplete="off"
         />
+      </Field>
+      <Field label="Expires after" htmlFor="token-days" help="Agents stop connecting when the token expires. Create a new one then.">
+        <Select id="token-days" value={days} onChange={(e) => setDays(Number(e.target.value))} className="max-w-[160px]">
+          <option value={7}>7 days</option>
+          <option value={30}>30 days</option>
+          <option value={90}>90 days</option>
+        </Select>
       </Field>
       <fieldset className="flex flex-col gap-1.5">
         <legend className="mb-1.5 text-[12px] font-medium">What the agent can do</legend>

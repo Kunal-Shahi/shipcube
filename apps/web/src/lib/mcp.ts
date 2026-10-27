@@ -1,28 +1,38 @@
-// MCP connection details shown on the setup guide. The backend networking workstream
-// owns the final endpoint, transport and auth; change them here when it lands.
+// MCP connection details shown on the setup guide. They follow the decided MCP shape
+// (docs/WORKSTREAMS.md, "Decided") and docs/research/networking.md from the networking
+// workstream. Change them here if those documents change.
 
 export const MCP_URL = "https://mcp.shipcube.dev/mcp";
 export const TOKEN_ENV = "SHIPCUBE_TOKEN";
 
 export const SCOPES = [
-  { id: "apps:write", label: "Deploy and change apps", detail: "estimate_load, deploy_app, set_caps, ai_config" },
-  { id: "access:write", label: "Manage who can open apps", detail: "grant_access, revoke_access" },
-  { id: "data:read", label: "Query connected data", detail: "connect_data, query" },
-  { id: "logs:read", label: "Read status, logs and metrics", detail: "get_status, get_logs, get_metrics" },
+  { id: "apps:read", label: "See apps, logs and metrics", detail: "list_apps, inspect_app, operation" },
+  { id: "apps:deploy", label: "Estimate, deploy and delete apps", detail: "create_upload, estimate_load, deploy_app, delete_app" },
+  { id: "caps:write", label: "Change caps and AI provider", detail: "set_caps, ai_config" },
+  { id: "access:write", label: "Change who can open apps", detail: "set_access" },
+  { id: "data:read", label: "Read the data model and query it", detail: "data_list_cubes, data_describe_cube, data_query, data_search_values" },
+  { id: "data:migrate", label: "Propose data model changes", detail: "data_propose_migration" },
 ] as const;
 
-export const TOOLS: { name: string; purpose: string; prompt: string }[] = [
-  { name: "estimate_load", purpose: "Profiles your code in a sandbox and returns the workload class, tier, resources, monthly cost and the reasoning.", prompt: "How much would this cost to run?" },
-  { name: "deploy_app", purpose: "Builds a container and deploys it to the chosen tier, on ShipCube's GCP project or yours.", prompt: "Deploy this with ShipCube" },
-  { name: "set_caps", purpose: "Sets spend, request-rate, concurrency, instance and token limits for an app.", prompt: "Cap it at $20 a month" },
-  { name: "grant_access", purpose: "Lets a person, Google group or whole domain open an app.", prompt: "Share it with finance-team@acme.com" },
-  { name: "revoke_access", purpose: "Removes someone's access. Takes effect on their next request.", prompt: "Remove alex@acme.com from the tracker" },
-  { name: "connect_data", purpose: "Registers a data source and its semantic model (cubes, dimensions, measures).", prompt: "Connect our orders warehouse" },
-  { name: "query", purpose: "Runs a typed query through the semantic layer and returns rows plus the compiled SQL.", prompt: "Revenue share by region, last 6 months" },
-  { name: "get_status", purpose: "Health, tier, URL and caps for one app or all of them.", prompt: "What's running right now?" },
-  { name: "get_logs", purpose: "Build, deploy and request logs, filtered by level or time.", prompt: "Why is the scorecard returning 503s?" },
-  { name: "get_metrics", purpose: "Latency, freshness, cost and drift over a time window.", prompt: "How much did my apps cost this week?" },
-  { name: "ai_config", purpose: "Chooses the model provider an app uses through the AI gateway: Muse by default, or a BYOK key.", prompt: "Use our Fireworks key for the triage app" },
+export type ToolGroup = "Apps" | "Data";
+
+export const TOOLS: { name: string; group: ToolGroup; purpose: string; prompt: string; approval?: string }[] = [
+  { name: "whoami", group: "Apps", purpose: "Returns your account, workspace, token permissions and whether a GCP project is linked.", prompt: "Which ShipCube workspace am I in?" },
+  { name: "create_upload", group: "Apps", purpose: "Returns a short-lived upload URL. The agent packages your project and uploads it with curl.", prompt: "(called for you before a deploy)" },
+  { name: "estimate_load", group: "Apps", purpose: "Profiles the code in a sandbox. The classifier returns the workload class, tier, resources and cost; Muse Spark explains why and suggests caps.", prompt: "How much would this cost to run?" },
+  { name: "deploy_app", group: "Apps", purpose: "Builds and deploys to the chosen tier. Returns an operation to follow.", prompt: "Deploy this with ShipCube", approval: "First deploy to your own GCP project" },
+  { name: "operation", group: "Apps", purpose: "Checks or cancels a running deploy, estimate or delete.", prompt: "Is the deploy done yet?" },
+  { name: "list_apps", group: "Apps", purpose: "Lists your apps with health, tier, URL and spend.", prompt: "What's running right now?" },
+  { name: "inspect_app", group: "Apps", purpose: "Status, logs and metrics for one app, in one call.", prompt: "Why is the scorecard returning 503s?" },
+  { name: "set_caps", group: "Apps", purpose: "Sets spend, request-rate, concurrency, instance and token limits.", prompt: "Cap it at $20 a month", approval: "Raising a cap above the workspace default" },
+  { name: "set_access", group: "Apps", purpose: "Adds or removes people, Google groups or domains, and returns the full access list.", prompt: "Share it with finance-team@acme.com", approval: "Sharing with a whole domain" },
+  { name: "ai_config", group: "Apps", purpose: "Chooses the model provider the app uses through the AI gateway: Muse by default, or one of your keys.", prompt: "Use our Fireworks key for the triage app" },
+  { name: "delete_app", group: "Apps", purpose: "Deletes an app. It can be restored from the console for 7 days.", prompt: "Delete the old ops report", approval: "Always" },
+  { name: "data_list_cubes", group: "Data", purpose: "Lists the cubes (tables of business meaning) in your data model.", prompt: "What data can I use?" },
+  { name: "data_describe_cube", group: "Data", purpose: "Shows a cube's dimensions, measures, joins and descriptions.", prompt: "What's in the orders cube?" },
+  { name: "data_query", group: "Data", purpose: "Runs a typed query through the semantic layer and returns rows plus the compiled SQL.", prompt: "Revenue share by region, last 6 months" },
+  { name: "data_search_values", group: "Data", purpose: "Finds actual values in a dimension, so filters use real spellings.", prompt: "Which order statuses exist?" },
+  { name: "data_propose_migration", group: "Data", purpose: "Proposes a change to the data model. Muse Spark can draft it. A person reviews the diff and applies it here; agents can't apply.", prompt: "Add a late-delivery rate measure" },
 ];
 
 export function snippets(token?: string) {
@@ -30,14 +40,19 @@ export function snippets(token?: string) {
   return {
     env: `export ${TOKEN_ENV}=${token ?? "sc_pat_…"}`,
     claudeCode: `claude mcp add --transport http shipcube ${MCP_URL} \\\n  --scope user \\\n  --header "${header}"`,
+    claudeProject: JSON.stringify(
+      { mcpServers: { shipcube: { type: "http", url: MCP_URL, headers: { Authorization: "Bearer ${" + TOKEN_ENV + "}" } } } },
+      null,
+      2,
+    ),
     claudeVerify: "claude mcp list",
     cursor: JSON.stringify(
-      { mcpServers: { shipcube: { url: MCP_URL, headers: { Authorization: `Bearer ${token ?? "${env:" + TOKEN_ENV + "}"}` } } } },
+      { mcpServers: { shipcube: { url: MCP_URL, headers: { Authorization: "Bearer ${env:" + TOKEN_ENV + "}" } } } },
       null,
       2,
     ),
     generic: JSON.stringify(
-      { mcpServers: { shipcube: { type: "http", url: MCP_URL, headers: { Authorization: `Bearer ${token ?? "<your token>"}` } } } },
+      { mcpServers: { shipcube: { type: "http", url: MCP_URL, headers: { Authorization: "Bearer <your token>" } } } },
       null,
       2,
     ),
@@ -47,7 +62,7 @@ export function snippets(token?: string) {
           shipcube: {
             command: "npx",
             args: ["-y", "mcp-remote", MCP_URL, "--header", "Authorization:${AUTH_HEADER}"],
-            env: { AUTH_HEADER: `Bearer ${token ?? "<your token>"}` },
+            env: { AUTH_HEADER: "Bearer <your token>" },
           },
         },
       },

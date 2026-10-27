@@ -3,7 +3,9 @@ import { ChevronRight, ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { RouteTabs } from "@/components/tabs";
-import { HealthPill, TierBadge, buttonClass } from "@/components/ui";
+import { RestoreButton } from "@/components/restore-button";
+import { HealthPill, Pill, TierBadge, buttonClass } from "@/components/ui";
+import { ago, date, restoreWindow } from "@/lib/format";
 import { getApp } from "@/lib/api";
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
@@ -17,6 +19,7 @@ export default async function AppLayout({ children, params }: { children: React.
   if (!app) notFound();
   const base = `/apps/${app.id}`;
   const isJob = app.kind === "job";
+  const restore = app.deletedAt ? restoreWindow(app.deletedAt) : null;
 
   return (
     <>
@@ -29,17 +32,29 @@ export default async function AppLayout({ children, params }: { children: React.
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="font-mono text-[18px] font-semibold leading-7 tracking-[-0.01em]">{app.name}</h1>
-            <HealthPill health={app.health} />
+            {restore ? <Pill tone="critical">Deleted</Pill> : <HealthPill health={app.health} />}
             <TierBadge tier={app.tier} long />
           </div>
           <p className="mt-1 max-w-[72ch] text-fg-muted">{app.description}</p>
         </div>
-        {!isJob && (
+        {!isJob && !restore && (
           <a href={app.url} target="_blank" rel="noreferrer" className={buttonClass("secondary")}>
             Open app <ExternalLink className="size-3.5" aria-hidden />
           </a>
         )}
       </header>
+      {restore && app.deletedAt && (
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-critical/40 bg-critical-soft px-4 py-3">
+          <p>
+            <span className="font-medium">Deleted {ago(app.deletedAt)}.</span>{" "}
+            <span className="text-fg-muted">
+              The URL is off and nobody can open it. You can restore it until {date(restore.until)} ({restore.daysLeft}{" "}
+              {restore.daysLeft === 1 ? "day" : "days"} left); after that ShipCube removes the service and its image.
+            </span>
+          </p>
+          <RestoreButton name={app.name} size="md" />
+        </div>
+      )}
       <RouteTabs
         tabs={[
           { href: base, label: "Overview" },

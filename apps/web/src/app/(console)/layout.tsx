@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { Wordmark } from "@/components/logo";
 import { Nav } from "@/components/nav";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { pendingApprovalCount } from "@/lib/api";
 import { requireSession } from "@/lib/auth";
 import { signOut } from "../(auth)/actions";
 
@@ -29,7 +30,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
           </div>
         </div>
         <div className="md:flex-1">
-          <Nav />
+          <Nav pendingApprovals={await pendingApprovalCount()} />
         </div>
         <div className="hidden flex-col gap-3 md:flex">
           <div className="px-2">

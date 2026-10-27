@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { DescList, Panel, PanelHeader, TierBadge } from "@/components/ui";
 import { ReplacementSuggestion } from "@/components/replacement";
 import { getApp } from "@/lib/api";
+import { cn } from "@/lib/cn";
 import { date, money, pct } from "@/lib/format";
 import { TIERS } from "@/lib/types";
 import { CapsForm } from "./caps-form";
@@ -29,7 +30,7 @@ export default async function AppOverview({ params }: { params: Promise<{ id: st
         <Panel>
           <PanelHeader
             title="Load estimate"
-            description={`${e.estimatedBy} · ${date(e.estimatedAt)}`}
+            description={`Numbers from the ${e.estimatedBy} on ${date(e.estimatedAt)}`}
             actions={<span className="text-[12px] text-fg-muted">{e.overridden ? "Overridden by you" : "Recommended tier in use"}</span>}
           />
           <div className="grid grid-cols-2 border-b border-border sm:grid-cols-4 [&>div]:px-4 [&>div]:py-3 [&>div:not(:first-child)]:border-l [&>div]:border-border max-sm:[&>div:nth-child(3)]:border-l-0 max-sm:[&>div:nth-child(n+3)]:border-t">
@@ -55,14 +56,19 @@ export default async function AppOverview({ params }: { params: Promise<{ id: st
             </div>
           </div>
           <div className="p-4">
-            <h3 className="text-[12px] font-medium text-fg-muted">Why this tier</h3>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="text-[12px] font-medium text-fg-muted">Why this tier</h3>
+              <span className="text-[12px] text-fg-muted">
+                {e.explainedBy === "rules" ? "Rule-based explanation (Muse Spark was unavailable)" : `Explained by ${e.explainedBy}`}
+              </span>
+            </div>
             <ol className="mt-2 flex max-w-[78ch] list-decimal flex-col gap-1.5 pl-5 marker:text-fg-subtle">
               {e.reasoning.map((r, i) => (
                 <li key={i}>{r}</li>
               ))}
             </ol>
             <h3 className="mt-5 text-[12px] font-medium text-fg-muted">Measured in the sandbox run</h3>
-            <dl className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-3">
+            <dl className={cn("mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border", e.signals.length % 3 === 0 && "sm:grid-cols-3")}>
               {e.signals.map((s) => (
                 <div key={s.label} className="bg-surface px-3 py-2">
                   <dt className="text-[12px] text-fg-muted">{s.label}</dt>

@@ -21,13 +21,14 @@ export function TokenList({ initial }: { initial: ApiToken[] }) {
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[680px] text-left">
+            <table className="w-full min-w-[760px] text-left">
               <thead className="text-[12px] text-fg-muted">
                 <tr className="border-b border-border">
                   <th className="px-4 py-2 font-medium">Name</th>
                   <th className="px-4 py-2 font-medium">Token</th>
                   <th className="px-4 py-2 font-medium">Permissions</th>
                   <th className="px-4 py-2 font-medium">Last used</th>
+                  <th className="px-4 py-2 font-medium">Expires</th>
                   <th className="px-4 py-2" />
                 </tr>
               </thead>
@@ -47,6 +48,7 @@ export function TokenList({ initial }: { initial: ApiToken[] }) {
                       </div>
                     </td>
                     <td className="px-4 py-2 text-fg-muted">{t.lastUsedAt ? ago(t.lastUsedAt) : "Never"}</td>
+                    <td className="px-4 py-2 text-fg-muted">{date(t.expiresAt)}</td>
                     <td className="px-4 py-2 text-right whitespace-nowrap">
                       {confirm === t.id ? (
                         <span className="inline-flex items-center gap-2">
@@ -72,7 +74,7 @@ export function TokenList({ initial }: { initial: ApiToken[] }) {
           <TokenCreator
             onCreated={(t) =>
               setTokens((all) => [
-                { id: t.id, name: t.name, prefix: t.value.slice(0, 11), scopes: t.scopes, createdAt: new Date().toISOString(), lastUsedAt: null },
+                { id: t.id, name: t.name, prefix: t.value.split("_").slice(0, 3).join("_"), scopes: t.scopes, createdAt: new Date().toISOString(), expiresAt: t.expiresAt, lastUsedAt: null },
                 ...all,
               ])
             }

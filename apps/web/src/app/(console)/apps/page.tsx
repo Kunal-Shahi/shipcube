@@ -4,7 +4,8 @@ import { Suspense } from "react";
 import { EmptyState, HealthPill, PageHeader, Panel, TableSkeleton, TierBadge, ButtonLink } from "@/components/ui";
 import { CodeBlock } from "@/components/copy-button";
 import { demoState, listApps, type DemoState } from "@/lib/api";
-import { ago, count, money } from "@/lib/format";
+import { RestoreButton } from "@/components/restore-button";
+import { ago, count, date, money, restoreWindow } from "@/lib/format";
 import type { AppKind } from "@/lib/types";
 
 export const metadata: Metadata = { title: "Apps" };
@@ -34,7 +35,9 @@ export default async function AppsPage({ searchParams }: Props) {
 }
 
 async function AppsTable({ state }: { state: DemoState }) {
-  const apps = await listApps(state);
+  const all = await listApps(state);
+  const apps = all.filter((a) => !a.deletedAt);
+  const deleted = all.filter((a) => a.deletedAt);
 
   if (apps.length === 0) {
     return (
@@ -61,53 +64,76 @@ async function AppsTable({ state }: { state: DemoState }) {
   const attention = apps.filter((a) => a.health === "down" || a.health === "degraded").length;
 
   return (
-    <Panel>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-4 py-2.5 text-[12px] text-fg-muted">
-        <span className="num">{apps.length} apps</span>
-        {attention > 0 && <span className="num text-warning">{attention} need attention</span>}
-        <span className="num">
-          {money(apps.reduce((s, a) => s + a.costMonthToDate, 0))} this month
-        </span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[820px] text-left">
-          <thead className="text-[12px] text-fg-muted">
-            <tr className="border-b border-border">
-              <th className="px-4 py-2 font-medium">Name</th>
-              <th className="px-4 py-2 font-medium">Status</th>
-              <th className="px-4 py-2 font-medium">Tier</th>
-              <th className="px-4 py-2 text-right font-medium">Requests, 24 h</th>
-              <th className="px-4 py-2 text-right font-medium">Spend / cap</th>
-              <th className="px-4 py-2 text-right font-medium">Shared with</th>
-              <th className="px-4 py-2 font-medium">Last deploy</th>
-            </tr>
-          </thead>
-          <tbody>
-            {apps.map((a) => (
-              <tr key={a.id} className="group relative border-b border-border last:border-0 hover:bg-surface-2">
-                <td className="px-4 py-2">
-                  <Link href={`/apps/${a.id}`} className="font-medium after:absolute after:inset-0 focus-visible:outline-none group-has-[:focus-visible]:underline">
-                    {a.name}
-                  </Link>
-                  <div className="text-[12px] text-fg-muted">
-                    {KIND_LABEL[a.kind]} · {a.billing === "own-gcp" ? "Your GCP" : "ShipCube GCP"}
-                  </div>
-                </td>
-                <td className="px-4 py-2"><HealthPill health={a.health} /></td>
-                <td className="px-4 py-2"><TierBadge tier={a.tier} long /></td>
-                <td className="num px-4 py-2 text-right">{count(a.requests24h)}</td>
-                <td className="num px-4 py-2 text-right">
-                  {money(a.costMonthToDate)} <span className="text-fg-subtle">/ {money(a.spendCap)}</span>
-                </td>
-                <td className="num px-4 py-2 text-right">{a.sharedWith}</td>
-                <td className="px-4 py-2 text-fg-muted">
-                  {ago(a.lastDeployAt)} <span className="text-fg-subtle">· {a.deployedBy}</span>
-                </td>
+    <div className="flex flex-col gap-4">
+      <Panel>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-4 py-2.5 text-[12px] text-fg-muted">
+          <span className="num">{apps.length} apps</span>
+          {attention > 0 && <span className="num text-warning">{attention} need attention</span>}
+          <span className="num">
+            {money(apps.reduce((s, a) => s + a.costMonthToDate, 0))} this month
+          </span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[820px] text-left">
+            <thead className="text-[12px] text-fg-muted">
+              <tr className="border-b border-border">
+                <th className="px-4 py-2 font-medium">Name</th>
+                <th className="px-4 py-2 font-medium">Status</th>
+                <th className="px-4 py-2 font-medium">Tier</th>
+                <th className="px-4 py-2 text-right font-medium">Requests, 24 h</th>
+                <th className="px-4 py-2 text-right font-medium">Spend / cap</th>
+                <th className="px-4 py-2 text-right font-medium">Shared with</th>
+                <th className="px-4 py-2 font-medium">Last deploy</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Panel>
+            </thead>
+            <tbody>
+              {apps.map((a) => (
+                <tr key={a.id} className="group relative border-b border-border last:border-0 hover:bg-surface-2">
+                  <td className="px-4 py-2">
+                    <Link href={`/apps/${a.id}`} className="font-medium after:absolute after:inset-0 focus-visible:outline-none group-has-[:focus-visible]:underline">
+                      {a.name}
+                    </Link>
+                    <div className="text-[12px] text-fg-muted">
+                      {KIND_LABEL[a.kind]} · {a.billing === "own-gcp" ? "Your GCP" : "ShipCube GCP"}
+                    </div>
+                  </td>
+                  <td className="px-4 py-2"><HealthPill health={a.health} /></td>
+                  <td className="px-4 py-2"><TierBadge tier={a.tier} long /></td>
+                  <td className="num px-4 py-2 text-right">{count(a.requests24h)}</td>
+                  <td className="num px-4 py-2 text-right">
+                    {money(a.costMonthToDate)} <span className="text-fg-subtle">/ {money(a.spendCap)}</span>
+                  </td>
+                  <td className="num px-4 py-2 text-right">{a.sharedWith}</td>
+                  <td className="px-4 py-2 text-fg-muted">
+                    {ago(a.lastDeployAt)} <span className="text-fg-subtle">· {a.deployedBy}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+      {deleted.length > 0 && (
+        <Panel>
+          <div className="border-b border-border px-4 py-2.5 text-[12px] font-medium text-fg-muted">Recently deleted</div>
+          <ul className="divide-y divide-border">
+            {deleted.map((a) => {
+              const w = restoreWindow(a.deletedAt!);
+              return (
+                <li key={a.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+                  <div className="min-w-0">
+                    <Link href={`/apps/${a.id}`} className="font-medium text-fg-muted hover:text-fg">{a.name}</Link>
+                    <div className="text-[12px] text-fg-muted">
+                      Deleted {ago(a.deletedAt!)}. Restorable until {date(w.until)}, {w.daysLeft} {w.daysLeft === 1 ? "day" : "days"} left.
+                    </div>
+                  </div>
+                  <RestoreButton name={a.name} />
+                </li>
+              );
+            })}
+          </ul>
+        </Panel>
+      )}
+    </div>
   );
 }

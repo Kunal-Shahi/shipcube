@@ -149,7 +149,8 @@ export const apps: AppDetail[] = [
         { label: "Burstiness (CV)", value: "2.8" },
         { label: "Idle share", value: "58%" },
       ],
-      estimatedBy: "Muse Spark + workload classifier v0.3",
+      estimatedBy: "workload classifier v0.3",
+      explainedBy: "Muse Spark",
       estimatedAt: "2026-10-14T09:10:00Z",
       overridden: false,
     },
@@ -208,7 +209,8 @@ export const apps: AppDetail[] = [
         { label: "Burstiness (CV)", value: "1.9" },
         { label: "Idle share", value: "31%" },
       ],
-      estimatedBy: "Muse Spark + workload classifier v0.3",
+      estimatedBy: "workload classifier v0.3",
+      explainedBy: "Muse Spark",
       estimatedAt: "2026-10-09T13:28:00Z",
       overridden: false,
     },
@@ -281,7 +283,8 @@ export const apps: AppDetail[] = [
         { label: "Queries / refresh", value: "11" },
         { label: "Output size", value: "184 KB" },
       ],
-      estimatedBy: "Muse Spark + workload classifier v0.3",
+      estimatedBy: "workload classifier v0.3",
+      explainedBy: "Muse Spark",
       estimatedAt: "2026-10-02T06:58:00Z",
       overridden: false,
     },
@@ -336,7 +339,8 @@ export const apps: AppDetail[] = [
         { label: "Rows written", value: "96,096" },
         { label: "Schedule", value: "Daily 03:00 BRT" },
       ],
-      estimatedBy: "Muse Spark + workload classifier v0.3",
+      estimatedBy: "workload classifier v0.3",
+      explainedBy: "Muse Spark",
       estimatedAt: "2026-10-18T18:57:00Z",
       overridden: false,
     },
@@ -390,7 +394,8 @@ export const apps: AppDetail[] = [
         { label: "Expected RPS", value: "12–40" },
         { label: "Idle share", value: "0%" },
       ],
-      estimatedBy: "Muse Spark + workload classifier v0.3",
+      estimatedBy: "workload classifier v0.3",
+      explainedBy: "Muse Spark",
       estimatedAt: minutesAgo(5),
       overridden: false,
     },
@@ -442,7 +447,8 @@ export const apps: AppDetail[] = [
         { label: "CPU p95", value: "0.08 vCPU" },
         { label: "Time waiting on I/O", value: "92%" },
       ],
-      estimatedBy: "Muse Spark + workload classifier v0.3",
+      estimatedBy: "workload classifier v0.3",
+      explainedBy: "Muse Spark",
       estimatedAt: "2026-10-20T16:43:00Z",
       overridden: false,
     },
@@ -467,6 +473,31 @@ export const apps: AppDetail[] = [
     ]),
   },
 ];
+
+// A soft-deleted app, restorable until 7 days after deletedAt.
+apps.push({
+  ...apps[2],
+  id: "app_q3p07",
+  name: "q3-promo-tracker",
+  kind: "tracker",
+  tier: "T0",
+  description: "Tracked orders and revenue from the Q3 free-shipping promotion by state.",
+  repo: "github.com/acme-analytics/olist-trackers",
+  health: "healthy",
+  url: "https://q3-promo-tracker.apps.shipcube.dev",
+  requests24h: 0,
+  sharedWith: 5,
+  lastDeployAt: "2026-09-02T14:00:00Z",
+  deployedBy: "Claude Code",
+  createdAt: "2026-07-01T10:00:00Z",
+  deletedAt: hoursAgo(50),
+  access: [owner],
+  logs: [
+    { id: "q1", ts: hoursAgo(50.1), level: "info", source: "deploy", message: "delete_app requested by Claude Code; approved by kunal@acme-analytics.com" },
+    { id: "q2", ts: hoursAgo(50), level: "info", source: "deploy", message: "Traffic stopped. Service scaled to zero and kept for 7 days" },
+  ],
+  monitoring: { ...apps[2].monitoring, latency: [], dailyCost: [], replacement: null },
+});
 
 for (const app of apps) {
   app.costMonthToDate = app.monitoring.costMonthToDate;
@@ -509,8 +540,8 @@ export const providers: ProviderConfig[] = [
 ];
 
 export const tokens: ApiToken[] = [
-  { id: "tok_1", name: "MacBook – Claude Code", prefix: "sc_pat_7Hq2", scopes: ["apps:write", "access:write", "logs:read"], createdAt: "2026-10-14T09:00:00Z", lastUsedAt: minutesAgo(6) },
-  { id: "tok_2", name: "Cursor", prefix: "sc_pat_Lm9x", scopes: ["apps:write", "logs:read"], createdAt: "2026-10-09T13:20:00Z", lastUsedAt: hoursAgo(74) },
+  { id: "tok_1", name: "MacBook – Claude Code", prefix: "sc_pat_7Hq2xK9m", scopes: ["apps:read", "apps:deploy", "caps:write", "access:write", "data:read", "data:migrate"], createdAt: "2026-10-14T09:00:00Z", expiresAt: "2026-11-13T09:00:00Z", lastUsedAt: minutesAgo(6) },
+  { id: "tok_2", name: "Cursor", prefix: "sc_pat_Lm9xQ2vT", scopes: ["apps:read", "apps:deploy"], createdAt: "2026-10-09T13:20:00Z", expiresAt: "2026-11-08T13:20:00Z", lastUsedAt: hoursAgo(74) },
 ];
 
 export const billing: BillingOverview = {
