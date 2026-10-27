@@ -37,6 +37,13 @@ Kunal is the lead and makes every product and merge decision. Each teammate is a
 
 ## Decided
 
+- **MCP shape (Kunal, Oct 28):**
+  1. **Data tools** come from shipcube-data, mounted with a `data_` prefix: `data_list_cubes`, `data_describe_cube`, `data_query`, `data_search_values`, `data_propose_migration`. `connect_data` and `query` are removed. Warehouses are connected in the console (credentials never pass through an agent).
+  2. **About 16 tools.** Merges: `get_status` + `get_logs` + `get_metrics` → `inspect_app` (`include: [status, logs, metrics]`); `grant_access` + `revoke_access` → `set_access` (`add`/`remove`, returns the full list); `get_operation` + `cancel_operation` → `operation` (`action: get | cancel`). App tools: `whoami`, `create_upload`, `estimate_load`, `deploy_app`, `operation`, `list_apps`, `inspect_app`, `set_caps`, `set_access`, `ai_config`, `delete_app`.
+  3. **Muse in the contract.** The classifier produces the numbers in `estimate_load`; Muse Spark writes `reasoning`, `alternatives` and `recommended_caps`, and the result carries `explained_by`. If Muse is unavailable, rule-based reasoning is used instead. `data_propose_migration` can draft with Muse Spark.
+  4. **Uploads unchanged:** signed URL first; `inline`, `git` and `image` as alternatives. Raise the `inline` limit enough for the demo app.
+  5. **Approvals.** Agents act directly on ShipCube's project within default caps, and on reads, cap reductions and access removals. These need Kunal's approval: the first deploy to a linked GCP project, a cap raise above the workspace default, a `domain:` grant, and `delete_app`. They return `status: awaiting_approval` with an `approval_url`, approved in the console. Agents can never apply migrations; they only propose them. `delete_app` is a soft delete, restorable for 7 days.
+
 - **Language (Kunal, Oct 27):** Python 3.12 for the MCP server, control-plane API, deployer, data layer, profiler, classifier and monitoring. Go only for the access proxy / AI gateway (`services/gateway`). Next.js/TypeScript for the console only. PR #1 is being ported to Python.
 
 ## How to coordinate
