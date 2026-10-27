@@ -24,7 +24,9 @@ func blockedIP(ip net.IP) bool {
 
 // guardedClient checks the resolved IP at connect time, so a hostname that resolves to a private
 // address (or rebinds to one after the URL was saved) is refused. Redirects are not followed.
-func guardedClient(allowPrivate bool) *http.Client {
+// headerTimeout bounds the wait for the provider's response headers (reasoning models can take
+// minutes before the first byte); the whole request is bounded by the server's request timeout.
+func guardedClient(allowPrivate bool, headerTimeout time.Duration) *http.Client {
 	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	if !allowPrivate {
 		d.Control = func(_, address string, _ syscall.RawConn) error {
@@ -42,6 +44,9 @@ func guardedClient(allowPrivate bool) *http.Client {
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.DialContext = d.DialContext
 	t.Proxy = nil
+	t.TLSHandshakeTimeout = 10 * time.Second
+	t.ResponseHeaderTimeout = headerTimeout
+	t.IdleConnTimeout = 90 * time.Second
 	return &http.Client{
 		Transport:     t,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

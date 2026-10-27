@@ -114,6 +114,9 @@ func pick(apps []*AppConfig, header string) (*AppConfig, error) {
 	return nil, ErrUnknownApp
 }
 
+// internalRetry is for idempotent GETs to the API, Secret Manager and the metadata server.
+var internalRetry = RetryPolicy{Retries: 2, Base: 200 * time.Millisecond, MaxDelay: 2 * time.Second}
+
 // HTTPRegistry asks the control-plane API, which owns the database:
 //
 //	GET {base}/internal/gateway/resolve?principal=...&app=...  ->  AppConfig JSON (404 when unknown)
@@ -166,20 +169,26 @@ func (r *HTTPRegistry) fetch(ctx context.Context, p Principal) (*AppConfig, erro
 	if p.AppHeader != "" {
 		q.Set("app", p.AppHeader)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.Base+"/internal/gateway/resolve?"+q.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
+	var tok string
 	if r.Token != nil {
-		tok, err := r.Token(ctx, r.Base)
-		if err != nil {
+		var err error
+		if tok, err = r.Token(ctx, r.Base); err != nil {
 			return nil, fmt.Errorf("identity token for the API: %w", err)
 		}
-		req.Header.Set("Authorization", "Bearer "+tok)
 	}
-	resp, err := r.Client.Do(req)
+	resp, _, err := internalRetry.Do(ctx, r.Client, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.Base+"/internal/gateway/resolve?"+q.Encode(), nil)
+		if err != nil {
+			return nil, err
+		}
+		if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+		propagate(ctx, req)
+		return req, nil
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve: %w", err)
 	}
 	defer resp.Body.Close()
 	switch {

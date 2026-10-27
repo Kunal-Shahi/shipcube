@@ -77,13 +77,16 @@ func newHarness(t *testing.T, pc ProviderConfig, caps Caps, upstream string) *ha
 		Secrets:          EnvSecrets{},
 		Limiter:          &Limiter{},
 		Usage:            multiSink{sink, LogSink{Log: slog.New(slog.NewJSONHandler(logs, nil))}},
-		Upstream:         guardedClient(true),
+		Upstream:         guardedClient(true, 30*time.Second),
 		Prices:           defaultPrices,
 		Log:              slog.New(slog.NewJSONHandler(logs, nil)),
 		MetaBaseURL:      upstream,
 		OpenAIBaseURL:    upstream,
 		AnthropicBaseURL: upstream,
 		AllowPrivate:     true,
+		DevMode:          true,
+		Retry:            RetryPolicy{Retries: 2, Base: time.Millisecond, MaxDelay: 50 * time.Millisecond},
+		RequestTimeout:   5 * time.Second,
 	}
 	srv := httptest.NewServer(g.Handler())
 	t.Cleanup(srv.Close)
@@ -411,7 +414,7 @@ func TestBYOKBaseURLGuard(t *testing.T) {
 	// The dialer refuses private addresses even when the hostname looked fine.
 	local := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	defer local.Close()
-	_, err := guardedClient(false).Get(strings.Replace(local.URL, "127.0.0.1", "localhost", 1))
+	_, err := guardedClient(false, time.Second).Get(strings.Replace(local.URL, "127.0.0.1", "localhost", 1))
 	if !errors.Is(err, errBlockedAddress) {
 		t.Fatalf("expected the dialer to block localhost, got %v", err)
 	}
@@ -517,7 +520,7 @@ func TestSecretManagerCachesAndServesStale(t *testing.T) {
 	if _, err := s.Get(context.Background(), "not-a-ref"); err == nil {
 		t.Fatal("invalid ref accepted")
 	}
-	if calls != 2 {
+	if calls != 4 { // one success, then three failed attempts (retried) before serving the stale value
 		t.Fatalf("calls %d", calls)
 	}
 }
@@ -563,5 +566,116 @@ func TestModelsEndpoint(t *testing.T) {
 	defer resp.Body.Close()
 	if m := readJSON(t, resp.Body); m["data"].([]any)[0].(map[string]any)["id"] != "muse-spark" {
 		t.Fatalf("%v", m)
+	}
+}
+
+func TestProductionRefusesMock(t *testing.T) {
+	h := newHarness(t, ProviderConfig{Kind: ProviderMeta, Model: "muse-spark-1.3"}, Caps{}, "http://unused")
+	h.g.DevMode = false
+	if resp := h.post(t, chatBody); resp.StatusCode != http.StatusFailedDependency {
+		t.Fatalf("meta without a key outside DEV_MODE: status %d, want 424", resp.StatusCode)
+	}
+	h2 := newHarness(t, ProviderConfig{Kind: ProviderMock, Model: "m"}, Caps{}, "")
+	h2.g.DevMode = false
+	if resp := h2.post(t, chatBody); resp.StatusCode != 500 {
+		t.Fatalf("mock provider outside DEV_MODE: status %d", resp.StatusCode)
+	}
+}
+
+func TestUpstreamRetriesTransientErrors(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 {
+			w.WriteHeader([]int{503, 529}[calls-1])
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer up.Close()
+	h := newHarness(t, ProviderConfig{Kind: ProviderOpenAI, Model: "gpt-x"}, Caps{}, up.URL)
+	if resp := h.post(t, chatBody); resp.StatusCode != 200 || calls != 3 {
+		t.Fatalf("status %d after %d calls", resp.StatusCode, calls)
+	}
+	if !strings.Contains(h.logs.String(), `"attempts":3`) {
+		t.Fatalf("attempts not logged: %s", h.logs.String())
+	}
+}
+
+func TestLongRetryAfterIsPassedThrough(t *testing.T) {
+	calls := 0
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(429)
+		_, _ = io.WriteString(w, `{"error":{"message":"slow down"}}`)
+	}))
+	defer up.Close()
+	h := newHarness(t, ProviderConfig{Kind: ProviderOpenAI, Model: "gpt-x"}, Caps{}, up.URL)
+	if resp := h.post(t, chatBody); resp.StatusCode != 429 || calls != 1 {
+		t.Fatalf("status %d after %d calls", resp.StatusCode, calls)
+	}
+}
+
+func TestUpstreamTimeoutIs504(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer up.Close()
+	h := newHarness(t, ProviderConfig{Kind: ProviderOpenAI, Model: "gpt-x"}, Caps{}, up.URL)
+	h.g.RequestTimeout = 100 * time.Millisecond
+	if resp := h.post(t, chatBody); resp.StatusCode != http.StatusGatewayTimeout {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+}
+
+func TestRequestIDAndTraceInLogs(t *testing.T) {
+	h := newHarness(t, ProviderConfig{Kind: ProviderMock, Model: "m"}, Caps{}, "")
+	h.g.Project = "shipcube-control-ks"
+	h.srv.Config.Handler = h.g.Handler()
+	resp := h.post(t, chatBody, "X-Request-Id", "req-123",
+		"traceparent", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+	if resp.Header.Get("X-Request-Id") != "req-123" {
+		t.Fatalf("request id not echoed: %q", resp.Header.Get("X-Request-Id"))
+	}
+	logs := h.logs.String()
+	if !strings.Contains(logs, `"request_id":"req-123"`) ||
+		!strings.Contains(logs, `"logging.googleapis.com/trace":"projects/shipcube-control-ks/traces/0af7651916cd43dd8448eb211c80319c"`) {
+		t.Fatalf("logs missing request id or trace: %s", logs)
+	}
+	if e := h.sink.last(t); e.RequestID != "req-123" {
+		t.Fatalf("usage event request id %q", e.RequestID)
+	}
+	// A malformed id is replaced, not reflected.
+	if got := h.post(t, chatBody, "X-Request-Id", "bad id with spaces").Header.Get("X-Request-Id"); len(got) != 32 {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestHTTPSinkRequeuesFailedBatches(t *testing.T) {
+	fail := true
+	var got []UsageEvent
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fail {
+			w.WriteHeader(503)
+			return
+		}
+		var batch []UsageEvent
+		_ = json.NewDecoder(r.Body).Decode(&batch)
+		got = append(got, batch...)
+	}))
+	defer api.Close()
+	s := &HTTPSink{URL: api.URL, Client: api.Client(), Log: slog.New(slog.NewJSONHandler(io.Discard, nil)), MaxBuffered: 2}
+	for i := 0; i < 3; i++ {
+		s.Record(UsageEvent{RequestID: fmt.Sprint(i)})
+	}
+	s.Flush(context.Background()) // fails: keeps the newest 2
+	fail = false
+	s.Flush(context.Background())
+	if len(got) != 2 || got[0].RequestID != "1" || got[1].RequestID != "2" {
+		t.Fatalf("got %+v", got)
 	}
 }

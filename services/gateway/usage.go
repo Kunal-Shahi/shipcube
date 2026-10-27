@@ -13,6 +13,7 @@ import (
 // UsageEvent is one metered call. It maps onto usage_events rows (source = 'gateway'): one row for
 // ai_input_tokens and one for ai_output_tokens, with cost_usd split by price.
 type UsageEvent struct {
+	RequestID    string    `json:"request_id"`
 	AppID        string    `json:"app_id"`
 	WorkspaceID  string    `json:"workspace_id"`
 	App          string    `json:"app"`
@@ -39,20 +40,23 @@ type UsageSink interface {
 type LogSink struct{ Log *slog.Logger }
 
 func (s LogSink) Record(e UsageEvent) {
-	s.Log.Info("usage", "shipcube_usage", true, "app_id", e.AppID, "workspace_id", e.WorkspaceID, "app", e.App,
+	s.Log.Info("usage", "shipcube_usage", true, "request_id", e.RequestID, "app_id", e.AppID, "workspace_id", e.WorkspaceID, "app", e.App,
 		"provider", e.Provider, "model", e.Model, "input_tokens", e.InputTokens, "output_tokens", e.OutputTokens,
 		"cost_usd", e.CostUSD, "priced", e.Priced, "estimated", e.Estimated, "status", e.Status, "stream", e.Stream,
 		"latency_ms", e.LatencyMS, "cap_hit", e.CapHit)
 }
 
 // HTTPSink batches events to the control-plane API (POST {base}/internal/usage, a JSON array),
-// which writes usage_events. Failed batches are logged and dropped; the log line is the backup.
+// which writes usage_events idempotently by request_id. A failed batch is put back and retried on
+// the next tick; past MaxBuffered events the oldest are dropped with an error log. The usage log line
+// (LogSink) is the backup record either way.
 type HTTPSink struct {
-	URL      string
-	Client   *http.Client
-	Token    func(ctx context.Context, audience string) (string, error)
-	Audience string
-	Log      *slog.Logger
+	URL         string
+	Client      *http.Client
+	Token       func(ctx context.Context, audience string) (string, error)
+	Audience    string
+	Log         *slog.Logger
+	MaxBuffered int // default 10,000
 
 	mu  sync.Mutex
 	buf []UsageEvent
@@ -96,6 +100,7 @@ func (s *HTTPSink) Flush(ctx context.Context) {
 	}
 	if err == nil {
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Request-Id", newID())
 		var resp *http.Response
 		if resp, err = s.Client.Do(req); err == nil {
 			resp.Body.Close()
@@ -105,7 +110,23 @@ func (s *HTTPSink) Flush(ctx context.Context) {
 		}
 	}
 	if err != nil {
-		s.Log.Warn("usage flush failed", "events", len(batch), "error", err.Error())
+		s.mu.Lock()
+		s.buf = append(batch, s.buf...)
+		limit := s.MaxBuffered
+		if limit == 0 {
+			limit = 10_000
+		}
+		dropped := 0
+		if len(s.buf) > limit {
+			dropped = len(s.buf) - limit
+			s.buf = s.buf[dropped:]
+		}
+		pending := len(s.buf)
+		s.mu.Unlock()
+		s.Log.Warn("usage flush failed; will retry", "events", len(batch), "pending", pending, "error", err.Error())
+		if dropped > 0 {
+			s.Log.Error("usage buffer full; dropped oldest events (still in usage logs)", "dropped", dropped)
+		}
 	}
 }
 

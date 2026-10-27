@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -27,11 +28,19 @@ type Gateway struct {
 	MetaBaseURL      string
 	OpenAIBaseURL    string
 	AnthropicBaseURL string
-	// MetaSecretRef is the platform's Meta key (Secret Manager). Empty means Meta calls are served
-	// by the built-in mock, so apps work before the key arrives.
+	// MetaSecretRef is the platform's Meta key (Secret Manager). Required outside DEV_MODE.
 	MetaSecretRef string
 	// AllowPrivate lets BYOK base URLs reach private addresses. Tests and local development only.
 	AllowPrivate bool
+	// DevMode (DEV_MODE=1, local only) allows the built-in mock provider. In production a request
+	// that would need it fails instead of returning mock output.
+	DevMode bool
+	// Retry is applied to provider calls before any byte is sent to the app.
+	Retry RetryPolicy
+	// RequestTimeout bounds one whole chat request, streaming included.
+	RequestTimeout time.Duration
+	// Project is the GCP project, for Cloud Logging trace correlation.
+	Project string
 }
 
 func (g *Gateway) Handler() http.Handler {
@@ -42,14 +51,15 @@ func (g *Gateway) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "ok\n")
 	})
-	return mux
+	return withRequestContext(g.Log, g.Project, mux)
 }
 
 // resolve authenticates the caller and finds its app. It writes the error response itself.
 func (g *Gateway) resolve(w http.ResponseWriter, r *http.Request) *AppConfig {
+	log := loggerFrom(r.Context(), g.Log)
 	subject, err := g.Auth.Authenticate(r.Context(), r)
 	if err != nil {
-		g.Log.Info("auth failed", "error", err.Error(), "remote", r.RemoteAddr)
+		log.Warn("auth failed", "error", err.Error(), "remote", r.RemoteAddr)
 		openAIError(w, http.StatusUnauthorized, "invalid_request_error", "unauthenticated",
 			"send a Google ID token for the app's service account (audience = gateway URL) or a gateway token")
 		return nil
@@ -61,7 +71,7 @@ func (g *Gateway) resolve(w http.ResponseWriter, r *http.Request) *AppConfig {
 			"no ShipCube app is registered for this identity (set X-ShipCube-App if apps share a service account)")
 		return nil
 	case err != nil:
-		g.Log.Error("registry lookup failed", "error", err.Error())
+		log.Error("registry lookup failed", "error", err.Error())
 		openAIError(w, http.StatusServiceUnavailable, "api_error", "registry_unavailable", "try again shortly")
 		return nil
 	}
@@ -80,6 +90,12 @@ func (g *Gateway) models(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	if g.RequestTimeout > 0 {
+		ctx, cancel := context.WithTimeout(r.Context(), g.RequestTimeout)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
+	log := loggerFrom(r.Context(), g.Log)
 	cfg := g.resolve(w, r)
 	if cfg == nil {
 		return
@@ -111,7 +127,7 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 	stream, _ := body["stream"].(bool)
 	c := &call{cfg: cfg, model: model, body: body, stream: stream}
 
-	ev := UsageEvent{AppID: cfg.AppID, WorkspaceID: cfg.WorkspaceID, App: cfg.App, Provider: kind, Model: model,
+	ev := UsageEvent{RequestID: requestID(r.Context()), AppID: cfg.AppID, WorkspaceID: cfg.WorkspaceID, App: cfg.App, Provider: kind, Model: model,
 		Stream: stream, OccurredAt: start.UTC()}
 	defer func() {
 		ev.Provider, ev.InputTokens, ev.OutputTokens, ev.Status = kind, c.inTok, c.outTok, c.status
@@ -141,7 +157,7 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 	switch kind {
 	case ProviderMeta:
 		c.baseURL, ref = g.MetaBaseURL, g.MetaSecretRef
-		if ref == "" {
+		if ref == "" && g.DevMode {
 			kind = ProviderMock
 		}
 	case ProviderOpenAI:
@@ -157,6 +173,11 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 		}
 		c.baseURL = u.String()
 	case ProviderMock:
+		if !g.DevMode {
+			c.status = http.StatusInternalServerError
+			openAIError(w, c.status, "api_error", "unknown_provider", "the app's provider is not supported")
+			return
+		}
 	default:
 		c.status = http.StatusInternalServerError
 		openAIError(w, c.status, "api_error", "unknown_provider", "the app's provider is not supported")
@@ -170,7 +191,7 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 		}
 		c.key, err = g.Secrets.Get(r.Context(), ref)
 		if err != nil {
-			g.Log.Error("secret lookup failed", "app", cfg.App, "error", err.Error())
+			log.Error("secret lookup failed", "app", cfg.App, "error", err.Error())
 			c.status = http.StatusServiceUnavailable
 			openAIError(w, c.status, "api_error", "secret_unavailable", "the provider key could not be read")
 			return
@@ -187,8 +208,15 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 	default:
 		g.forwardOpenAI(r.Context(), w, c)
 	}
-	g.Log.Info("chat", "app", cfg.App, "provider", kind, "model", model, "status", c.status, "stream", stream,
-		"input_tokens", c.inTok, "output_tokens", c.outTok, "ms", time.Since(start).Milliseconds())
+	level := slog.LevelInfo
+	if c.status >= 500 {
+		level = slog.LevelError
+	} else if c.status >= 400 {
+		level = slog.LevelWarn
+	}
+	log.Log(r.Context(), level, "chat", "app", cfg.App, "app_id", cfg.AppID, "provider", kind, "model", model,
+		"status", c.status, "stream", stream, "attempts", c.attempts, "input_tokens", c.inTok,
+		"output_tokens", c.outTok, "upstream_request_id", c.upstream, "ms", time.Since(start).Milliseconds())
 }
 
 // clampMaxTokens caps the request's output tokens at what's left of the daily token cap and

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,6 +32,7 @@ type call struct {
 	outTok   int64
 	status   int
 	upstream string // provider request id, when the provider returns one
+	attempts int
 	// estimated is set when the provider sent no usage, so tokens were estimated from bytes
 	// (about 4 characters per token). Caps still apply to unmetered streams.
 	estimated bool
@@ -69,6 +71,37 @@ func sseHeaders(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// send POSTs to the provider with retries (RetryPolicy) under the per-attempt header timeout set on
+// the client. Nothing has been written to the app yet, so retrying is safe for the app; a retried
+// 5xx may still have been billed by the provider, as with the providers' own SDKs.
+func (g *Gateway) send(ctx context.Context, c *call, url string, payload []byte, headers map[string]string) (*http.Response, error) {
+	resp, attempts, err := g.Retry.Do(ctx, g.Upstream, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		return req, nil
+	})
+	c.attempts = attempts
+	return resp, err
+}
+
+func (g *Gateway) upstreamFailed(w http.ResponseWriter, c *call, err error) {
+	c.status = http.StatusBadGateway
+	code := "upstream_unreachable"
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		c.status, code = http.StatusGatewayTimeout, "upstream_timeout"
+	case errors.Is(err, errBlockedAddress):
+		c.status, code = http.StatusBadRequest, "blocked_base_url"
+	}
+	openAIError(w, c.status, "upstream_error", code, string(c.redact([]byte(err.Error()))))
+}
+
 // --- OpenAI-compatible: Meta (Muse), OpenAI, BYOK base URLs ------------------------------
 
 func (g *Gateway) forwardOpenAI(ctx context.Context, w http.ResponseWriter, c *call) {
@@ -83,19 +116,11 @@ func (g *Gateway) forwardOpenAI(ctx context.Context, w http.ResponseWriter, c *c
 		c.body["stream_options"] = so
 	}
 	payload, _ := json.Marshal(c.body)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.baseURL, "/")+"/chat/completions",
-		bytes.NewReader(payload))
+	resp, err := g.send(ctx, c, strings.TrimRight(c.baseURL, "/")+"/chat/completions", payload, map[string]string{
+		"Authorization": "Bearer " + c.key,
+	})
 	if err != nil {
-		c.status = http.StatusBadGateway
-		openAIError(w, c.status, "upstream_error", "bad_upstream", "could not build the upstream request")
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.key)
-	resp, err := g.Upstream.Do(req)
-	if err != nil {
-		c.status = http.StatusBadGateway
-		openAIError(w, c.status, "upstream_error", "upstream_unreachable", string(c.redact([]byte(err.Error()))))
+		g.upstreamFailed(w, c, err)
 		return
 	}
 	defer resp.Body.Close()
@@ -284,20 +309,11 @@ func (g *Gateway) forwardAnthropic(ctx context.Context, w http.ResponseWriter, c
 		return
 	}
 	payload, _ := json.Marshal(areq)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.baseURL, "/")+"/v1/messages",
-		bytes.NewReader(payload))
+	resp, err := g.send(ctx, c, strings.TrimRight(c.baseURL, "/")+"/v1/messages", payload, map[string]string{
+		"x-api-key": c.key, "anthropic-version": anthropicVersion,
+	})
 	if err != nil {
-		c.status = http.StatusBadGateway
-		openAIError(w, c.status, "upstream_error", "bad_upstream", "could not build the upstream request")
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", c.key)
-	req.Header.Set("anthropic-version", anthropicVersion)
-	resp, err := g.Upstream.Do(req)
-	if err != nil {
-		c.status = http.StatusBadGateway
-		openAIError(w, c.status, "upstream_error", "upstream_unreachable", string(c.redact([]byte(err.Error()))))
+		g.upstreamFailed(w, c, err)
 		return
 	}
 	defer resp.Body.Close()

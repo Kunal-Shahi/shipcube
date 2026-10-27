@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 )
@@ -21,6 +22,18 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+func durationEnv(k string, def time.Duration) (time.Duration, error) {
+	v := os.Getenv(k)
+	if v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return 0, errors.New(k + " must be a positive duration like 300s")
+	}
+	return d, nil
 }
 
 func main() {
@@ -46,7 +59,19 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
 
-	dev := os.Getenv("GATEWAY_DEV") == "1"
+	dev := os.Getenv("DEV_MODE") == "1"
+	headerTimeout, err := durationEnv("GATEWAY_UPSTREAM_HEADER_TIMEOUT", 300*time.Second)
+	if err != nil {
+		return err
+	}
+	requestTimeout, err := durationEnv("GATEWAY_REQUEST_TIMEOUT", 15*time.Minute)
+	if err != nil {
+		return err
+	}
+	retries, err := strconv.Atoi(env("GATEWAY_UPSTREAM_RETRIES", "2"))
+	if err != nil || retries < 0 {
+		return errors.New("GATEWAY_UPSTREAM_RETRIES must be a non-negative integer")
+	}
 	meta := &metadataToken{client: &http.Client{Timeout: 5 * time.Second}}
 	plain := &http.Client{Timeout: 15 * time.Second}
 
@@ -96,17 +121,24 @@ func run(log *slog.Logger) error {
 	}
 
 	allowPrivate := dev && os.Getenv("GATEWAY_ALLOW_PRIVATE_UPSTREAM") == "1"
+	if os.Getenv("META_SECRET_REF") == "" && !dev {
+		return errors.New("META_SECRET_REF is required (the mock provider is only available with DEV_MODE=1)")
+	}
 	g := &Gateway{
 		Auth: auth, Registry: reg, Secrets: secrets, Limiter: &Limiter{}, Usage: sinks,
-		Upstream: guardedClient(allowPrivate), Prices: prices, Log: log,
+		Upstream: guardedClient(allowPrivate, headerTimeout), Prices: prices, Log: log,
 		MetaBaseURL:      env("META_BASE_URL", "https://api.meta.ai/v1"),
 		OpenAIBaseURL:    env("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		AnthropicBaseURL: env("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
 		MetaSecretRef:    os.Getenv("META_SECRET_REF"),
 		AllowPrivate:     allowPrivate,
+		DevMode:          dev,
+		Retry:            RetryPolicy{Retries: retries, Base: 500 * time.Millisecond, MaxDelay: 10 * time.Second},
+		RequestTimeout:   requestTimeout,
+		Project:          os.Getenv("GOOGLE_CLOUD_PROJECT"),
 	}
-	if g.MetaSecretRef == "" {
-		log.Warn("META_SECRET_REF is not set: Meta (Muse) calls are served by the mock provider")
+	if dev {
+		log.Warn("DEV_MODE=1: env: secret refs and the mock provider are enabled; never set this in production")
 	}
 
 	srv := &http.Server{

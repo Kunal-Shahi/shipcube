@@ -76,18 +76,20 @@ func (s *SecretManager) access(ctx context.Context, ref string) (string, error) 
 	if base == "" {
 		base = "https://secretmanager.googleapis.com/v1"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/"+ref+":access", nil)
-	if err != nil {
-		return "", err
-	}
 	tok, err := s.Token(ctx)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := s.Client.Do(req)
+	resp, _, err := internalRetry.Do(ctx, s.Client, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/"+ref+":access", nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		return req, nil
+	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("secret manager: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
