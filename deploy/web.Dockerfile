@@ -5,7 +5,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY apps/web/package.json apps/web/package-lock.json ./
 RUN npm ci
 COPY apps/web/ ./
-RUN npm run build && npm prune --omit=dev
+# No `npm prune --omit=dev`: next start loads next.config.ts, which needs typescript at runtime.
+RUN npm run build
 
 FROM node:22-slim
 WORKDIR /app
