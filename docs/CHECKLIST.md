@@ -1,9 +1,9 @@
 # Build checklist
 
-What has to exist for the demo: a user builds a tracker in their coding agent, connects to ShipCube's MCP server, estimates load, deploys to GCP behind access control, shares it, and watches it in the console.
+What has to exist for launch: a user builds a tracker in their coding agent, connects to ShipCube's MCP server, estimates load, deploys to GCP behind access control, shares it, and watches it in the console.
 
 **Legend**
-- ★ = in the 2-minute demo; cut ☆ items first if time runs out.
+- ★ = needed for launch on Nov 4; ☆ = follows right after. Everything ships to production standard (see `docs/WORKSTREAMS.md`, Engineering standard).
 - Status (as of Oct 28): ✅ done · 🟡 designed or mocked · 🔴 not started.
 
 ## 1. Control plane
@@ -50,7 +50,7 @@ What has to exist for the demo: a user builds a tracker in their coding agent, c
 
 | | Component | Owner | Status |
 |---|---|---|---|
-| ★ | Catalog DB, migration vocabulary and runner, L0 compiler, schema routing, partition pruning | data-layer | ✅ prototype, 109 tests |
+| ★ | Catalog DB, migration vocabulary and runner, L0 compiler, schema routing, partition pruning | data-layer | 🟡 core built, 109 tests; needs production hardening |
 | ★ | Five `data_` MCP tools as an in-process library, mounted on the MCP server | data-layer + networking | ✅ mounted |
 | ★ | Demo warehouse: Olist in one database, two schemas, date partitions (DuckDB locally; BigQuery or Cloud SQL on GCP) | data-layer | 🟡 local only |
 | ☆ | L1 operators and L2 stages compiled | data-layer | 🔴 |

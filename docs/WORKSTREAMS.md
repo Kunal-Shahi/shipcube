@@ -10,6 +10,19 @@ Each workstream runs in its own Claude Code session, on its own branch, and open
 | **Language trade-offs** | `docs/research/language-tradeoffs.md`, `research/bench/**` | Go vs Python 3 for each component, with small benchmarks and a recommendation weighted by how fast we can ship in 10 days |
 | **Data layer** | the separate repo [Kunal-Shahi/shipcube-data](https://github.com/Kunal-Shahi/shipcube-data) | Semantic layer whose models live in a catalog database and change through model migrations; one warehouse database with multiple schemas and partitions; typed query levels L0–L3; MCP tools for data. It replaces `packages/semantic/` in this repo |
 
+## Engineering standard
+
+ShipCube is built as a **production service**, not a prototype or demo. Every workstream follows these rules:
+
+- **Real implementations only.** Mocks and fakes are allowed only in tests and in an explicit local `DEV_MODE`. Production code paths must never return mock data, and every remaining mock is listed in the PR description with an issue to replace it.
+- **Errors and retries:** typed errors and timeouts on every external call; retries with backoff where operations are idempotent; no silent fallbacks without logging.
+- **Observability:** structured JSON logs with request and operation ids; metrics for anything on a request path; tracing headers propagated.
+- **Security:** least-privilege service accounts; secrets only in Secret Manager; input validation at every boundary; no credentials in code, logs or tool output.
+- **Data:** versioned schema migrations; never edit a production schema by hand; backups on Cloud SQL.
+- **Tests:** unit tests plus at least one integration test against real GCP (or an emulator) for each external dependency. CI must be green before merge.
+- **Config:** everything environment-specific comes from environment variables or Secret Manager; one build artifact is promoted across environments.
+- **Docs:** each component has a README covering run, configure, deploy and operate (runbook), and the known limits are stated honestly.
+
 ## Team roster
 
 Kunal is the lead and makes every product and merge decision. Each teammate is a Claude Code session.
