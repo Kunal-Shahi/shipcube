@@ -43,6 +43,13 @@ erDiagram
   provider_configs }o--o| secret_refs : "api key"
   deployments }o--o| load_estimates : "placed by"
   apps ||--o{ load_estimates : estimated
+  workspaces ||--o{ operations : runs
+  apps ||--o{ operations : "acted on"
+  operations ||--o| approvals : "may wait for"
+  workspaces ||--o{ approvals : "decided in console"
+  api_tokens ||--o{ approvals : "requested via"
+  workspaces ||--o{ datasources : registers
+  datasources }o--o| secret_refs : credential
 
   users {
     uuid id PK
@@ -175,6 +182,34 @@ erDiagram
     jsonb detail
     timestamptz at
   }
+  operations {
+    uuid id PK
+    uuid workspace_id FK
+    uuid app_id FK
+    text kind
+    text status
+    text idem_key
+  }
+  approvals {
+    uuid id PK
+    uuid workspace_id FK
+    uuid operation_id FK
+    text migration_id
+    text action
+    text status
+    uuid requested_token FK
+    uuid decided_by FK
+    timestamptz expires_at
+  }
+  datasources {
+    uuid id PK
+    uuid workspace_id FK
+    text name
+    text kind
+    jsonb config
+    uuid secret_ref_id FK
+    text status
+  }
   invites {
     uuid id PK
     uuid workspace_id FK
@@ -290,9 +325,18 @@ create table apps (
                 check (status in ('draft','deploying','running','paused','failed','deleted')),
   created_by    uuid not null references users(id),
   created_at    timestamptz not null default now(),
+  -- Soft delete (delete_app, after approval): the service is scaled to zero and its IAP
+  -- bindings removed, but the image, grants and secrets are kept until purge_after.
+  status_before_delete text,
   deleted_at    timestamptz,
-  unique (workspace_id, slug)
+  deleted_by    uuid references users(id),
+  purge_after   timestamptz,         -- deleted_at + 7 days; restore is allowed until then
+  purged_at     timestamptz,
+  check ((deleted_at is null) = (purge_after is null)),
+  check (status <> 'deleted' or deleted_at is not null)
 );
+-- A slug is free again once its app is deleted. Restoring fails if a new app took the slug.
+create unique index apps_slug_live on apps (workspace_id, slug) where deleted_at is null;
 
 create table load_estimates (
   id                uuid primary key,
@@ -388,7 +432,7 @@ create table secret_refs (
   id            uuid primary key,
   workspace_id  uuid not null references workspaces(id) on delete cascade,
   app_id        uuid references apps(id) on delete cascade,
-  kind          text not null check (kind in ('ai_key','db_credential','iap_oauth_client','other')),
+  kind          text not null check (kind in ('ai_key','db_credential','warehouse_credential','iap_oauth_client','other')),
   label         text not null,
   resource_name text not null unique,   -- projects/P/secrets/ws-<id>-ai_key-<uuid>
   version       text not null,          -- pinned version number, never 'latest'
@@ -445,9 +489,12 @@ create table operations (
   id             uuid primary key,
   workspace_id   uuid not null references workspaces(id) on delete cascade,
   app_id         uuid references apps(id) on delete set null,
-  kind           text not null check (kind in ('estimate','deploy','delete','profile','link_verify','grant_sync')),
+  kind           text not null check (kind in ('estimate','deploy','delete','restore','purge','set_caps','set_access',
+                                               'profile','link_verify','grant_sync')),
   target_project text not null,          -- shipcube-apps or the linked project
-  status         text not null check (status in ('pending','running','succeeded','failed','cancelled')),
+  -- Same values as networking's OpStatus, plus awaiting_approval. A rejected or expired
+  -- approval moves the operation to cancelled.
+  status         text not null check (status in ('awaiting_approval','queued','running','succeeded','failed','cancelled')),
   step           text,
   step_state     jsonb not null default '{}',  -- no secret values
   attempts       int not null default 0,
@@ -461,6 +508,65 @@ create table operations (
   unique (workspace_id, idem_key)
 );
 alter table deployments add column operation_id uuid references operations(id);
+
+-- Approvals (decided Oct 28). Agents act directly within defaults; these actions wait for a
+-- human in the console:
+--   first_linked_deploy  first deploy_app to a linked GCP project
+--   cap_raise            set_caps above the workspace default
+--   domain_grant         set_access add with a domain: principal
+--   delete_app           delete_app (soft delete)
+--   apply_migration      a data-layer migration (agents can only propose)
+create table approvals (
+  id               uuid primary key,
+  workspace_id     uuid not null references workspaces(id) on delete cascade,
+  action           text not null check (action in
+                     ('first_linked_deploy','cap_raise','domain_grant','delete_app','apply_migration')),
+  operation_id     uuid unique references operations(id) on delete cascade,
+  migration_id     text,              -- data-layer migrations.id, e.g. '0006_net_revenue'
+  app_id           uuid references apps(id),
+  summary          text not null,     -- one line for the console, e.g. 'Grant domain:acme.com on tracker'
+  request          jsonb not null,    -- the exact normalized arguments the approver sees
+  request_hash     bytea not null,    -- SHA-256 of request; checked again before executing
+  requested_by     uuid references users(id),
+  requested_via    text not null check (requested_via in ('mcp','console')),
+  requested_token  uuid references api_tokens(id),
+  status           text not null default 'pending'
+                   check (status in ('pending','approved','rejected','expired','cancelled')),
+  decided_by       uuid references users(id),
+  decided_via      text check (decided_via = 'console'),   -- never a token
+  decided_at       timestamptz,
+  decision_note    text,
+  expires_at       timestamptz not null,                   -- created_at + 72 hours
+  created_at       timestamptz not null default now(),
+  check ((action = 'apply_migration') = (migration_id is not null)),
+  check ((action = 'apply_migration') or operation_id is not null),
+  check ((status = 'pending') = (decided_at is null)),  -- the system sets decided_at on expiry and cancel too
+  check (status not in ('approved','rejected') or decided_by is not null)
+);
+-- One open approval per migration.
+create unique index approvals_migration_open on approvals (workspace_id, migration_id)
+  where migration_id is not null and status = 'pending';
+
+-- Warehouse datasources, registered in the console only (credentials never pass through an agent).
+create table datasources (
+  id             uuid primary key,
+  workspace_id   uuid not null references workspaces(id) on delete cascade,
+  name           text not null check (name ~ '^[a-z0-9_-]{2,40}$'),
+  kind           text not null check (kind in ('bigquery','postgres','cloudsql_postgres','snowflake','duckdb_gcs')),
+  config         jsonb not null,     -- non-secret: project/dataset, host/port/database, schemas, region
+  secret_ref_id  uuid references secret_refs(id),   -- password, key file or connection string; null for BigQuery via IAM
+  auth_mode      text not null check (auth_mode in ('secret','service_account')),
+  egress         text not null default 'default' check (egress in ('default','static')),
+  status         text not null default 'pending' check (status in ('pending','connected','error','disabled')),
+  last_checked_at timestamptz,
+  last_error     text,
+  created_by     uuid not null references users(id),
+  created_via    text not null default 'console' check (created_via = 'console'),
+  created_at     timestamptz not null default now(),
+  deleted_at     timestamptz,
+  check ((auth_mode = 'secret') = (secret_ref_id is not null))
+);
+create unique index datasources_name_live on datasources (workspace_id, name) where deleted_at is null;
 
 -- Audit -----------------------------------------------------------------
 
@@ -501,7 +607,10 @@ create index access_grants_app         on access_grants (app_id) where revoked_a
 create index access_grants_unsynced    on access_grants (sync_state) where sync_state <> 'applied';
 create index access_grants_principal   on access_grants (principal) where revoked_at is null;  -- "what can bob@x see?"
 create index caps_app                  on caps (app_id);
-create index operations_active         on operations (status, updated_at) where status in ('pending','running');
+create index operations_active         on operations (status, updated_at) where status in ('queued','running');
+create index approvals_pending         on approvals (workspace_id, created_at desc) where status = 'pending';
+create index apps_purge_due            on apps (purge_after) where deleted_at is not null and purged_at is null;
+create index datasources_workspace     on datasources (workspace_id) where deleted_at is null;
 create index operations_ws_created     on operations (workspace_id, created_at desc);
 create index api_tokens_user           on api_tokens (user_id) where revoked_at is null;
 create index secret_refs_workspace     on secret_refs (workspace_id) where destroyed_at is null;
@@ -522,6 +631,7 @@ The application connects as `shipcube_app`, which **does not own the tables** an
 begin;
 select set_config('app.user_id', $1, true);       -- true = local to this transaction
 select set_config('app.workspace_id', $2, true);  -- the workspace in the URL or token
+select set_config('app.via', $3, true);           -- 'console', 'mcp' or 'app'
 -- ... queries ...
 commit;
 ```
@@ -533,6 +643,9 @@ create function app_user() returns uuid language sql stable as
   $$ select nullif(current_setting('app.user_id', true), '')::uuid $$;
 create function app_workspace() returns uuid language sql stable as
   $$ select nullif(current_setting('app.workspace_id', true), '')::uuid $$;
+-- 'console' (Identity Platform session), 'mcp' (PAT or OAuth token) or 'app' (deployed app).
+create function app_via() returns text language sql stable as
+  $$ select current_setting('app.via', true) $$;
 
 -- True if the current user is a member of the workspace in context with at least min_role.
 create function app_has_role(min_role text) returns boolean language sql stable security definer
@@ -561,6 +674,26 @@ create policy grants_write on access_grants for all using (workspace_id = app_wo
 
 -- Apply the same to: gcp_links, deployments, load_estimates, caps, secret_refs, provider_configs,
 -- api_tokens (plus user_id = app_user() for non-admins), usage_daily, invites.
+
+-- Approvals: anyone in the workspace can see them and agents can create them, but only a
+-- human in the console with admin can decide. The API also checks this; RLS is the backstop.
+alter table approvals enable row level security;
+alter table approvals force row level security;
+create policy approvals_read   on approvals for select using (workspace_id = app_workspace() and app_has_role('viewer'));
+create policy approvals_create on approvals for insert with check (
+  workspace_id = app_workspace() and app_has_role('developer') and status = 'pending');
+create policy approvals_decide on approvals for update
+  using (workspace_id = app_workspace() and status = 'pending' and app_via() = 'console'
+         and app_has_role(case when action = 'apply_migration' then 'developer' else 'admin' end))
+  with check (workspace_id = app_workspace() and decided_by = app_user() and decided_via = 'console');
+
+-- Datasources: console only, admin to write.
+alter table datasources enable row level security;
+alter table datasources force row level security;
+create policy datasources_read  on datasources for select using (workspace_id = app_workspace() and app_has_role('viewer'));
+create policy datasources_write on datasources for all
+  using (workspace_id = app_workspace() and app_has_role('admin') and app_via() = 'console')
+  with check (workspace_id = app_workspace() and app_via() = 'console');
 
 -- Audit log: append-only.
 alter table audit_log enable row level security;
@@ -591,13 +724,13 @@ Each maps to a Cloud SQL IAM database user tied to that service's service accoun
 
 | Scope | Allows | Used by |
 |---|---|---|
-| `apps:read` | `whoami`, list/describe apps, status, logs, metrics, estimates | MCP, console |
-| `apps:deploy` | `create_upload`, `estimate_load`, `deploy_app`, delete | MCP |
-| `access:write` | `grant_access`, `revoke_access` (risky grants return a confirmation URL) | MCP, console |
-| `caps:write` | `set_caps` (raising a cap above plan defaults returns a confirmation URL) | MCP, console |
-| `secrets:write` | `ai_config` with a BYOK key, `connect_data` | MCP, console |
-| `data:read` | `list_cubes`, `describe_cube`, `query`, `search_values` | data layer |
-| `data:migrate` | `propose_migration`, `apply_migration` (apply returns a confirmation URL) | data layer |
+| `apps:read` | `whoami`, `list_apps`, `inspect_app`, `operation` (get) | MCP, console |
+| `apps:deploy` | `create_upload`, `estimate_load`, `deploy_app`, `delete_app`, `operation` (cancel) | MCP |
+| `access:write` | `set_access` (`domain:` grants wait for approval) | MCP, console |
+| `caps:write` | `set_caps` (raises above the workspace default wait for approval) | MCP, console |
+| `secrets:write` | `ai_config` with a BYOK key | MCP, console |
+| `data:read` | `data_list_cubes`, `data_describe_cube`, `data_query`, `data_search_values` | data layer |
+| `data:migrate` | `data_propose_migration` only; applying happens in the console (section 8) | data layer |
 | `data:raw` | L3 `raw_sql`, only if the workspace setting allows it | data layer |
 
 - **Lifetime:** 30 days by default, 90 at most (check constraint). `last_used_at` and `last_used_ip` are updated at most once a minute per token, to avoid a write on every call.
@@ -632,7 +765,51 @@ Without a valid IAP assertion (for example, a scheduled job), the caller is the 
 
 **Catalog tables in Postgres:** the data layer's catalog lives in this same Cloud SQL database. Every catalog table gets `workspace_id uuid not null references workspaces(id)` and the same RLS policies built on `app_workspace()` and `app_has_role()` (section 5). Reading the catalog needs `viewer`; migrations need `developer` (and approval through the console); data roles and attributes need `admin`. Catalog changes write to the shared `audit_log` with `action` values prefixed `data.`.
 
-## 8. How decisions map to the schema
+## 8. Approvals, soft delete, migrations and datasources (decided Oct 28)
+
+**Approval flow.** Networking's API owns the endpoints; these tables back them.
+
+1. An agent calls a gated tool, for example `set_access` with `add: ["domain:acme.com"]`. The API creates an `operations` row with `status = 'awaiting_approval'` and an `approvals` row holding the normalized request, its hash, and the token that asked. The tool returns `status: awaiting_approval` and `approval_url` (`/w/<slug>/approvals/<id>` in the console).
+2. In the console, an admin sees the summary and the exact arguments, and approves or rejects. The API only accepts a decision from a console session (`app.via = 'console'`); RLS enforces the same thing.
+3. On approval the operation moves to `queued` and runs. Before running, the worker recomputes the hash of the operation's arguments and refuses if it differs from the approved one.
+4. Rejected or expired after 72 hours: the approval becomes `rejected`/`expired` and the operation `cancelled`. `operation(action: get)` reports why.
+
+When an action needs approval:
+
+| Action | Needs approval when | Approver |
+|---|---|---|
+| `first_linked_deploy` | `deploy_app` to a `gcp_links` row with no succeeded deployment yet | admin |
+| `cap_raise` | `set_caps` raises any cap above the workspace default (`caps` row with `app_id is null`, else the plan default) | admin |
+| `domain_grant` | `set_access` adds a `domain:` principal. `user:` and `group:` grants and all removals go through directly | admin |
+| `delete_app` | always | admin |
+| `apply_migration` | always; agents can only propose | developer for additive migrations; the data layer may require admin for breaking ones |
+
+A solo owner approves their own agent's requests. The protection is that the agent's token can't approve, not that a second person must.
+
+**Soft delete.** An approved `delete_app` sets `status = 'deleted'`, `status_before_delete`, `deleted_at`, `deleted_by` and `purge_after = deleted_at + 7 days`. The deployer sets max instances to 0 and removes the IAP bindings, which stops cost and access, but keeps the Cloud Run service, image, `access_grants` rows and secrets. `restore` (console, or an operation of kind `restore`) clears the deletion fields, restores the old status and re-applies the grants; it fails if a live app has taken the slug. A daily `purge` operation deletes the Cloud Run service, images, per-app service account and secret versions for apps past `purge_after`, then sets `purged_at`. The row stays for the audit trail.
+
+**Data-layer migrations.** The data layer's catalog `migrations` table (shipcube-data `catalog.py`) moves into this Postgres database with `workspace_id` and these extra columns:
+
+```sql
+-- Columns added to the data layer's migrations table in Postgres (it owns the rest).
+alter table migrations
+  add column workspace_id       uuid not null references workspaces(id),
+  add column proposed_by_user   uuid references users(id),
+  add column proposed_by_token  uuid references api_tokens(id),
+  add column approval_id        uuid references approvals(id),
+  add column applied_by_user    uuid references users(id),
+  add column applied_via        text check (applied_via = 'console'),
+  add constraint migrations_applied_needs_approval
+    check (status not in ('approved','applied') or approval_id is not null),
+  add constraint migrations_applied_by_human
+    check (status <> 'applied' or (applied_by_user is not null and applied_via = 'console'));
+```
+
+`data_propose_migration` inserts `status = 'proposed'` and opens an `apply_migration` approval. Approving it in the console applies the migration in the same request, as that human. There is no MCP tool that applies.
+
+**Datasources.** Warehouses are registered only in the console (`created_via = 'console'`, enforced by a check and by RLS). Non-secret settings go in `config`; the credential goes to Secret Manager and only its `secret_refs` id is stored. BigQuery can use `auth_mode = 'service_account'` (grant the workspace's data service account `bigquery.dataViewer` on the dataset), so no secret is stored at all. The data layer reads a datasource by id; agents see its name and kind through `data_list_cubes`, never its config or credential.
+
+## 9. How decisions map to the schema
 
 | Decision (security-tenancy.md) | Where it lives |
 |---|---|
@@ -645,6 +822,9 @@ Without a valid IAP assertion (for example, a scheduled job), the caller is the 
 | Hashed, scoped, expiring tokens | `api_tokens` (section 6) |
 | Idempotent long-running work | `operations` (`unique (workspace_id, idem_key)`) |
 | Data-layer identity | section 7 |
+| Approvals for risky agent actions | `approvals`, `operations.status = 'awaiting_approval'`, RLS on `app_via()` (section 8) |
+| Soft delete, 7-day restore | `apps.deleted_at`, `purge_after` |
+| Console-only warehouses | `datasources` |
 | Caps | `caps` (workspace defaults and per-app overrides), `usage_daily` to enforce spend and token caps |
 | Audit | `audit_log` plus Cloud Audit Logs |
 
