@@ -20,11 +20,11 @@ if ! gcloud artifacts repositories describe "$REPO" --location "$REGION" >/dev/n
   gcloud artifacts repositories create "$REPO" --location "$REGION" --repository-format docker \
     --description "Images for ShipCube's own services"
 fi
-cat > /tmp/sc-cleanup.json <<'JSON'
+cat > "${TMPDIR:-/tmp}/sc-cleanup.json" <<'JSON'
 [{"name": "keep-recent", "action": {"type": "Keep"}, "mostRecentVersions": {"keepCount": 5}},
  {"name": "delete-old", "action": {"type": "Delete"}, "condition": {"olderThan": "604800s"}}]
 JSON
-gcloud artifacts repositories set-cleanup-policies "$REPO" --location "$REGION" --policy /tmp/sc-cleanup.json --no-dry-run >/dev/null
+gcloud artifacts repositories set-cleanup-policies "$REPO" --location "$REGION" --policy "${TMPDIR:-/tmp}/sc-cleanup.json" --no-dry-run >/dev/null
 
 sa() {  # sa <id> <display name>
   gcloud iam service-accounts describe "$1@$PROJECT.iam.gserviceaccount.com" >/dev/null 2>&1 ||
