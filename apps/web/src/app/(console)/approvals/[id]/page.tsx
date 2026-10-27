@@ -8,7 +8,6 @@ import { Panel, PanelHeader } from "@/components/ui";
 import { getApproval } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { ago, time } from "@/lib/format";
-import { MOCK_NOW } from "@/lib/mock-data";
 import type { ImpactRow } from "@/lib/types";
 import { DecisionPanel } from "./decision-panel";
 
@@ -26,9 +25,9 @@ export default async function ApprovalPage({ params }: Props) {
   if (!a) notFound();
   const k = APPROVAL_KIND[a.kind];
   const Icon = k.icon;
-  const hoursLeft = Math.max(0, Math.round((new Date(a.expiresAt).getTime() - MOCK_NOW) / 3600_000));
+  const hoursLeft = Math.max(0, Math.round((new Date(a.expiresAt).getTime() - Date.now()) / 3600_000));
   const hasBefore = a.impact.some((r) => r.before);
-  const you = a.requestedBy.user;
+  const agent = a.requestedBy?.agent ?? "An agent";
 
   return (
     <>
@@ -48,7 +47,8 @@ export default async function ApprovalPage({ params }: Props) {
             </div>
             <h1 className="text-[22px] font-semibold leading-8 tracking-[-0.015em]">{a.title}</h1>
             <p className="text-fg-muted">
-              {a.requestedBy.agent} asked {ago(a.requestedAt)}, using your token &ldquo;{a.requestedBy.tokenName}&rdquo;.
+              {agent} asked {ago(a.requestedAt)}
+              {a.requestedBy && <>, using your token &ldquo;{a.requestedBy.tokenName}&rdquo;</>}.
               {a.appId && (
                 <>
                   {" "}
@@ -60,11 +60,12 @@ export default async function ApprovalPage({ params }: Props) {
 
           {a.prompt && (
             <figure className="rounded-lg border border-border bg-surface px-4 py-3">
-              <figcaption className="text-[12px] text-fg-muted">What you asked {a.requestedBy.agent}</figcaption>
+              <figcaption className="text-[12px] text-fg-muted">What you asked {agent}</figcaption>
               <blockquote className="mt-1 text-[15px] leading-6">&ldquo;{a.prompt}&rdquo;</blockquote>
             </figure>
           )}
 
+          {a.impact.length > 0 && (
           <section>
             <h2 className="text-[14px] font-semibold">What changes</h2>
             <div className="mt-2 overflow-x-auto rounded-lg border border-border bg-surface">
@@ -98,6 +99,7 @@ export default async function ApprovalPage({ params }: Props) {
               </table>
             </div>
           </section>
+          )}
 
           <section>
             <h2 className="text-[14px] font-semibold">Why it needs you</h2>
@@ -120,6 +122,7 @@ export default async function ApprovalPage({ params }: Props) {
             </section>
           )}
 
+          {a.tool && Object.keys(a.tool.args).length > 0 && (
           <section>
             <h2 className="text-[14px] font-semibold">Exact request</h2>
             <p className="mt-1 text-fg-muted">The tool call ShipCube received. Approving runs exactly this, nothing else.</p>
@@ -127,6 +130,7 @@ export default async function ApprovalPage({ params }: Props) {
               <CodeBlock label={a.tool.name} code={JSON.stringify(a.tool.args, null, 2)} />
             </div>
           </section>
+          )}
         </article>
 
         <aside className="lg:sticky lg:top-8 lg:self-start">
@@ -139,10 +143,10 @@ export default async function ApprovalPage({ params }: Props) {
                 <ApprovalStatusPill status={a.status} />
                 {a.decision ? (
                   <p className="text-fg-muted">
-                    {a.decision.by === you ? "You" : a.decision.by} {a.status} this at <span className="num">{time(a.decision.at)}</span> UTC.
+                    {a.decision.by && a.decision.by !== "you" && a.decision.by !== a.requestedBy?.user ? a.decision.by : "You"} {a.status} this at <span className="num">{time(a.decision.at)}</span> UTC.
                   </p>
                 ) : (
-                  <p className="text-fg-muted">Nobody decided within 24 hours, so the agent was told the request expired.</p>
+                  <p className="text-fg-muted">Nobody decided within 72 hours, so the agent was told the request expired.</p>
                 )}
                 {a.decision?.note && <blockquote className="rounded-md bg-surface-2 px-3 py-2">{a.decision.note}</blockquote>}
               </div>

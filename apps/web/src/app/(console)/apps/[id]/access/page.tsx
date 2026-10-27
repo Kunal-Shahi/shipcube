@@ -22,7 +22,7 @@ export default async function AccessPage({ params, searchParams }: Props) {
           title="Who can open this app"
           description="Apps are private by default. Access is checked with Google sign-in on every visit."
         />
-        <AccessManager initial={app.access} owner={session.user.email} />
+        <AccessManager appId={app.id} initial={app.access} owner={session.user.email} />
       </Panel>
       <Panel className="self-start">
         <PanelHeader title="From your agent" />

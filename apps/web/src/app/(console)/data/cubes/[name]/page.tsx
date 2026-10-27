@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { notConnected } from "@/components/not-connected";
 import { Lock } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -55,6 +56,8 @@ function Members({ title, members }: { title: string; members: CubeMember[] }) {
 }
 
 export default async function CubePage({ params }: Props) {
+  const blocked = await notConnected("data");
+  if (blocked) return null;
   const cube = await getCube((await params).name);
   if (!cube) notFound();
   return (

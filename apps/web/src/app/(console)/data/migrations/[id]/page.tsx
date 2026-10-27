@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { notConnected } from "@/components/not-connected";
 import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -22,6 +23,8 @@ const DIFF = [
 ] as const;
 
 export default async function MigrationPage({ params }: Props) {
+  const blocked = await notConnected("data");
+  if (blocked) return null;
   const [m, wh] = await Promise.all([getMigration((await params).id), getWarehouse()]);
   if (!m) notFound();
   const i = m.impact;

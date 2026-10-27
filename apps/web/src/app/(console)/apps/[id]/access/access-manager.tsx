@@ -1,11 +1,17 @@
 "use client";
 
 import { Globe, User, Users } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
+import { ActionErrorText } from "@/components/action-error";
 import { Button, EmptyState, Input, Select } from "@/components/ui";
+import { newIdempotencyKey, useAction } from "@/components/use-action";
 import { cn } from "@/lib/cn";
 import { date } from "@/lib/format";
 import type { AccessGrant, GrantKind, Role } from "@/lib/types";
+import { changeAccessAction } from "../../../actions";
+
+const principalOf = (g: { kind: GrantKind; principal: string }) => `${g.kind}:${g.principal}`;
 
 const KIND: Record<GrantKind, { label: string; icon: typeof User; placeholder: string; noun: string }> = {
   user: { label: "Person", icon: User, placeholder: "name@company.com", noun: "person" },
@@ -31,14 +37,16 @@ function validate(kind: GrantKind, value: string, existing: AccessGrant[]): stri
   return null;
 }
 
-export function AccessManager({ initial, owner }: { initial: AccessGrant[]; owner: string }) {
+export function AccessManager({ appId, initial, owner }: { appId: string; initial: AccessGrant[]; owner: string }) {
   const [grants, setGrants] = useState(initial);
   const [kind, setKind] = useState<GrantKind>("user");
   const [value, setValue] = useState("");
   const [role, setRole] = useState<Role>("viewer");
   const [touched, setTouched] = useState(false);
-  const [pending, setPending] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
+  const change = useAction(changeAccessAction);
+  const pending = change.pending;
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const error = touched ? validate(kind, value, grants) : null;
@@ -48,22 +56,33 @@ export function AccessManager({ initial, owner }: { initial: AccessGrant[]; owne
     setTimeout(() => setToast(null), 3000);
   }
 
-  function grant(e: React.FormEvent) {
+  async function apply(
+    body: { add?: { principal: string; role: "viewer" | "editor" }[]; remove?: string[] },
+    done: string,
+  ): Promise<boolean> {
+    setApprovalUrl(null);
+    const r = await change.run(appId, body, newIdempotencyKey("access"));
+    if (!r) return false;
+    setGrants(r.access);
+    if (r.approval) {
+      setApprovalUrl(r.approval.url);
+      flash("Domain sharing waits for approval");
+    } else {
+      flash(done);
+    }
+    return true;
+  }
+
+  async function grant(e: React.FormEvent) {
     e.preventDefault();
     setTouched(true);
     if (!value.trim() || validate(kind, value, grants)) return;
-    setPending(true);
     const principal = value.trim().toLowerCase();
-    setTimeout(() => {
-      setGrants((g) => [
-        ...g,
-        { id: crypto.randomUUID(), kind, principal, role, addedBy: owner, addedAt: new Date().toISOString() },
-      ]);
+    const r = role === "editor" ? "editor" : "viewer";
+    if (await apply({ add: [{ principal: `${kind}:${principal}`, role: r }] }, `Access granted to ${principal}`)) {
       setValue("");
       setTouched(false);
-      setPending(false);
-      flash(`Access granted to ${principal}`);
-    }, 400);
+    }
   }
 
   return (
@@ -121,6 +140,13 @@ export function AccessManager({ initial, owner }: { initial: AccessGrant[]; owne
             Grant access
           </Button>
         </div>
+        <ActionErrorText error={change.error} message={change.message} />
+        {approvalUrl && (
+          <p role="status" className="text-[12px] text-warning">
+            Sharing with a whole domain needs approval first.{" "}
+            <Link href={approvalUrl} className="text-accent underline">Review the approval</Link>
+          </p>
+        )}
         <p id="grant-help" className={cn("text-[12px]", error ? "text-critical" : "text-fg-muted")}>
           {error ??
             (kind === "domain"
@@ -150,7 +176,11 @@ export function AccessManager({ initial, owner }: { initial: AccessGrant[]; owne
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{g.principal}</div>
                 <div className="text-[12px] text-fg-muted">
-                  {isOwner ? "Owner" : `${KIND[g.kind].label} · added by ${g.addedBy === owner ? "you" : g.addedBy} on ${date(g.addedAt)}`}
+                  {isOwner
+                    ? "Owner"
+                    : [KIND[g.kind].label, g.addedBy && `added by ${g.addedBy === owner ? "you" : g.addedBy}`, g.addedAt && `on ${date(g.addedAt)}`]
+                        .filter(Boolean)
+                        .join(", ")}
                 </div>
               </div>
               {isOwner ? (
@@ -161,10 +191,9 @@ export function AccessManager({ initial, owner }: { initial: AccessGrant[]; owne
                   <Button
                     size="sm"
                     variant="danger"
-                    onClick={() => {
-                      setGrants((all) => all.filter((x) => x.id !== g.id));
-                      setConfirming(null);
-                      flash(`Access revoked for ${g.principal}`);
+                    pending={pending}
+                    onClick={async () => {
+                      if (await apply({ remove: [principalOf(g)] }, `Access revoked for ${g.principal}`)) setConfirming(null);
                     }}
                   >
                     Revoke
@@ -180,10 +209,10 @@ export function AccessManager({ initial, owner }: { initial: AccessGrant[]; owne
                     id={`role-${g.id}`}
                     value={g.role}
                     className="h-7 w-[110px] text-[12px]"
+                    disabled={pending}
                     onChange={(e) => {
-                      const r = e.target.value as Role;
-                      setGrants((all) => all.map((x) => (x.id === g.id ? { ...x, role: r } : x)));
-                      flash(`${g.principal} can now ${r === "editor" ? "edit" : "view"}`);
+                      const r = e.target.value === "editor" ? "editor" : "viewer";
+                      void apply({ add: [{ principal: principalOf(g), role: r }] }, `${g.principal} can now ${r === "editor" ? "edit" : "view"}`);
                     }}
                   >
                     <option value="viewer">Can view</option>

@@ -30,7 +30,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
           </div>
         </div>
         <div className="md:flex-1">
-          <Nav pendingApprovals={await pendingApprovalCount()} />
+          <Nav pendingApprovals={(await pendingApprovalCount()) ?? 0} />
         </div>
         <div className="hidden flex-col gap-3 md:flex">
           <div className="px-2">

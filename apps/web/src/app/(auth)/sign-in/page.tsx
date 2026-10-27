@@ -7,3 +7,6 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
   const { returnTo } = await searchParams;
   return <AuthCard intent="sign-in" returnTo={returnTo} />;
 }
+
+// Reads auth settings from the environment at request time, not at build time.
+export const dynamic = "force-dynamic";

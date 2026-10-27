@@ -2,20 +2,17 @@
 
 import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
+import { createTokenAction } from "@/app/(console)/actions";
 import { cn } from "@/lib/cn";
 import { SCOPES } from "@/lib/mcp";
+import type { ApiToken } from "@/lib/types";
+import { ActionErrorText } from "./action-error";
 import { CodeBlock } from "./copy-button";
 import { Button, Field, Input, Select } from "./ui";
+import { useAction } from "./use-action";
 
-// Same shape as a real token (sc_pat_<id>_<secret>) so the guide looks right. It is
-// random and only exists in this browser; the mock backend never accepts it.
-function generateToken() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-  const pick = (n: number) => Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => alphabet[b % alphabet.length]).join("");
-  return `sc_pat_${pick(8)}_${pick(43)}`;
-}
-
-export type CreatedToken = { id: string; name: string; value: string; scopes: string[]; expiresAt: string };
+/** The token row plus its secret, which the API returns exactly once. */
+export type CreatedToken = { token: ApiToken; secret: string };
 
 export function TokenCreator({
   onCreated,
@@ -29,8 +26,8 @@ export function TokenCreator({
   const [name, setName] = useState(defaultName);
   const [scopes, setScopes] = useState<string[]>(SCOPES.map((s) => s.id));
   const [days, setDays] = useState(30);
-  const [pending, setPending] = useState(false);
   const [created, setCreated] = useState<CreatedToken | null>(null);
+  const create = useAction(createTokenAction);
   const [touched, setTouched] = useState(false);
 
   const nameError = touched && !name.trim() ? "Name the token after the machine or agent that uses it, so you know which one to revoke." : null;
@@ -46,7 +43,7 @@ export function TokenCreator({
             keep it out of your repo.
           </span>
         </div>
-        <CodeBlock label={`Token · ${created.name}`} code={created.value} />
+        <CodeBlock label={`Token: ${created.token.name}`} code={created.secret} />
         <div>
           <Button
             variant="ghost"
@@ -68,18 +65,15 @@ export function TokenCreator({
     <form
       noValidate
       className="flex flex-col gap-4"
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
         setTouched(true);
         if (!name.trim() || scopes.length === 0) return;
-        setPending(true);
-        setTimeout(() => {
-          const expiresAt = new Date(Date.now() + days * 86_400_000).toISOString();
-          const t = { id: crypto.randomUUID(), name: name.trim(), value: generateToken(), scopes, expiresAt };
+        const t = await create.run({ name: name.trim(), scopes, days });
+        if (t) {
           setCreated(t);
-          setPending(false);
           onCreated?.(t);
-        }, 450);
+        }
       }}
     >
       <Field label="Token name" htmlFor="token-name" error={nameError} help="For example: MacBook – Claude Code">
@@ -116,8 +110,9 @@ export function TokenCreator({
         ))}
         {scopeError && <p className="text-[12px] text-critical">{scopeError}</p>}
       </fieldset>
+      <ActionErrorText error={create.error} message={create.message} />
       <div>
-        <Button type="submit" variant="primary" pending={pending} disabled={!!scopeError}>
+        <Button type="submit" variant="primary" pending={create.pending} disabled={!!scopeError}>
           Create token
         </Button>
       </div>

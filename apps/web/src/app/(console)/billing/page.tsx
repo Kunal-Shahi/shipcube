@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { Suspense } from "react";
+import { notConnected } from "@/components/not-connected";
 import { CostChart } from "@/components/charts";
 import { EmptyState, Meter, PageHeader, Panel, PanelHeader, Stat, StatRow, TableSkeleton, ButtonLink } from "@/components/ui";
 import { demoState, getBilling, type DemoState } from "@/lib/api";
@@ -27,6 +28,8 @@ export default async function BillingPage({ searchParams }: Props) {
 }
 
 async function BillingBody({ state }: { state: DemoState }) {
+  const blocked = await notConnected("billing");
+  if (blocked) return blocked;
   const b = await getBilling(state);
   const left = b.credits.granted - b.credits.used;
   const rows = b.byApp.map((a) => ({ ...a, total: a.compute + a.data + a.llm })).sort((x, y) => y.total - x.total);

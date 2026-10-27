@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { ActionErrorText } from "@/components/action-error";
+import { useAction } from "@/components/use-action";
+import { revokeTokenAction } from "../../actions";
 import { TokenCreator } from "@/components/token-creator";
 import { Button, EmptyState, Panel, PanelHeader } from "@/components/ui";
 import { ago, date } from "@/lib/format";
@@ -9,11 +12,17 @@ import type { ApiToken } from "@/lib/types";
 export function TokenList({ initial }: { initial: ApiToken[] }) {
   const [tokens, setTokens] = useState(initial);
   const [confirm, setConfirm] = useState<string | null>(null);
+  const revoke = useAction(revokeTokenAction);
 
   return (
     <div className="flex flex-col gap-4">
       <Panel>
         <PanelHeader title="Active tokens" description="Revoking a token disconnects the agent that uses it within a minute." />
+        {revoke.error && (
+          <div className="border-b border-border px-4 py-2">
+            <ActionErrorText error={revoke.error} message={revoke.message} />
+          </div>
+        )}
         {tokens.length === 0 ? (
           <EmptyState
             title="No API tokens"
@@ -52,7 +61,17 @@ export function TokenList({ initial }: { initial: ApiToken[] }) {
                     <td className="px-4 py-2 text-right whitespace-nowrap">
                       {confirm === t.id ? (
                         <span className="inline-flex items-center gap-2">
-                          <Button size="sm" variant="danger" onClick={() => { setTokens(tokens.filter((x) => x.id !== t.id)); setConfirm(null); }}>
+                          <Button
+                            size="sm"
+                            variant="danger"
+                            pending={revoke.pending}
+                            onClick={async () => {
+                              if ((await revoke.run(t.id)) === null) {
+                                setTokens((all) => all.filter((x) => x.id !== t.id));
+                                setConfirm(null);
+                              }
+                            }}
+                          >
                             Revoke token
                           </Button>
                           <Button size="sm" variant="ghost" onClick={() => setConfirm(null)}>Cancel</Button>
@@ -72,12 +91,7 @@ export function TokenList({ initial }: { initial: ApiToken[] }) {
         <PanelHeader title="Create a token" />
         <div className="p-4">
           <TokenCreator
-            onCreated={(t) =>
-              setTokens((all) => [
-                { id: t.id, name: t.name, prefix: t.value.split("_").slice(0, 3).join("_"), scopes: t.scopes, createdAt: new Date().toISOString(), expiresAt: t.expiresAt, lastUsedAt: null },
-                ...all,
-              ])
-            }
+            onCreated={(t) => setTokens((all) => [t.token, ...all.filter((x) => x.id !== t.token.id)])}
           />
         </div>
       </Panel>

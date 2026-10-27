@@ -1,11 +1,15 @@
 "use client";
 
 import { CheckCircle2, ShieldCheck } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { useAction } from "@/components/use-action";
+import type { WarehouseInput } from "@/lib/server/data/source";
 import { Button, DescList, Field, Input, Select } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { date } from "@/lib/format";
 import type { Warehouse, WarehouseKind } from "@/lib/types";
+import { connectWarehouseAction } from "../../actions";
 
 const KINDS: { id: WarehouseKind; label: string }[] = [
   { id: "bigquery", label: "BigQuery" },
@@ -24,35 +28,41 @@ export function WarehouseForm({ initial }: { initial: Warehouse }) {
   const [kind, setKind] = useState<WarehouseKind>(initial.kind ?? "bigquery");
   const [fields, setFields] = useState<Record<string, string>>({});
   const [test, setTest] = useState<"idle" | "testing" | "ok" | "error">("idle");
-  const [error, setError] = useState<string | null>(null);
+  const [found, setFound] = useState<{ tables: number; schemas: number } | null>(null);
   const [saved, setSaved] = useState(false);
+  const connect = useAction(connectWarehouseAction);
+  const router = useRouter();
+  const error = test === "error" ? connect.message : null;
+
+  function input(): WarehouseInput {
+    if (kind === "bigquery") {
+      return { kind, project: fields.project ?? "", location: fields.location ?? "US", serviceAccountKey: fields.key ?? "" };
+    }
+    return {
+      kind,
+      host: fields.host ?? "",
+      port: Number(fields.port ?? (kind === "postgres" ? 5432 : 8443)),
+      database: fields.db ?? "",
+      user: fields.user ?? "",
+      password: fields.pass ?? "",
+      ssl: fields.ssl ?? "require",
+    };
+  }
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     setFields({ ...fields, [k]: e.target.value });
     setTest("idle");
   };
 
-  function runTest() {
+  async function runTest() {
     setTest("testing");
-    setError(null);
-    setTimeout(() => {
-      if (kind === "bigquery") {
-        const raw = fields.key ?? "";
-        try {
-          const j = JSON.parse(raw);
-          if (j.type !== "service_account") throw new Error();
-        } catch {
-          setTest("error");
-          setError("That isn't a service account key. In Google Cloud, open IAM → Service accounts → Keys → Add key → JSON, and paste the whole file.");
-          return;
-        }
-      } else if (!fields.host || !fields.user) {
-        setTest("error");
-        setError("Enter the host and user. ShipCube couldn't open a connection without them.");
-        return;
-      }
+    const r = await connect.run(input(), false);
+    if (r) {
+      setFound({ tables: r.tables, schemas: r.schemas });
       setTest("ok");
-    }, 900);
+    } else {
+      setTest("error");
+    }
   }
 
   if (!editing) {
@@ -87,9 +97,16 @@ export function WarehouseForm({ initial }: { initial: Warehouse }) {
   return (
     <form
       className="flex flex-col gap-4 p-4"
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
-        if (test === "ok") setSaved(true);
+        if (test !== "ok") return;
+        const r = await connect.run(input(), true);
+        if (r) {
+          setSaved(true);
+          router.refresh();
+        } else {
+          setTest("error");
+        }
       }}
       autoComplete="off"
     >
@@ -103,7 +120,7 @@ export function WarehouseForm({ initial }: { initial: Warehouse }) {
             onClick={() => {
               setKind(k.id);
               setTest("idle");
-              setError(null);
+              connect.clearError();
             }}
             className={cn("h-7 rounded px-3 text-[12px]", kind === k.id ? "bg-surface font-medium text-fg shadow-sm" : "text-fg-muted hover:text-fg")}
           >
@@ -174,7 +191,7 @@ export function WarehouseForm({ initial }: { initial: Warehouse }) {
         <Button type="button" onClick={runTest} pending={test === "testing"}>
           {test === "testing" ? "Connecting…" : "Test connection"}
         </Button>
-        <Button type="submit" variant="primary" disabled={test !== "ok"}>
+        <Button type="submit" variant="primary" disabled={test !== "ok"} pending={connect.pending && test === "ok"}>
           Save warehouse
         </Button>
         {initial.connected && (
@@ -184,7 +201,8 @@ export function WarehouseForm({ initial }: { initial: Warehouse }) {
         )}
         {test === "ok" && (
           <span role="status" className="flex items-center gap-1.5 text-[12px] text-good">
-            <CheckCircle2 className="size-3.5" aria-hidden /> Connected. Found 9 tables in 2 {kind === "bigquery" ? "datasets" : "schemas"}.
+            <CheckCircle2 className="size-3.5" aria-hidden /> Connected. Found {found?.tables} tables in {found?.schemas}{" "}
+            {kind === "bigquery" ? "datasets" : "schemas"}.
           </span>
         )}
       </div>

@@ -35,7 +35,7 @@ function Step({ n, title, children, done }: { n: number; title: string; children
   );
 }
 
-export function ConnectSteps() {
+export function ConnectSteps({ canCreateTokens }: { canCreateTokens: boolean }) {
   const [token, setToken] = useState<string | null>(null);
   const [client, setClient] = useState<ClientId>("claude");
   const s = snippets();
@@ -47,7 +47,14 @@ export function ConnectSteps() {
           The token lets your agent act as you. Create one per machine or agent so you can revoke them separately. All
           tokens are listed under <a href="/settings/tokens" className="text-accent hover:underline">API tokens</a>.
         </p>
-        <TokenCreator defaultName="MacBook – Claude Code" compact onCreated={(t) => setToken(t.value)} />
+        {canCreateTokens ? (
+          <TokenCreator defaultName="MacBook – Claude Code" compact onCreated={(t) => setToken(t.secret)} />
+        ) : (
+          <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-fg-muted">
+            Token creation isn&apos;t available in this deployment yet (it needs <code className="font-mono text-[12px]">POST /v1/tokens</code> on
+            the API). Ask a ShipCube operator for a token.
+          </p>
+        )}
       </Step>
 
       <Step n={2} title="Put the token in your shell environment">

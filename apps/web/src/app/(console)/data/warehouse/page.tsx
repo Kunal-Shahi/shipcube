@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { notConnected } from "@/components/not-connected";
 import { Panel, PanelHeader } from "@/components/ui";
 import { demoState, getWarehouse } from "@/lib/api";
 import { WarehouseForm } from "./warehouse-form";
@@ -6,6 +7,8 @@ import { WarehouseForm } from "./warehouse-form";
 export const metadata: Metadata = { title: "Warehouse" };
 
 export default async function WarehousePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
+  const blocked = await notConnected("data");
+  if (blocked) return null;
   const wh = await getWarehouse(demoState(await searchParams));
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">

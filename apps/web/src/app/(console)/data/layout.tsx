@@ -1,9 +1,11 @@
 import { RouteTabs } from "@/components/tabs";
 import { PageHeader } from "@/components/ui";
 import { listMigrations } from "@/lib/api";
+import { notConnected } from "@/components/not-connected";
 
 export default async function DataLayout({ children }: { children: React.ReactNode }) {
-  const proposals = (await listMigrations()).filter((m) => m.status === "proposed").length;
+  const blocked = await notConnected("data");
+  const proposals = blocked ? 0 : (await listMigrations()).filter((m) => m.status === "proposed").length;
   return (
     <>
       <PageHeader
@@ -17,7 +19,7 @@ export default async function DataLayout({ children }: { children: React.ReactNo
           { href: "/data/warehouse", label: "Warehouse" },
         ]}
       />
-      <div className="pt-6">{children}</div>
+      <div className="pt-6">{blocked ?? children}</div>
     </>
   );
 }

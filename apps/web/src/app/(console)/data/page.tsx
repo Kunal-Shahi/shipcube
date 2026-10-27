@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { notConnected } from "@/components/not-connected";
 import Link from "next/link";
 import { Suspense } from "react";
 import { CodeBlock } from "@/components/copy-button";
@@ -20,6 +21,8 @@ export default async function DataPage({ searchParams }: Props) {
 }
 
 async function Cubes({ state }: { state: DemoState }) {
+  const blocked = await notConnected("data");
+  if (blocked) return null;
   const [wh, cubes] = await Promise.all([getWarehouse(state), listCubes(state)]);
 
   if (!wh.connected) {

@@ -52,7 +52,7 @@ export default async function AppLayout({ children, params }: { children: React.
               {restore.daysLeft === 1 ? "day" : "days"} left); after that ShipCube removes the service and its image.
             </span>
           </p>
-          <RestoreButton name={app.name} size="md" />
+          <RestoreButton appId={app.id} name={app.name} size="md" />
         </div>
       )}
       <RouteTabs

@@ -62,6 +62,14 @@ async function AppsTable({ state }: { state: DemoState }) {
   }
 
   const attention = apps.filter((a) => a.health === "down" || a.health === "degraded").length;
+  // The API's app list is minimal today; show a column only when some app has the value.
+  const has = {
+    requests: apps.some((a) => a.requests24h !== undefined),
+    spend: apps.some((a) => a.costMonthToDate !== undefined),
+    shared: apps.some((a) => a.sharedWith !== undefined),
+  };
+  const spent = apps.reduce((s, a) => s + (a.costMonthToDate ?? 0), 0);
+  const dash = <span className="text-fg-subtle" aria-label="not available">–</span>;
 
   return (
     <div className="flex flex-col gap-4">
@@ -69,20 +77,18 @@ async function AppsTable({ state }: { state: DemoState }) {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-4 py-2.5 text-[12px] text-fg-muted">
           <span className="num">{apps.length} apps</span>
           {attention > 0 && <span className="num text-warning">{attention} need attention</span>}
-          <span className="num">
-            {money(apps.reduce((s, a) => s + a.costMonthToDate, 0))} this month
-          </span>
+          {has.spend && <span className="num">{money(spent)} this month</span>}
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[820px] text-left">
+          <table className="w-full min-w-[640px] text-left">
             <thead className="text-[12px] text-fg-muted">
               <tr className="border-b border-border">
                 <th className="px-4 py-2 font-medium">Name</th>
                 <th className="px-4 py-2 font-medium">Status</th>
                 <th className="px-4 py-2 font-medium">Tier</th>
-                <th className="px-4 py-2 text-right font-medium">Requests, 24 h</th>
-                <th className="px-4 py-2 text-right font-medium">Spend / cap</th>
-                <th className="px-4 py-2 text-right font-medium">Shared with</th>
+                {has.requests && <th className="px-4 py-2 text-right font-medium">Requests, 24 h</th>}
+                {has.spend && <th className="px-4 py-2 text-right font-medium">Spend / cap</th>}
+                {has.shared && <th className="px-4 py-2 text-right font-medium">Shared with</th>}
                 <th className="px-4 py-2 font-medium">Last deploy</th>
               </tr>
             </thead>
@@ -93,19 +99,25 @@ async function AppsTable({ state }: { state: DemoState }) {
                     <Link href={`/apps/${a.id}`} className="font-medium after:absolute after:inset-0 focus-visible:outline-none group-has-[:focus-visible]:underline">
                       {a.name}
                     </Link>
-                    <div className="text-[12px] text-fg-muted">
-                      {KIND_LABEL[a.kind]} · {a.billing === "own-gcp" ? "Your GCP" : "ShipCube GCP"}
-                    </div>
+                    {(a.kind || a.billing) && (
+                      <div className="text-[12px] text-fg-muted">
+                        {[a.kind && KIND_LABEL[a.kind], a.billing && (a.billing === "own-gcp" ? "Your GCP" : "ShipCube GCP")].filter(Boolean).join(", ")}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-2"><HealthPill health={a.health} /></td>
                   <td className="px-4 py-2"><TierBadge tier={a.tier} long /></td>
-                  <td className="num px-4 py-2 text-right">{count(a.requests24h)}</td>
-                  <td className="num px-4 py-2 text-right">
-                    {money(a.costMonthToDate)} <span className="text-fg-subtle">/ {money(a.spendCap)}</span>
-                  </td>
-                  <td className="num px-4 py-2 text-right">{a.sharedWith}</td>
+                  {has.requests && <td className="num px-4 py-2 text-right">{a.requests24h === undefined ? dash : count(a.requests24h)}</td>}
+                  {has.spend && (
+                    <td className="num px-4 py-2 text-right">
+                      {a.costMonthToDate === undefined ? dash : money(a.costMonthToDate)}
+                      {a.spendCap !== undefined && <span className="text-fg-subtle"> / {money(a.spendCap)}</span>}
+                    </td>
+                  )}
+                  {has.shared && <td className="num px-4 py-2 text-right">{a.sharedWith ?? dash}</td>}
                   <td className="px-4 py-2 text-fg-muted">
-                    {ago(a.lastDeployAt)} <span className="text-fg-subtle">· {a.deployedBy}</span>
+                    {ago(a.lastDeployAt)}
+                    {a.deployedBy && <span className="text-fg-subtle">, {a.deployedBy}</span>}
                   </td>
                 </tr>
               ))}
@@ -127,7 +139,7 @@ async function AppsTable({ state }: { state: DemoState }) {
                       Deleted {ago(a.deletedAt!)}. Restorable until {date(w.until)}, {w.daysLeft} {w.daysLeft === 1 ? "day" : "days"} left.
                     </div>
                   </div>
-                  <RestoreButton name={a.name} />
+                  <RestoreButton appId={a.id} name={a.name} />
                 </li>
               );
             })}

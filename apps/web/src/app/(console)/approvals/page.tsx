@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
+import { notConnected } from "@/components/not-connected";
 import { APPROVAL_KIND, ApprovalStatusPill } from "@/components/approval-meta";
 import { EmptyState, PageHeader, Panel, PanelHeader, TableSkeleton } from "@/components/ui";
-import { demoState, listApprovals, listMigrations, type DemoState } from "@/lib/api";
+import { demoState, listApprovals, listMigrations, supports, type DemoState } from "@/lib/api";
 import { ago, date } from "@/lib/format";
 import type { Approval } from "@/lib/types";
 
@@ -39,8 +40,8 @@ function Row({ a }: { a: Approval }) {
           {a.title}
         </Link>
         <div className="text-[12px] text-fg-muted">
-          {k.label}. Requested by {a.requestedBy.agent} {ago(a.requestedAt)}
-          {a.decision && `, ${a.status} by ${a.decision.by === a.requestedBy.user ? "you" : a.decision.by} on ${date(a.decision.at)}`}
+          {k.label}. Requested {a.requestedBy ? `by ${a.requestedBy.agent} ` : ""}{ago(a.requestedAt)}
+          {a.decision && `, ${a.status} on ${date(a.decision.at)}`}
         </div>
       </div>
       <ApprovalStatusPill status={a.status} />
@@ -49,7 +50,9 @@ function Row({ a }: { a: Approval }) {
 }
 
 async function ApprovalLists({ state }: { state: DemoState }) {
-  const [all, migrations] = await Promise.all([listApprovals(state), listMigrations(state)]);
+  const blocked = await notConnected("approvals_inbox");
+  if (blocked) return blocked;
+  const [all, migrations] = await Promise.all([listApprovals(state), supports("data").then((ok) => (ok ? listMigrations(state) : []))]);
   const pending = all.filter((a) => a.status === "pending");
   const decided = all.filter((a) => a.status !== "pending");
   const proposals = migrations.filter((m) => m.status === "proposed").length;
@@ -57,7 +60,7 @@ async function ApprovalLists({ state }: { state: DemoState }) {
   return (
     <div className="flex flex-col gap-4">
       <Panel>
-        <PanelHeader title="Waiting for you" description="Requests expire after 24 hours. The agent is told and can ask again." />
+        <PanelHeader title="Waiting for you" description="Requests expire after 72 hours. The agent is told and can ask again." />
         {pending.length === 0 ? (
           <EmptyState
             title="Nothing to approve"

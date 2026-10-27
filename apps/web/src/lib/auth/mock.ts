@@ -1,63 +1,52 @@
-import { cookies } from "next/headers";
-import { SESSION_COOKIE, type AuthProvider, type Session } from "./types";
+import "server-only";
 
-// Development-only provider. It stores a fake session in a cookie so the console
-// can be clicked through without Google credentials. Never enable it in production.
+import { config } from "../server/config";
+import { clearSessionCookies, isOnboarded, markOnboarded, readSessionCookie, setSessionCookie } from "./cookies";
+import type { AuthProvider, Session } from "./types";
+
+// DEV_MODE only (config() refuses it otherwise, and always on Cloud Run). Stores an unsigned
+// demo session in a cookie so the console can be clicked through without Google.
 
 const DEMO_USER = {
-  id: "usr_01JB8K",
+  id: "usr_dev",
   email: "kunal@acme-analytics.com",
   name: "Kunal Shahi",
   hostedDomain: "acme-analytics.com",
 };
 
-function encode(s: Session) {
-  return Buffer.from(JSON.stringify(s)).toString("base64url");
-}
-
-function decode(v: string): Session | null {
-  try {
-    return JSON.parse(Buffer.from(v, "base64url").toString()) as Session;
-  } catch {
-    return null;
-  }
-}
-
-async function write(session: Session) {
-  (await cookies()).set(SESSION_COOKIE, encode(session), {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    secure: process.env.NODE_ENV === "production",
-    expires: new Date(session.expiresAt),
-  });
-}
-
 export const mockAuth: AuthProvider = {
   id: "mock",
 
   async getSession() {
-    const raw = (await cookies()).get(SESSION_COOKIE)?.value;
-    return raw ? decode(raw) : null;
+    const raw = await readSessionCookie();
+    if (!raw) return null;
+    try {
+      const s = JSON.parse(Buffer.from(raw, "base64url").toString()) as Omit<Session, "onboarded">;
+      if (new Date(s.expiresAt).getTime() < Date.now()) return null;
+      return { ...s, onboarded: await isOnboarded() };
+    } catch {
+      return null;
+    }
   },
 
-  async signInWithGoogle({ intent, returnTo }) {
-    const existing = await this.getSession();
-    const onboarded = intent === "sign-in" ? true : (existing?.onboarded ?? false);
-    await write({
-      user: DEMO_USER,
-      onboarded,
-      expiresAt: new Date(Date.now() + 7 * 24 * 3600_000).toISOString(),
-    });
-    return { redirectTo: onboarded ? (returnTo ?? "/apps") : "/onboarding" };
+  async createSession(_idToken, intent) {
+    const expires = new Date(Date.now() + 7 * 86_400_000);
+    const s = { user: DEMO_USER, expiresAt: expires.toISOString() };
+    await setSessionCookie(Buffer.from(JSON.stringify(s)).toString("base64url"), expires);
+    if (intent === "sign-in") await markOnboarded();
+    return { next: intent === "sign-up" && !(await isOnboarded()) ? "onboarding" : "console" };
   },
 
   async completeOnboarding() {
-    const s = await this.getSession();
-    if (s) await write({ ...s, onboarded: true });
+    await markOnboarded();
   },
 
   async signOut() {
-    (await cookies()).delete(SESSION_COOKIE);
+    await clearSessionCookies();
+  },
+
+  async apiCredential() {
+    // A console session token (sc_ses_…) for a local control-plane API, if one is configured.
+    return config().devApiSession;
   },
 };

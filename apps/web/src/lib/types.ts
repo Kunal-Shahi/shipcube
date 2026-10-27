@@ -1,5 +1,6 @@
-// Types shared by the console. They mirror what the control-plane API is expected to
-// return (services/api). Until that API exists, src/lib/api.ts serves mock data.
+// Types the console renders. The HTTP data source (lib/server/data/http.ts) maps the
+// control-plane API (services/api/openapi.yaml) into these; DEV_MODE serves typed mocks.
+// Fields the API doesn't return yet are optional, and the UI hides what's missing.
 
 export type TierId = "T0" | "T1" | "T2" | "T3" | "T4";
 
@@ -20,26 +21,26 @@ export type WorkloadClass =
   | "compute-heavy";
 
 export type AppKind = "tracker" | "dashboard" | "report" | "api" | "job";
-export type Health = "healthy" | "degraded" | "down" | "deploying";
+export type Health = "healthy" | "degraded" | "down" | "deploying" | "unknown";
 export type Freshness = "fresh" | "stale" | "unknown";
 export type Billing = "shipcube" | "own-gcp";
 
 export interface AppSummary {
   id: string;
   name: string;
-  kind: AppKind;
+  kind?: AppKind;
   tier: TierId;
   health: Health;
   url: string;
-  region: string;
-  billing: Billing;
-  costMonthToDate: number;
-  spendCap: number;
-  requests24h: number;
-  sharedWith: number;
+  region?: string;
+  billing?: Billing;
+  costMonthToDate?: number;
+  spendCap?: number;
+  requests24h?: number;
+  sharedWith?: number;
   lastDeployAt: string;
-  deployedBy: string;
-  aiProvider: string;
+  deployedBy?: string;
+  aiProvider?: string;
   /** Soft-deleted apps can be restored for 7 days. */
   deletedAt?: string;
 }
@@ -69,7 +70,8 @@ export interface Caps {
   concurrency: number;
   maxInstances: number;
   memory: string;
-  llmTokensPerDay: number;
+  /** Enforced by the AI gateway; not part of the API's Caps yet. */
+  llmTokensPerDay?: number;
 }
 
 export type GrantKind = "user" | "group" | "domain";
@@ -80,8 +82,8 @@ export interface AccessGrant {
   kind: GrantKind;
   principal: string;
   role: Role;
-  addedBy: string;
-  addedAt: string;
+  addedBy?: string;
+  addedAt?: string;
 }
 
 export interface SeriesPoint {
@@ -90,22 +92,28 @@ export interface SeriesPoint {
 }
 
 export interface Monitoring {
+  /** The window the numbers cover, e.g. "24h". */
+  window: string;
   health: Health;
-  uptime30d: number;
+  uptime30d?: number;
+  requests?: number;
   p50Ms: number;
   p95Ms: number;
+  /** Percent of requests that failed. */
   errorRate: number;
   coldStarts24h: number;
   freshness: Freshness;
-  sourceUpdatedAt: string;
-  freshnessSlaMinutes: number;
-  costMonthToDate: number;
+  sourceUpdatedAt?: string;
+  freshnessSlaMinutes?: number;
+  costMonthToDate?: number;
+  /** Cost over `costWindow`. */
   costBreakdown: { label: string; value: number }[];
-  driftScore: number;
-  driftNote: string;
+  costWindow: string;
+  driftScore?: number;
+  driftNote?: string;
   latency: { t: string; p50: number; p95: number }[];
   dailyCost: SeriesPoint[];
-  replacement: null | {
+  replacement?: null | {
     fromTier: TierId;
     toTier: TierId;
     reason: string;
@@ -120,20 +128,23 @@ export interface LogLine {
   id: string;
   ts: string;
   level: LogLevel;
-  source: "build" | "deploy" | "runtime" | "gateway";
+  source?: "build" | "deploy" | "runtime" | "gateway";
+  revision?: string;
   message: string;
 }
 
 export interface AppDetail extends AppSummary {
-  description: string;
-  repo: string;
-  createdAt: string;
-  estimate: LoadEstimate;
+  description?: string;
+  repo?: string;
+  revision?: string;
+  createdAt?: string;
+  estimate?: LoadEstimate;
   caps: Caps;
-  usage: { spend: number; peakRpm: number; peakConcurrency: number; tokensToday: number };
+  usage?: { spend?: number; peakRpm?: number; peakConcurrency?: number; tokensToday?: number };
   access: AccessGrant[];
-  monitoring: Monitoring;
+  monitoring?: Monitoring;
   logs: LogLine[];
+  restorableUntil?: string;
 }
 
 export type ProviderId = "meta" | "openai-compatible" | "openai" | "anthropic";
@@ -178,7 +189,7 @@ export interface BillingOverview {
 }
 
 // Approvals: agent actions that wait for a person in the console (docs/WORKSTREAMS.md, "Decided" §5).
-export type ApprovalKind = "linked_gcp_deploy" | "cap_raise" | "domain_grant" | "delete_app";
+export type ApprovalKind = "first_linked_deploy" | "cap_raise" | "domain_grant" | "delete_app";
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 
 export interface ImpactRow {
@@ -195,7 +206,7 @@ export interface Approval {
   title: string;
   appId?: string;
   appName: string;
-  requestedBy: { agent: string; tokenName: string; user: string };
+  requestedBy?: { agent: string; tokenName: string; user: string };
   requestedAt: string;
   expiresAt: string;
   /** What the person asked their agent, when the agent passed it along. */
@@ -207,8 +218,8 @@ export interface Approval {
   impact: ImpactRow[];
   /** Muse Spark's view, when it had one (for example recommended caps). */
   museNote?: string;
-  tool: { name: string; args: Record<string, unknown> };
-  decision?: { by: string; at: string; note?: string };
+  tool?: { name: string; args: Record<string, unknown> };
+  decision?: { by?: string; at: string; note?: string };
 }
 
 // Data layer (Kunal-Shahi/shipcube-data): warehouse connection, cubes, migrations.

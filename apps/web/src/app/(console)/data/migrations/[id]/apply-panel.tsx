@@ -1,12 +1,28 @@
 "use client";
 
 import { Check, X } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ActionErrorText } from "@/components/action-error";
 import { Button } from "@/components/ui";
+import { useAction } from "@/components/use-action";
 import type { Migration } from "@/lib/types";
+import { decideMigrationAction } from "../../../actions";
 
 export function ApplyPanel({ m, nextVersion }: { m: Migration; nextVersion: number }) {
   const [state, setState] = useState<"idle" | "applying" | "rejecting" | "applied" | "rejected">("idle");
+  const [appliedVersion, setAppliedVersion] = useState(nextVersion);
+  const action = useAction(decideMigrationAction);
+  const router = useRouter();
+
+  async function decide(d: "apply" | "reject") {
+    setState(d === "apply" ? "applying" : "rejecting");
+    const r = await action.run(m.id, d, { allowBreaking: ack, note: note.trim() || undefined });
+    if (!r) return setState("idle");
+    if (r.applied) setAppliedVersion(r.applied.version);
+    setState(d === "apply" ? "applied" : "rejected");
+    router.refresh();
+  }
   const [ack, setAck] = useState(false);
   const [note, setNote] = useState("");
   const breaking = m.impact.breaks.length > 0;
@@ -14,9 +30,9 @@ export function ApplyPanel({ m, nextVersion }: { m: Migration; nextVersion: numb
   if (state === "applied")
     return (
       <div role="status" className="flex flex-col gap-1.5 p-4">
-        <div className="flex items-center gap-2 font-semibold text-good"><Check className="size-4" aria-hidden /> Applied as version {nextVersion}</div>
+        <div className="flex items-center gap-2 font-semibold text-good"><Check className="size-4" aria-hidden /> Applied as version {appliedVersion}</div>
         <p className="text-fg-muted">
-          New queries use version {nextVersion} now. {m.proposedBy.agent} sees the change the next time it calls data_describe_cube.
+          New queries use version {appliedVersion} now. {m.proposedBy.agent} sees the change the next time it calls data_describe_cube.
         </p>
       </div>
     );
@@ -46,6 +62,7 @@ export function ApplyPanel({ m, nextVersion }: { m: Migration; nextVersion: numb
         <textarea
           id="mig-note"
           rows={2}
+          maxLength={500}
           value={note}
           onChange={(e) => setNote(e.target.value)}
           className="w-full resize-y rounded-md border border-border-strong bg-surface px-2.5 py-2 text-[13px] focus:border-accent focus:ring-2 focus:ring-accent/25 focus:outline-none"
@@ -56,10 +73,7 @@ export function ApplyPanel({ m, nextVersion }: { m: Migration; nextVersion: numb
         className="w-full"
         disabled={(breaking && !ack) || state !== "idle"}
         pending={state === "applying"}
-        onClick={() => {
-          setState("applying");
-          setTimeout(() => setState("applied"), 800);
-        }}
+        onClick={() => decide("apply")}
       >
         Apply to the model
       </Button>
@@ -67,13 +81,11 @@ export function ApplyPanel({ m, nextVersion }: { m: Migration; nextVersion: numb
         className="w-full"
         disabled={state !== "idle"}
         pending={state === "rejecting"}
-        onClick={() => {
-          setState("rejecting");
-          setTimeout(() => setState("rejected"), 500);
-        }}
+        onClick={() => decide("reject")}
       >
         Reject
       </Button>
+      <ActionErrorText error={action.error} message={action.message} />
       <p className="text-[12px] text-fg-muted">
         Applying re-checks for conflicts first. If another change landed since this was proposed, ShipCube asks the agent to rebase it.
       </p>

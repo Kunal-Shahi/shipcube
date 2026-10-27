@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { notConnected } from "@/components/not-connected";
 import Link from "next/link";
 import { Suspense } from "react";
 import { KindPill, MigrationStatusPill } from "@/components/migration-meta";
@@ -29,6 +30,8 @@ function impactSummary(m: Migration) {
 }
 
 async function Lists({ state }: { state: DemoState }) {
+  const blocked = await notConnected("data");
+  if (blocked) return null;
   const all = await listMigrations(state);
   const proposed = all.filter((m) => m.status === "proposed");
   const history = all.filter((m) => m.status !== "proposed");

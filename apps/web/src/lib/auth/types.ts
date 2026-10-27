@@ -1,11 +1,11 @@
-// The console depends only on this interface. The security workstream is choosing
-// between Auth.js, Firebase Auth and Identity Platform; each becomes one adapter.
+// The console depends only on this interface. Production uses Identity Platform (security's
+// decision, docs/research/security-tenancy.md §1); DEV_MODE can use the mock adapter.
 
 export interface User {
   id: string;
   email: string;
   name: string;
-  /** Google Workspace domain, if the account belongs to one. Used for domain-wide sharing. */
+  /** The account's email domain. Used to suggest domain-wide sharing. */
   hostedDomain?: string;
   avatarUrl?: string;
 }
@@ -13,20 +13,34 @@ export interface User {
 export interface Session {
   user: User;
   expiresAt: string;
-  /** True once the user has finished (or skipped) onboarding. */
+  /** True once the user has finished (or skipped) onboarding in this browser. */
   onboarded: boolean;
 }
 
+export type Intent = "sign-in" | "sign-up";
+
 export interface AuthProvider {
-  readonly id: string;
+  readonly id: "identity-platform" | "mock";
   getSession(): Promise<Session | null>;
   /**
-   * Start Google sign-in. Real adapters return the provider's redirect URL;
-   * the mock signs in immediately and returns where to go next.
+   * Exchange a fresh Identity Platform ID token (from the browser's Google sign-in) for an
+   * httpOnly session cookie. The mock adapter ignores the token.
    */
-  signInWithGoogle(opts: { intent: "sign-in" | "sign-up"; returnTo?: string }): Promise<{ redirectTo: string }>;
+  createSession(idToken: string, intent: Intent): Promise<{ next: "onboarding" | "console" }>;
   completeOnboarding(): Promise<void>;
   signOut(): Promise<void>;
+  /** The credential the console sends to the control-plane API for this user. */
+  apiCredential(): Promise<string | null>;
 }
 
 export const SESSION_COOKIE = "sc_session";
+export const ONBOARDED_COOKIE = "sc_onboarded";
+
+export class AuthError extends Error {
+  constructor(
+    readonly code: "invalid_token" | "stale_sign_in" | "not_invited" | "email_unverified" | "misconfigured",
+    message: string,
+  ) {
+    super(message);
+  }
+}

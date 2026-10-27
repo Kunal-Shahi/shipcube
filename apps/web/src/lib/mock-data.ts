@@ -1,8 +1,9 @@
-// Typed mock data for the console. Everything here is invented for the demo:
-// the apps are built on the public Olist e-commerce dataset used in docs/PLAN.md.
+// Typed mock data, served only when DEV_MODE=1 (see lib/server/data/mock.ts). Everything
+// here is invented: the apps are built on the public Olist e-commerce dataset.
 
 import type {
   AccessGrant,
+  LoadEstimate,
   ApiToken,
   AppDetail,
   BillingOverview,
@@ -12,8 +13,18 @@ import type {
   SeriesPoint,
 } from "./types";
 
-// A fixed clock so relative times ("14 min ago") are stable across server and client.
-export const MOCK_NOW = new Date("2026-10-27T18:00:00Z").getTime();
+/** Mock apps carry every optional field, so the DEV_MODE console shows the full UI. */
+export type MockApp = Omit<AppDetail, "monitoring" | "usage" | "estimate"> &
+  Required<
+    Pick<AppDetail, "kind" | "region" | "billing" | "costMonthToDate" | "spendCap" | "requests24h" | "sharedWith" | "deployedBy" | "aiProvider" | "description" | "repo" | "createdAt">
+  > & {
+    estimate: LoadEstimate;
+    usage: Required<NonNullable<AppDetail["usage"]>>;
+    monitoring: Required<Monitoring>;
+  };
+
+// Mock timestamps are relative to the hour the dev server started.
+export const MOCK_NOW = Math.floor(Date.now() / 3600_000) * 3600_000;
 
 function seeded(seed: number) {
   let s = seed;
@@ -41,10 +52,11 @@ function latencySeries(seed: number, base: number, spread: number, busyFactor = 
   });
 }
 
-function dailySeries(seed: number, base: number, days = 27): SeriesPoint[] {
+function dailySeries(seed: number, base: number): SeriesPoint[] {
   const rnd = seeded(seed);
-  return Array.from({ length: days }, (_, i) => {
-    const d = new Date(Date.UTC(2026, 9, i + 1));
+  const now = new Date(MOCK_NOW);
+  return Array.from({ length: now.getUTCDate() }, (_, i) => {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), i + 1));
     const weekend = d.getUTCDay() === 0 || d.getUTCDay() === 6;
     return { t: d.toISOString(), value: +(base * (weekend ? 0.45 : 1) * (0.8 + rnd() * 0.4)).toFixed(2) };
   });
@@ -79,11 +91,14 @@ function logs(appSlug: string, route: string, extra: Omit<LogLine, "id">[] = [])
     .map((l, i) => ({ ...l, id: `${appSlug}-${i}` }));
 }
 
-function monitoring(partial: Partial<Monitoring> & Pick<Monitoring, "latency" | "dailyCost">): Monitoring {
+function monitoring(partial: Partial<Monitoring> & Pick<Monitoring, "latency" | "dailyCost">): Required<Monitoring> {
   const p50s = partial.latency.map((p) => p.p50).sort((a, b) => a - b);
   const p95s = partial.latency.map((p) => p.p95).sort((a, b) => a - b);
   const mtd = +partial.dailyCost.reduce((s, d) => s + d.value, 0).toFixed(2);
   return {
+    window: "24h",
+    costWindow: "month to date",
+    requests: 0,
     health: "healthy",
     uptime30d: 99.97,
     p50Ms: p50s[12],
@@ -103,10 +118,10 @@ function monitoring(partial: Partial<Monitoring> & Pick<Monitoring, "latency" | 
     driftNote: "Output distributions match the previous 7 runs.",
     replacement: null,
     ...partial,
-  };
+  } as Required<Monitoring>;
 }
 
-export const apps: AppDetail[] = [
+export const apps: MockApp[] = [
   {
     id: "app_rrt01",
     name: "regional-revenue-tracker",
@@ -458,7 +473,7 @@ export const apps: AppDetail[] = [
     monitoring: monitoring({
       health: "down",
       latency: latencySeries(31, 900, 0.6),
-      dailyCost: dailySeries(17, 0.12, 27),
+      dailyCost: dailySeries(17, 0.12),
       errorRate: 100,
       uptime30d: 98.1,
       freshness: "stale",
@@ -575,5 +590,7 @@ export const billing: BillingOverview = {
   const shipcubeMtd = billing.daily.reduce((s, d) => s + d.value, 0);
   billing.credits.used = +(shipcubeMtd + 11.84).toFixed(2); // + September usage
   billing.monthToDate = +apps.reduce((s, a) => s + a.costMonthToDate, 0).toFixed(2);
-  billing.forecast = +((billing.monthToDate / 27) * 31).toFixed(2);
+  const d = new Date(MOCK_NOW);
+  const daysInMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  billing.forecast = +((billing.monthToDate / Math.max(d.getUTCDate(), 1)) * daysInMonth).toFixed(2);
 }

@@ -3,6 +3,7 @@ import { CheckCircle2 } from "lucide-react";
 import { PageHeader, Panel, PanelHeader } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { TOOLS, type ToolGroup } from "@/lib/mcp";
+import { supports } from "@/lib/api";
 import { ConnectSteps } from "./connect-steps";
 
 export const metadata: Metadata = { title: "Connect your agent" };
@@ -77,7 +78,7 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <Panel className="p-5">
-          <ConnectSteps />
+          <ConnectSteps canCreateTokens={await supports("tokens")} />
         </Panel>
 
         <Panel className="self-start">

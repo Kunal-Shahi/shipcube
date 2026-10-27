@@ -15,7 +15,7 @@ export const WORKSPACE_DEFAULT_SPEND_CAP = 50;
 export const approvals: Approval[] = [
   {
     id: "apr_7k2m",
-    kind: "linked_gcp_deploy",
+    kind: "first_linked_deploy",
     status: "pending",
     title: "Deploy freight-cost-explorer to your GCP project",
     appName: "freight-cost-explorer",
@@ -121,7 +121,7 @@ export const approvals: Approval[] = [
   },
   {
     id: "apr_a1b2",
-    kind: "linked_gcp_deploy",
+    kind: "first_linked_deploy",
     status: "approved",
     title: "Deploy churn-scoring-job to your GCP project",
     appId: "app_csj04",

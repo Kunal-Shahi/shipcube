@@ -2,13 +2,17 @@
 
 import { Check, Clock, X } from "lucide-react";
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { ActionErrorText } from "@/components/action-error";
 import { APPROVAL_KIND } from "@/components/approval-meta";
 import { Button } from "@/components/ui";
+import { useAction } from "@/components/use-action";
 import { cn } from "@/lib/cn";
 import type { Approval } from "@/lib/types";
+import { decideApprovalAction } from "../../actions";
 
 const AFTER: Record<Approval["kind"], string> = {
-  linked_gcp_deploy: "continues the deploy and reports the URL when it's live.",
+  first_linked_deploy: "continues the deploy and reports the URL when it's live.",
   cap_raise: "is told the new cap is in place.",
   domain_grant: "is told the domain was added to the access list.",
   delete_app: "is told the app is deleted. You can restore it from Apps for 7 days.",
@@ -18,15 +22,19 @@ export function DecisionPanel({ approval, hoursLeft }: { approval: Approval; hou
   const [decision, setDecision] = useState<"approved" | "rejected" | null>(null);
   const [pending, setPending] = useState<"approve" | "reject" | null>(null);
   const [note, setNote] = useState("");
-  const agent = approval.requestedBy.agent;
+  const action = useAction(decideApprovalAction);
+  const router = useRouter();
+  const agent = approval.requestedBy?.agent ?? "The agent";
   const danger = approval.kind === "delete_app";
 
-  function decide(d: "approve" | "reject") {
+  async function decide(d: "approve" | "reject") {
     setPending(d);
-    setTimeout(() => {
-      setPending(null);
+    const r = await action.run(approval.id, d, note);
+    setPending(null);
+    if (r) {
       setDecision(d === "approve" ? "approved" : "rejected");
-    }, 600);
+      router.refresh();
+    }
   }
 
   if (decision) {
@@ -60,6 +68,7 @@ export function DecisionPanel({ approval, hoursLeft }: { approval: Approval; hou
         <textarea
           id="decision-note"
           rows={3}
+          maxLength={500}
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder={approval.kind === "cap_raise" ? "For example: use $70, that covers the forecast" : "The agent sees this with your decision"}
@@ -74,6 +83,7 @@ export function DecisionPanel({ approval, hoursLeft }: { approval: Approval; hou
           Reject
         </Button>
       </div>
+      <ActionErrorText error={action.error} message={action.message} />
       <p className="text-[12px] text-fg-muted">
         Only a person signed in to the console can decide. Agents and API tokens can&apos;t approve their own requests.
       </p>
