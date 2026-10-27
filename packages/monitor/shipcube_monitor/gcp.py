@@ -16,6 +16,9 @@ Metric types (https://cloud.google.com/monitoring/api/metrics_gcp_p_z#gcp-run):
 from __future__ import annotations
 
 import json
+import logging
+import random
+import time
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +29,7 @@ import httpx
 
 from . import pricing
 from .distribution import merge, percentile
+from .errors import MonitorError, MonitorNotFound, MonitorPermissionDenied, MonitorUnavailable
 from .types import WINDOWS, AppTarget, NoUsage, UsageSource, Window, severity_at_least
 
 MONITORING = "https://monitoring.googleapis.com/v3"
@@ -36,10 +40,9 @@ MAX_MESSAGE = 2000
 STEPS = {"15m": 60, "1h": 60, "24h": 300, "7d": 3600, "30d": 3600}
 
 
-class MonitorError(RuntimeError):
-    pass
+log = logging.getLogger("shipcube_monitor")
 
-
+RETRYABLE = {408, 429, 500, 502, 503, 504}
 def adc_token_provider() -> Callable[[], str]:
     """Application Default Credentials (the service's own SA on Cloud Run, gcloud ADC locally)."""
     import google.auth
@@ -67,25 +70,58 @@ class GcpMonitor:
         usage: UsageSource | None = None,
         client: httpx.Client | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        retries: int = 3,
+        backoff_s: float = 0.5,
+        trace_header: Callable[[], str | None] | None = None,
     ) -> None:
         self._token = token or adc_token_provider()
         self._usage = usage or NoUsage()
-        self._http = client or httpx.Client(timeout=20)
+        # Every call has a timeout: 5 s to connect, 20 s overall per attempt.
+        self._http = client or httpx.Client(timeout=httpx.Timeout(20, connect=5))
         self._now = now
+        self._retries = retries
+        self._backoff = backoff_s
+        # Returns the caller's traceparent, so the API's trace continues into Google's APIs.
+        self._trace = trace_header
 
     # --- HTTP -------------------------------------------------------------------
 
     def _headers(self, project: str) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._token()}", "x-goog-user-project": project}
+        h = {"Authorization": f"Bearer {self._token()}", "x-goog-user-project": project}
+        if self._trace and (tp := self._trace()):
+            h["traceparent"] = tp
+        return h
 
-    def _check(self, r: httpx.Response) -> dict[str, Any]:
-        if r.status_code >= 400:
+    def _request(self, method: str, url: str, project: str, **kw: Any) -> dict[str, Any]:
+        """One read-only call with retries (exponential backoff with jitter) on timeouts, 429 and 5xx.
+
+        Both APIs used here are reads (timeSeries.list, entries.list), so retrying is safe.
+        """
+        attempt = 0
+        while True:
             try:
-                msg = r.json().get("error", {}).get("message", r.text)
-            except json.JSONDecodeError:
-                msg = r.text
-            raise MonitorError(f"{r.request.url.host} returned {r.status_code}: {msg[:300]}")
-        return r.json()
+                r = self._http.request(method, url, headers=self._headers(project), **kw)
+            except httpx.TransportError as e:  # timeouts, connection resets, DNS
+                status, msg = None, f"{type(e).__name__}: {e}"
+            else:
+                if r.status_code < 400:
+                    return r.json()
+                status, msg = r.status_code, _error_message(r)
+                if status not in RETRYABLE:
+                    host = r.request.url.host
+                    if status == 403:
+                        raise MonitorPermissionDenied(f"{host} returned 403: {msg}", status)
+                    if status == 404:
+                        raise MonitorNotFound(f"{host} returned 404: {msg}", status)
+                    raise MonitorError(f"{host} returned {status}: {msg}", status)
+            if attempt >= self._retries:
+                raise MonitorUnavailable(f"{httpx.URL(url).host} failed after {attempt + 1} attempts: {msg}", status)
+            delay = self._backoff * 2**attempt * (0.5 + random.random())
+            log.warning("monitor call failed, retrying", extra={
+                "url": str(httpx.URL(url).copy_with(query=None)), "status": status, "attempt": attempt + 1,
+                "retry_in_s": round(delay, 2), "error": msg})
+            time.sleep(delay)
+            attempt += 1
 
     def _series(
         self,
@@ -117,12 +153,8 @@ class GcpMonitor:
         token = None
         while True:
             page = params + ([("pageToken", token)] if token else [])
-            body = self._check(
-                self._http.get(
-                    f"{MONITORING}/projects/{target.project_id}/timeSeries",
-                    params=page,
-                    headers=self._headers(target.project_id),
-                )
+            body = self._request(
+                "GET", f"{MONITORING}/projects/{target.project_id}/timeSeries", target.project_id, params=page
             )
             out += body.get("timeSeries", [])
             token = body.get("nextPageToken")
@@ -251,13 +283,18 @@ class GcpMonitor:
         }
         if page_token:
             body["pageToken"] = page_token
-        data = self._check(
-            self._http.post(f"{LOGGING}/entries:list", json=body, headers=self._headers(target.project_id))
-        )
+        data = self._request("POST", f"{LOGGING}/entries:list", target.project_id, json=body)
         return {
             "entries": [_entry(e) for e in data.get("entries", [])],
             "next_page_token": data.get("nextPageToken") or None,
         }
+
+
+def _error_message(r: httpx.Response) -> str:
+    try:
+        return str(r.json().get("error", {}).get("message", r.text))[:300]
+    except (json.JSONDecodeError, AttributeError):
+        return r.text[:300]
 
 
 def _int(point: dict[str, Any]) -> int:

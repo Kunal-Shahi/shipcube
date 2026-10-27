@@ -8,7 +8,8 @@ import pytest
 
 from shipcube_monitor import AppTarget, MockMonitor, Rule, evaluate, notify, pricing, provider_from_env
 from shipcube_monitor.distribution import percentile
-from shipcube_monitor.gcp import GcpMonitor, MonitorError
+from shipcube_monitor.errors import MonitorNotFound, MonitorPermissionDenied, MonitorUnavailable
+from shipcube_monitor.gcp import GcpMonitor
 
 NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
 
@@ -82,7 +83,7 @@ def fake_gcp(seen: list[httpx.Request]) -> httpx.Client:
 
 
 def gcp(seen: list[httpx.Request], **kw) -> GcpMonitor:
-    return GcpMonitor(token=lambda: "test-token", client=fake_gcp(seen), now=lambda: NOW, **kw)
+    return GcpMonitor(token=lambda: "test-token", client=fake_gcp(seen), now=lambda: NOW, backoff_s=0, **kw)
 
 
 def test_gcp_metrics_shape_and_values():
@@ -144,14 +145,54 @@ def test_gcp_logs_paging_and_mapping():
     assert mon.logs(target(), page_token="p2")["next_page_token"] is None
 
 
-def test_gcp_errors_are_raised():
-    client = httpx.Client(transport=httpx.MockTransport(
-        lambda r: httpx.Response(403, json={"error": {"message": "Permission denied"}})))
-    mon = GcpMonitor(token=lambda: "t", client=client, now=lambda: NOW)
-    with pytest.raises(MonitorError, match="403"):
-        mon.logs(target())
+def test_gcp_errors_are_typed():
+    def mon(status):
+        client = httpx.Client(transport=httpx.MockTransport(
+            lambda r: httpx.Response(status, json={"error": {"message": "nope"}})))
+        return GcpMonitor(token=lambda: "t", client=client, now=lambda: NOW, backoff_s=0)
+
+    with pytest.raises(MonitorPermissionDenied, match="403"):
+        mon(403).logs(target())
+    with pytest.raises(MonitorNotFound):
+        mon(404).metrics(target())
+    with pytest.raises(MonitorUnavailable):
+        mon(503).logs(target())
     with pytest.raises(ValueError):
-        mon.logs(target(), severity="LOUD")
+        mon(200).logs(target(), severity="LOUD")
+
+
+def test_gcp_retries_transient_failures():
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(req)
+        if len(calls) == 1:
+            raise httpx.ConnectTimeout("slow", request=req)
+        if len(calls) == 2:
+            return httpx.Response(503)
+        return httpx.Response(200, json={"entries": []})
+
+    mon = GcpMonitor(token=lambda: "t", client=httpx.Client(transport=httpx.MockTransport(handler)),
+                     now=lambda: NOW, backoff_s=0)
+    assert mon.logs(target())["entries"] == []
+    assert len(calls) == 3
+
+
+def test_gcp_gives_up_after_retries():
+    calls = []
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: calls.append(r) or httpx.Response(429)))
+    mon = GcpMonitor(token=lambda: "t", client=client, now=lambda: NOW, retries=2, backoff_s=0)
+    with pytest.raises(MonitorUnavailable) as e:
+        mon.logs(target())
+    assert e.value.status == 429 and len(calls) == 3
+
+
+def test_trace_header_is_propagated():
+    seen: list[httpx.Request] = []
+    mon = GcpMonitor(token=lambda: "test-token", client=fake_gcp(seen), now=lambda: NOW,
+                     trace_header=lambda: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
+    mon.logs(target())
+    assert seen[0].headers["traceparent"].startswith("00-0af7")
 
 
 def test_percentile_exponential_buckets():
@@ -172,7 +213,11 @@ def test_mock_is_deterministic_and_pages():
 
 
 def test_provider_from_env(monkeypatch):
-    monkeypatch.delenv("SHIPCUBE_MONITOR", raising=False)
+    monkeypatch.setenv("SHIPCUBE_MONITOR", "mock")
+    monkeypatch.delenv("DEV_MODE", raising=False)
+    with pytest.raises(RuntimeError, match="DEV_MODE"):
+        provider_from_env()
+    monkeypatch.setenv("DEV_MODE", "1")
     assert isinstance(provider_from_env(), MockMonitor)
     monkeypatch.setenv("SHIPCUBE_MONITOR", "nope")
     with pytest.raises(ValueError):
