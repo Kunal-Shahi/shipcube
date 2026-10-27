@@ -1,0 +1,13 @@
+# Upload only what the three images need.
+.git
+**/node_modules
+**/.next
+**/.venv
+**/__pycache__
+**/*.pyc
+.env
+.claude
+ml
+evals
+docs
+examples
