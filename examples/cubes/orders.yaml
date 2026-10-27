@@ -1,0 +1,20 @@
+cubes:
+  orders:
+    table: olist_orders
+    joins:
+      customers: "{orders.customer_id} = {customers.customer_id}"
+    dimensions:
+      order_id: {sql: order_id, primary_key: true}
+      status: order_status
+      created_at: {sql: order_purchase_timestamp, type: time}
+    measures:
+      orders: count(*)
+      revenue: sum(payment_value)
+      aov: "{revenue} / nullif({orders}, 0)"
+
+  customers:
+    table: olist_customers
+    dimensions:
+      customer_id: {sql: customer_id, primary_key: true}
+      state: customer_state
+      city: customer_city
