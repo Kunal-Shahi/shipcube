@@ -168,3 +168,11 @@ def test_api_only_apps_get_always_on_traffic(tmp_path):
     p = StaticRunner().run(tmp_path, s, Hints(expected_users=1000))
     f, notes = to_features(p, Hints(expected_users=1000), api_only=True)
     assert f["idle_fraction"] < 0.01 and any("always on" in n for n in notes)
+
+
+def test_allocation_refused_is_reported_as_memory_limit():
+    # Linux path: RLIMIT_AS makes the allocation fail before RSS can grow.
+    from shipcube_profiler.runners import _allocation_refused
+    assert "memory" in _allocation_refused(1, "Traceback ...\nMemoryError\n", Limits(memory_mb=150))
+    assert _allocation_refused(1, "ValueError: nope", Limits()) is None
+    assert _allocation_refused(0, "MemoryError", Limits()) is None

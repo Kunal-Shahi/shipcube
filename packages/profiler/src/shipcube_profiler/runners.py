@@ -187,6 +187,18 @@ def _bucketed_cv(cpu: list[float], interval_s: float) -> float:
     return statistics.pstdev(buckets) / mean if mean > 0 else 0.0
 
 
+_OOM = re.compile(r"MemoryError|Cannot allocate memory|std::bad_alloc|out of memory|ENOMEM", re.I)
+
+
+def _allocation_refused(returncode: int | None, stderr: str, limits: Limits) -> str | None:
+    """The memory limit as seen on Linux: RLIMIT_AS makes the allocation itself fail
+    (MemoryError, exit 1) before RSS grows enough for the sampler to kill anything.
+    macOS doesn't enforce RLIMIT_AS, so there the sampler's RSS check fires instead."""
+    if returncode not in (0, None) and _OOM.search(stderr[-4000:]):
+        return f"memory over {limits.memory_mb} MB (allocation refused by RLIMIT_AS)"
+    return None
+
+
 def _killpg(pid: int, sig=signal.SIGKILL):
     try:
         os.killpg(pid, sig)
@@ -346,7 +358,7 @@ class LocalRunner:
         if summary.kind != "web":
             prof.active_s = wall
         prof.exit_code = proc.returncode
-        prof.killed_reason = sampler.kill_reason
+        prof.killed_reason = sampler.kill_reason or _allocation_refused(proc.returncode, stderr, self.limits)
         prof.processes_max = sampler.nprocs
         cpu = sampler.cpu[win_start:] or sampler.cpu
         rss = sampler.rss[win_start:] or sampler.rss

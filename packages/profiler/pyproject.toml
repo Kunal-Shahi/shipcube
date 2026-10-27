@@ -12,6 +12,10 @@ test = ["pytest>=8", "flask>=3.0"]
 [tool.uv.sources]
 shipcube-classifier = { path = "../../ml/workload-classifier", editable = true }
 
+[dependency-groups]
+# Installed by `uv sync` (CI). flask runs the dashboard sample app in the tests.
+dev = ["pytest>=8", "flask>=3.0"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

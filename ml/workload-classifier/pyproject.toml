@@ -13,6 +13,12 @@ train = ["lightgbm>=4.5", "numpy>=2.0", "pandas>=2.2", "scikit-learn>=1.5"]
 gcp = ["google-auth>=2.30", "requests>=2.32"]
 test = ["pytest>=8"]
 
+[dependency-groups]
+# Installed by `uv sync` (CI): everything the tests import, including the training
+# stack used by the weak-label and LightGBM-parity tests.
+dev = ["pytest>=8", "lightgbm>=4.5", "numpy>=2.0", "pandas>=2.2", "scikit-learn>=1.5",
+       "google-auth>=2.30", "requests>=2.32"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
