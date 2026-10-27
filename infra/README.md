@@ -4,12 +4,13 @@ Infrastructure as code for ShipCube's own GCP projects, plus the scripts users r
 
 **Status (Oct 28): applied.** Kunal approved the plan and cost and ran `terraform apply`; a follow-up `terraform plan` shows no changes. State is in `gs://shipcube-control-ks-tfstate` (versioned, prefix `shipcube`). Cloud SQL connection name: `shipcube-control-ks:asia-south1:shipcube-pg`. The budget kill switch is live (see `budget-killswitch/`).
 
-Not yet done: the Postgres roles from database-design §5 (`shipcube_owner`, `shipcube_app`, `shipcube_worker`) and the first schema migration. The IAM database users `sc-api` and `sc-worker` exist but have no privileges until that migration grants them. The built-in `postgres` user has no password set, so it can't be used to sign in.
+Database (Oct 28): roles bootstrapped and migrations `0001`–`0002` applied; see `db/` below.
 
 | Path | What it is |
 |---|---|
 | `terraform/` | ShipCube's two projects: `shipcube-control` (API, MCP, gateway, Cloud SQL, secrets, audit logs) and `shipcube-apps` (hosted apps, profiler sandbox) |
 | `budget-killswitch/` | Hard spending cap: function + `deploy.sh`; Terraform owns its budget, topic and service account |
+| `db/` | `bootstrap.sql`/`.sh` (once, as `postgres`), `owner_defaults.sql` and `migrate.sh` (every migration, as `sc-migrator`), `proposed/` migrations for `services/api/migrations` |
 | `scripts/link-project.sh` | Run by a user, as Owner of their project, to let their workspace's ShipCube deployer deploy there |
 | `scripts/unlink-project.sh` | Removes every grant `link-project.sh` made |
 
@@ -61,3 +62,13 @@ Manual steps Terraform can't do:
 1. Identity Platform with the Google provider on `shipcube-control` (done Oct 28).
 2. The external OAuth client for IAP in `shipcube-apps`, applied with `gcloud iap settings set` (the IAP OAuth Admin API is shut down for new projects).
 3. Secret values: `meta-api-key` and `token-hmac-pepper` were added at version 1 on Oct 28 (adopted by `imports.tf`). Add or rotate with `printf '%s' "$VALUE" | gcloud secrets versions add NAME --data-file=-`.
+
+## Database
+
+```bash
+brew install cloud-sql-proxy libpq                      # once
+infra/db/bootstrap.sh                                   # once per instance, as postgres
+API_DIR=services/api PYTHON=python3.12 infra/db/migrate.sh   # every migration, as sc-migrator
+```
+
+`migrate.sh` impersonates `sc-migrator`, so the caller must be in `migration_operators` (Terraform). It applies `owner_defaults.sql` first, then the API's checksummed, advisory-locked runner. The `postgres` password is only in Secret Manager (`sql-postgres-password`); rotate it by bumping `postgres_password_version`.

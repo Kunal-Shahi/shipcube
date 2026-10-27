@@ -724,6 +724,12 @@ Database roles:
 
 Each maps to a Cloud SQL IAM database user tied to that service's service account, so there are no database passwords.
 
+**Live setup (Oct 28).** `infra/db/bootstrap.sql` (run once as `postgres`, whose password exists only in Secret Manager) created the extensions and the four roles, made `sc-migrator`, `sc-api` and `sc-worker` members of `shipcube_owner`, `shipcube_app` and `shipcube_worker` respectively, and set each login's default role, so every session starts in its role. `infra/db/migrate.sh` runs the API's migration runner as `sc-migrator` (IAM sign-in through the Cloud SQL proxy, no password). Migrations `0001` and `0002` from `services/api/migrations` are applied. Verified: all 21 tables are owned by `shipcube_owner`; `sc-api` sees nothing without a caller context and cannot create tables, change role, modify `audit_log` or disable RLS.
+
+**Gap, fixed by proposed `0003`:** `0001` enabled RLS only on the five tables whose policies this section spells out. `infra/db/proposed/0003_tenant_rls_and_rate_counters.sql` adds it to the other twelve tenant tables (read: viewer; write: developer or admin as listed in the file; usage tables worker-only), adds the self-or-admin policy for `api_tokens`, and creates `rate_counters`. It was executed against the live schema inside a transaction and rolled back (17 tables with forced RLS inside the transaction). It belongs in `services/api/migrations` (networking's runner).
+
+**Migrations at startup:** in production the API and worker roles can't create objects, so `db.migrate()` on startup must be turned off there; migrations run through `migrate.sh` (or the same command as a deploy step) before new code rolls out. Applied files are immutable: the runner checks their SHA-256.
+
 **Testing RLS:** a test fixture creates workspaces A and B and asserts that every API list and get endpoint, called as a user of A, returns nothing from B, and that writes into B fail.
 
 ## 6. Tokens and scopes (matches networking, PR #1)
@@ -776,6 +782,10 @@ Without a valid IAP assertion (for example, a scheduled job), the caller is the 
 **Catalog tables in Postgres:** the data layer's catalog lives in this same Cloud SQL database. Every catalog table gets `workspace_id uuid not null references workspaces(id)` and the same RLS policies built on `app_workspace()` and `app_has_role()` (section 5). Reading the catalog needs `viewer`; migrations need `developer` (and approval through the console); data roles and attributes need `admin`. Catalog changes write to the shared `audit_log` with `action` values prefixed `data.`.
 
 ## 8. Approvals, soft delete, migrations and datasources (decided Oct 28)
+
+**Runner columns (`0002`, from networking).** `operations` also carries `input`/`result`/`error_code`, step progress (`steps`, `step_index`, `progress_message`), mirrored approval fields for cheap polling (`approval_url`, `approval_reasons`, `approval_actions`, `approval_expires_at`), and a durable queue (`locked_by`, `locked_until`, `next_attempt_at`, `max_attempts`, `cancel_requested`), plus the `rollback` kind. `approvals` stays the source of truth for decisions.
+
+**One operation needing several approvals** (for example, the first deploy to a linked project that also raises a cap): there is **one** approval per operation. `approvals.action` holds the most severe action (`delete_app` > `first_linked_deploy` > `domain_grant` > `cap_raise`), `request.actions` lists all of them, and `operations.approval_actions` mirrors that list. The approver sees and approves them together; approving covers all of them, and the request hash covers the whole request.
 
 **Approval flow.** Networking's API owns the endpoints; these tables back them.
 

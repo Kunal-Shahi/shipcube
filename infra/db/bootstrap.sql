@@ -35,15 +35,9 @@ exception when insufficient_privilege then
   raise notice 'cannot set default roles on IAM users (%); callers must SET ROLE themselves', sqlerrm;
 end $$;
 
--- Privileges on everything shipcube_owner creates from now on.
-alter default privileges for role shipcube_owner in schema public
-  grant select, insert, update, delete on tables to shipcube_app, shipcube_worker;
-alter default privileges for role shipcube_owner in schema public
-  grant select on tables to shipcube_readonly;
-alter default privileges for role shipcube_owner in schema public
-  grant usage, select on sequences to shipcube_app, shipcube_worker;
-alter default privileges for role shipcube_owner in schema public
-  grant execute on functions to shipcube_app, shipcube_worker, shipcube_readonly;
+-- Default privileges on what shipcube_owner creates are set by owner_defaults.sql, which
+-- runs as sc-migrator (acting as shipcube_owner) before each migration: on Cloud SQL,
+-- postgres is not a member of shipcube_owner and can't set them on its behalf.
 
 -- Report.
 select r.rolname, r.rolbypassrls,

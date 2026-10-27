@@ -5,6 +5,7 @@
 # `migration_operators` (Terraform) to impersonate it. No password is involved.
 #   API_DIR=path/to/services/api ./migrate.sh
 set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
 
 PROJECT="${PROJECT:-shipcube-control-ks}"
 INSTANCE="${INSTANCE:-${PROJECT}:asia-south1:shipcube-pg}"
@@ -16,6 +17,10 @@ cloud-sql-proxy "$INSTANCE" --port "$PORT" --auto-iam-authn --impersonate-servic
 PROXY=$!
 trap 'kill $PROXY 2>/dev/null' EXIT
 for _ in $(seq 1 30); do nc -z 127.0.0.1 "$PORT" 2>/dev/null && break; sleep 1; done
+
+PSQL="${PSQL:-$(command -v psql || echo /opt/homebrew/opt/libpq/bin/psql)}"
+DB="host=127.0.0.1 port=${PORT} dbname=shipcube user=sc-migrator@${PROJECT}.iam sslmode=disable"
+"$PSQL" "$DB" -q -f "$HERE/owner_defaults.sql"
 
 cd "$API_DIR"
 SHIPCUBE_DATABASE_URL="postgresql://sc-migrator%40${PROJECT}.iam@127.0.0.1:${PORT}/shipcube?sslmode=disable" \
