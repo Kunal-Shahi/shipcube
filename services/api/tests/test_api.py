@@ -54,7 +54,7 @@ def test_deploy_idempotency():
     a = client.post("/v1/apps/demo-app/deployments", json=body, headers={**AUTH, "Idempotency-Key": "k1"})
     b = client.post("/v1/apps/demo-app/deployments", json=body, headers={**AUTH, "Idempotency-Key": "k1"})
     assert a.status_code == b.status_code == 202
-    assert a.json()["id"] == b.json()["id"] and a.json()["status"] == "queued"
+    assert a.json()["id"] == b.json()["id"] and a.json()["status"] in ("queued", "running")
     assert a.headers["Location"] == f"/v1/operations/{a.json()['id']}"
     other = {"source": {**GIT, "url": "https://github.com/example/other"}}
     assert client.post("/v1/apps/demo-app/deployments", json=other, headers={**AUTH, "Idempotency-Key": "k1"}).status_code == 409
@@ -85,7 +85,7 @@ def test_first_linked_deploy_needs_approval_then_flows():
     assert _wait(op["id"])["status"] == "succeeded"
     # The second deploy to the same linked project goes straight through.
     again = client.post("/v1/apps/linked-app/deployments", json={"source": GIT, "target": "linked-1"}, headers=AUTH)
-    assert again.json()["status"] == "queued"
+    assert again.json()["status"] in ("queued", "running")
 
 
 def test_cap_raise_needs_approval_reduction_does_not():

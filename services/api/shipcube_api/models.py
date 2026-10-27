@@ -274,6 +274,7 @@ class App(AppSummary):
     ai: AiConfig
     deleted_at: str | None = None
     restorable_until: str | None = Field(None, description="Soft-deleted apps can be restored from the console until then")
+    runtime: dict[str, Any] | None = Field(None, description="Live state from Cloud Run: ready, URL, revision, IAP, scaling")
 
 
 class EstimateResult(BaseModel):

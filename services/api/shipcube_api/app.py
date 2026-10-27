@@ -7,7 +7,6 @@ verified token with the right scope.
 
 from __future__ import annotations
 
-import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
@@ -21,7 +20,9 @@ from .models import (
     ApprovalDecision, Caps, CapsResult, DeployRequest, EstimateRequest, Logs, Me, Metrics, Operation, Upload,
     UploadRequest,
 )
+from .deploy.base import DeployError
 from .store import ENFORCED_BY, Conflict, caps_above_default, store
+from .telemetry import telemetry
 
 app = FastAPI(title="ShipCube control-plane API", version="v1")
 
@@ -46,6 +47,12 @@ async def _http_error(_: Request, exc: HTTPException) -> JSONResponse:
 async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
     msg = "; ".join(f"{'.'.join(str(p) for p in e['loc'][1:])}: {e['msg']}" for e in exc.errors())
     return JSONResponse({"error": {"code": "invalid_argument", "message": msg}}, status_code=400)
+
+
+@app.exception_handler(DeployError)
+async def _deploy_error(_: Request, exc: DeployError) -> JSONResponse:
+    status = {"not_found": 404, "invalid_argument": 400, "permission_denied": 502}.get(exc.code, 502)
+    return JSONResponse({"error": {"code": exc.code, "message": str(exc)}}, status_code=status)
 
 
 @app.exception_handler(Conflict)
@@ -113,16 +120,8 @@ def me(c: Annotated[Caller, Depends(caller)]):
 
 @app.post("/v1/uploads", response_model=Upload, status_code=201)
 def create_upload(body: UploadRequest, c: Annotated[Caller, Depends(scope("apps:deploy"))]):
-    upload_id = f"upl_{secrets.token_hex(4)}"
-    return {
-        "upload_id": upload_id,
-        "method": "PUT",
-        # Production: a V4 signed URL on a private GCS bucket, one object, 15-minute expiry.
-        "url": f"https://storage.googleapis.com/shipcube-uploads/{upload_id}.tgz?X-Goog-Signature=mock",
-        "headers": {"Content-Type": body.content_type},
-        "max_bytes": 100 * 1024 * 1024,
-        "expires_at": (datetime.now(UTC) + timedelta(minutes=15)).isoformat(timespec="seconds").replace("+00:00", "Z"),
-    }
+    # GCP: a V4 signed PUT URL for one object in the private uploads bucket, valid 15 minutes.
+    return store.deployer.create_upload(c.workspace_id, body.content_type)
 
 
 @app.post("/v1/estimates", response_model=Operation, status_code=202)
@@ -187,7 +186,8 @@ def list_apps(c: Annotated[Caller, Depends(scope("apps:read"))]):
 
 @app.get("/v1/apps/{app}", response_model=App)
 def app_status(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))]):
-    return get_app(app, include_deleted=True)
+    a = get_app(app, include_deleted=True)
+    return {**a, "runtime": store.live_status(app) if a["revision"] else None}
 
 
 @app.delete("/v1/apps/{app}", response_model=Operation, status_code=202)
@@ -212,15 +212,13 @@ def restore(app: AppName, c: Annotated[Caller, Depends(console_session)]):
 def logs(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))],
          severity: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = None,
          limit: Annotated[int, Query(ge=1, le=500)] = 50, page_token: str | None = None):
-    get_app(app)
-    return {"entries": store.logs(app, limit, severity), "next_page_token": None}
+    return telemetry.logs(get_app(app), limit, severity, page_token)
 
 
 @app.get("/v1/apps/{app}/metrics", response_model=Metrics)
 def metrics(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))],
             window: Literal["15m", "1h", "24h", "7d", "30d"] = "1h"):
-    get_app(app)
-    return store.metrics(app, window)
+    return telemetry.metrics(get_app(app), window)
 
 
 @app.patch("/v1/apps/{app}/caps", response_model=CapsResult)
