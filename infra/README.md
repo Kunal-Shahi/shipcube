@@ -73,7 +73,7 @@ Hosted builds run tenant code, so each workspace builds as its own service accou
 
 Rollout:
 
-1. `terraform apply -target=module.build_isolation -target=google_project_iam_member.hosted_deployer_ar_reader` (8 resources, all IAM, free; the reader lets deploys read back the pushed digest). Run it from a tree that also contains platform's PR #13 Terraform, or a full plan would remove that PR's live resources. Use `-target` while the Cloud SQL instance is deliberately stopped, because a full apply turns it back on.
+1. `terraform apply -target=module.build_isolation -target=google_project_iam_member.hosted_deployer_ar_reader -target=google_project_iam_member.builder_ar_writer -target=google_storage_bucket_iam_member.uploads_builder` (8 adds, all IAM, free; the last two targets only move existing bindings in state; the reader lets deploys read back the pushed digest). Run it from a tree that also contains platform's PR #13 Terraform, or a full plan would remove that PR's live resources. Use `-target` while the Cloud SQL instance is deliberately stopped, because a full apply turns it back on.
 2. `infra/tests/build-isolation.sh` must print `ALL ISOLATION CHECKS PASSED`.
 3. Networking switches hosted builds to the per-workspace SA, repo and `ws/<ws_uuid>/` paths, and deploys by digest.
 4. Provision existing workspaces (`provision-workspace-builder.sh <uuid>` for each), then set `legacy_shared_builder = false` and apply. That removes `sc-builder`'s bucket-wide read and project-wide registry write. Also remove its hand-made `logging.logWriter` binding: `gcloud projects remove-iam-policy-binding shipcube-apps-ks --member serviceAccount:sc-builder@shipcube-apps-ks.iam.gserviceaccount.com --role roles/logging.logWriter`.
