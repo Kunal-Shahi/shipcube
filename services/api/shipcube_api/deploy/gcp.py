@@ -51,6 +51,10 @@ class GcpDeployer:
     def __init__(self, s: Settings) -> None:
         self.s = s
         self._adc, _ = google.auth.default(scopes=SCOPES)
+        # User ADC without a quota project shares the gcloud client's quotas (Resource Manager
+        # returned 429 in testing). Bill API quota to our control project instead.
+        if hasattr(self._adc, "with_quota_project") and not getattr(self._adc, "quota_project_id", None):
+            self._adc = self._adc.with_quota_project(s.control_project)
         self._sessions: dict[str | None, AuthorizedSession] = {}
         self._project_numbers: dict[str, str] = {}
         self._iap_agents: dict[str, str] = {}
@@ -94,6 +98,9 @@ class GcpDeployer:
         return op.get("response", {})
 
     def _project_number(self, sess: AuthorizedSession, project: str) -> str:
+        agent = self._iap_agents.get(project, "")
+        if project not in self._project_numbers and agent.startswith("service-"):
+            self._project_numbers[project] = agent.split("@")[0].removeprefix("service-")
         if project not in self._project_numbers:
             p = self._call(sess, "GET", f"https://cloudresourcemanager.googleapis.com/v1/projects/{project}")
             self._project_numbers[project] = p["projectNumber"]
@@ -276,6 +283,7 @@ class GcpDeployer:
 
     def set_access(self, app: AppRef, principals: list[str]) -> None:
         sess = self._for(app)
+        self._iap_agent(sess, app.target.project)  # also learns the project number
         res = self._iap_resource(sess, app)
         policy = self._call(sess, "POST", f"{res}:getIamPolicy", json={})
         others = [b for b in policy.get("bindings", []) if b["role"] != ACCESSOR]

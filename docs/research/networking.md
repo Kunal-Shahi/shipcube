@@ -406,6 +406,33 @@ Keeping the **image in the user's project** avoids cross-project pulls. Pulling 
 
 **Networking consequence:** with IAP on each service, apps in a linked project work the same way as hosted ones. Each app has its own `run.app` URL, IAP runs in the user's project and grants are IAM bindings there, while ShipCube's `access_grants` table stays the source of truth (a reconciler syncs them). The one difference is the IAP OAuth client: users outside the project's organization need a custom OAuth client, which the user creates once in the Cloud console (security §2).
 
+
+### 4.3 Built: the real deploy path (Oct 28)
+
+`services/api/shipcube_api/deploy/gcp.py` implements §4.1 against real GCP (`SHIPCUBE_BACKEND=gcp`). It talks to the REST APIs through `google-auth`, without per-service client libraries. Differences from the design:
+- **Runner:** operations run on an **in-process background runner** (an asyncio loop on a daemon thread, with blocking cloud calls in worker threads), not on Cloud Tasks. It was the quickest reliable option for the demo, but operations die with the process, so ShipCube runs as one instance with `min-instances=1`. The Cloud Tasks step machine (§3.3) replaces it once operations live in Postgres. The steps are already separate functions with the same names.
+- **Waiting on GCP:** the Cloud Run step waits on the Admin API's long-running operation, and the build step polls `builds.get` every 3 s.
+- **Image tag:** the image is tagged with the operation id, and Cloud Run resolves the digest.
+- **Quota project:** user ADC without a quota project shares the gcloud OAuth client's quota, and Resource Manager returned `429`. The deployer now bills API quota to `shipcube-control-ks`.
+
+First real run, through the MCP server (`services/mcp/scripts/e2e_gcp.py`), deploying a 3-file FastAPI app (`main.py`, `requirements.txt`, `Procfile`) to `shipcube-apps-ks` in `asia-south1`:
+
+| Step | Seconds |
+|---|---|
+| `create_upload` (signed URL) | 0.9 |
+| `PUT` tarball to GCS | 0.5 |
+| `estimate_load` (mock classifier + explainer) | 6.0 |
+| deploy: validate / stage source | 0.3 |
+| deploy: **Cloud Build with buildpacks → Artifact Registry** | **61.2** |
+| deploy: Cloud Run service (create, gen2, IAP on) + runtime SA + IAP invoker | 20.8 |
+| deploy: IAP accessor bindings | 3.6 |
+| deploy: health check | 0.2 |
+| **`deploy_app` end to end** (as the agent sees it) | **86.2** |
+| `set_access` add a second Google account | 5.2 |
+| `inspect_app` (live Cloud Run status) | 0.2 |
+
+Builds dominate the time. Faster rebuilds come from a buildpacks cache (`--cache-image`) and a pinned builder image; both are follow-ups.
+
 ---
 
 ## 5. Reaching user apps

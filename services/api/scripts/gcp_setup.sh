@@ -63,6 +63,9 @@ gcloud iam service-accounts add-iam-policy-binding "$SIGNER" --project "$CONTROL
   --member "user:$ME" --role roles/iam.serviceAccountTokenCreator >/dev/null
 
 echo "== IAP service agent (gets run.invoker on each app service at deploy time)"
-gcloud beta services identity create --service iap.googleapis.com --project "$APPS"
+# REST equivalent of `gcloud beta services identity create --service iap.googleapis.com`.
+curl -fsS -X POST -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "Content-Type: application/json" -d '{}' \
+  "https://serviceusage.googleapis.com/v1beta1/projects/${APPS}/services/iap.googleapis.com:generateServiceIdentity"
+echo
 
 echo "Done. Remaining manual step: the IAP OAuth client (see services/api/README.md, 'IAP on a project without an organization')."
