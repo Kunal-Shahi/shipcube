@@ -101,11 +101,12 @@ resource "google_project_iam_member" "hosted_deployer" {
     "roles/serviceusage.serviceUsageConsumer",
     "roles/iam.serviceAccountAdmin",
     "roles/iam.serviceAccountUser",
-    google_project_iam_custom_role.run_iam.id,
+    "projects/${var.apps_project_id}/roles/shipcubeRunIamAdmin",
   ])
-  project = var.apps_project_id
-  role    = each.value
-  member  = google_service_account.hosted_deployer.member
+  project    = var.apps_project_id
+  role       = each.value
+  member     = google_service_account.hosted_deployer.member
+  depends_on = [google_project_iam_custom_role.run_iam]
 }
 
 resource "google_project_iam_member" "builder_ar_writer" {

@@ -3,9 +3,8 @@
 
 locals {
   platform_secrets = {
-    "meta-api-key"        = google_service_account.gateway.member
-    "token-hmac-pepper"   = google_service_account.api.member
-    "oauth-client-secret" = google_service_account.api.member
+    "meta-api-key"      = google_service_account.gateway.member
+    "token-hmac-pepper" = google_service_account.api.member
   }
 }
 

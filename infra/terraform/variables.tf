@@ -18,14 +18,42 @@ variable "region" {
   default = "asia-south1"
 }
 
-variable "budget_amount_usd" {
-  description = "Budget for the credit pool, in budget_currency (the name is historical)."
+variable "budget_amount" {
+  description = "Hard cap on gross spend (before credits) for the whole budget period, in budget_currency. The kill switch unlinks billing at this amount."
   type        = number
   default     = 24000
+}
+
+variable "budget_period" {
+  description = "One period covering the whole free trial, so the cap is cumulative rather than monthly."
+  type        = object({ start = string, end = string }) # YYYY-MM-DD
+  default     = { start = "2026-10-01", end = "2027-01-31" }
+}
+
+variable "killswitch_projects" {
+  description = "Every project billed to the account, in shutdown order; the control project (which hosts the kill switch) must be last."
+  type        = list(string)
 }
 
 variable "budget_currency" {
   description = "Must match the billing account's currency."
   type        = string
   default     = "INR"
+}
+
+variable "existing_budget_id" {
+  description = "ID of the hard-cap budget created with gcloud, adopted by imports.tf."
+  type        = string
+}
+
+variable "sql_tier" {
+  description = "db-f1-micro is shared-core: cheapest (~$8-12/month) but outside the Cloud SQL SLA. Move to db-custom-1-3840 or larger when ShipCube has paying users."
+  type        = string
+  default     = "db-f1-micro"
+}
+
+variable "sql_availability" {
+  description = "ZONAL, or REGIONAL for a standby in a second zone (roughly doubles instance cost)."
+  type        = string
+  default     = "ZONAL"
 }

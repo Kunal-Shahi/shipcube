@@ -11,6 +11,10 @@ locals {
     "pubsub.googleapis.com",
     "billingbudgets.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "cloudbilling.googleapis.com",
+    "cloudfunctions.googleapis.com", # budget kill switch
+    "eventarc.googleapis.com",
+    "logging.googleapis.com",
   ]
   apps_apis = [
     "run.googleapis.com",

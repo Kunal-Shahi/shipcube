@@ -8,7 +8,7 @@ Owner: infra and security workstream. Status: proposal for review (Oct 27). Sour
 |---|---|---|
 | Console sign-in | **Identity Platform** (Firebase Auth SDK, Google provider only), with a `beforeCreate` blocking function | Free up to 49,999 MAU; Google-signed ID tokens any service can verify; blocking functions let us gate signups to protect the $300 |
 | Who can open a deployed app | **IAP enabled directly on the Cloud Run service** (no load balancer). Allow-list = IAM bindings of `roles/iap.httpsResourceAccessor` on that service | Same mechanism in ShipCube's project and in a user's project; supports `user:`, `group:` and `domain:` principals natively; zero code on the request path |
-| Fallback when IAP can't be used | ShipCube **access proxy** in `services/gateway` (signed session cookie, emails and domains only) | Covers projects whose IAP OAuth client can't be set up; not built unless the demo needs it |
+| Fallback when IAP can't be used | ShipCube **access proxy** in `services/gateway` (signed session cookie, emails and domains only) | Covers projects whose IAP OAuth client can't be set up. Not built until a linked project needs it (see Limits) |
 | Linking a user's GCP project | **Cross-project service-account grant**: the user runs a generated script that grants a ShipCube *per-workspace* deployer service account a short list of roles on their project | No OAuth refresh tokens stored, no Google app verification, easy to unlink, the user sees exactly what is granted |
 | Tenant isolation (hosted apps) | Two projects (`shipcube-control`, `shipcube-apps`), one service account per app with no project roles, gen2 Cloud Run sandbox, profiler with no internet egress | A project per tenant is not possible on a free-trial account without an organization |
 | Secrets | **Secret Manager**, one secret per BYOK key or DB credential, accessor granted only to the app's (or gateway's) service account; the database stores references only | Google encrypts at rest; IAM per secret; versioned rotation; audit logs for free |
@@ -64,7 +64,7 @@ Limits we must design around:
 - **Fast revocation.** For "revoke now", the owner can also pause the app (`max-instances=0`, which takes seconds) until the IAM change has propagated. Removing someone from a Google group is slow by Google's design [S6]; the UI should say so.
 - **Service-to-service calls** to an IAP-protected app (for example, the AI gateway calling back) use an OIDC token for a service account granted the accessor role.
 
-**Fallback: ShipCube access proxy** (`services/gateway`, design in `services/gateway/DESIGN.md`). It runs Google sign-in itself (Identity Platform), issues a short-lived signed cookie per app host, checks `access_grants` (emails and domains; groups only if the owner connects the Cloud Identity API), and forwards to the app with an ID token for a service account that is the only `run.invoker`. We build it only if IAP setup blocks the demo.
+**Fallback: ShipCube access proxy** (`services/gateway`, design in `services/gateway/DESIGN.md`). It runs Google sign-in itself (Identity Platform), issues a short-lived signed cookie per app host, checks `access_grants` (emails and domains; groups only if the owner connects the Cloud Identity API), and forwards to the app with an ID token for a service account that is the only `run.invoker`. It is built when a linked project cannot use IAP directly (see Known limits).
 
 Not chosen: plain `run.invoker` with ID tokens can't serve browser users without a proxy, so it becomes the proxy option.
 
@@ -81,9 +81,12 @@ Not chosen: plain `run.invoker` with ID tokens can't serve browser users without
 
 **Recommendation: service-account grant, with one deployer service account per workspace.**
 
-Workload identity federation solves a different problem (ShipCube running outside GCP), so it doesn't apply; our control plane already has a native service-account identity. OAuth `cloud-platform` gives far more power than we need, requires Google verification we can't finish by Nov 4, and turns a database leak into access to every user's cloud.
+Workload identity federation solves a different problem (ShipCube running outside GCP), so it doesn't apply; our control plane already has a native service-account identity. OAuth `cloud-platform` gives far more power than we need, requires Google verification (weeks, with a demo video and possibly a security assessment), and turns a database leak into access to every user's cloud.
 
-**Why one service account per workspace:** with a single shared deployer, workspace A could type in workspace B's project ID and ShipCube would happily deploy there (a confused deputy). With `ws-<id>-deployer@shipcube-control.iam.gserviceaccount.com`, only the project owner who granted *that* account can be targeted. The default limit is 100 service accounts per project, which is fine for the hackathon; a free-trial account can't raise quotas [S14], so the production answer is either a paid account or a shared deployer plus an ownership challenge (the user adds a label we generate to their project, and we verify it before the first deploy).
+**Why one service account per workspace:** with a single shared deployer, workspace A could type in workspace B's project ID and ShipCube would happily deploy there (a confused deputy). With `ws-<id>-deployer@shipcube-control.iam.gserviceaccount.com`, only the project owner who granted *that* account can be targeted. **Limit:** a project holds at most 100 service accounts by default, and a free-trial account can't request more [S14]. Per-workspace deployers therefore support up to about 90 linked workspaces (the control project's own accounts use the rest). **Production plan when that limit nears** (alert at 80 deployer accounts):
+
+1. Upgrade the billing account to paid and request a service-account quota increase for `shipcube-control`. This keeps the per-workspace design and is the first choice.
+2. If the increase is refused, or past a few thousand workspaces, switch new links to a **shared deployer plus an ownership challenge**. The console shows a random label value; the user adds it to their project (`shipcube-link=<value>`) as part of the link script; ShipCube reads the label as the deployer and refuses to deploy until it matches the workspace's challenge. Only someone who can edit the project's labels can pass it, which closes the confused-deputy hole. Existing links keep their per-workspace accounts.
 
 **Link flow:**
 
@@ -109,17 +112,17 @@ Billing: resources live in the user's project, so **everything is billed to the 
 
 **Unlinking:** the console offers "delete my ShipCube apps first" (we delete services, jobs, images and the IAP bindings we created) or "leave them running". Then the user runs `unlink-project.sh` (removes every grant) or deletes the bindings in IAM by hand. We mark the link `revoked` and keep the audit trail. If a scheduled `testIamPermissions` check fails, we mark the link `broken` and stop all deploys to it.
 
-**Org-policy caveat:** in a Workspace org created after May 2024, domain-restricted sharing will reject the grant to our service account. The admin must add ShipCube's organization principal set or customer ID to `iam.allowedPolicyMemberDomains`, or use `iam.managed.allowedPolicyMembers` [S13]. That requires ShipCube to have a Cloud Identity organization (Cloud Identity Free is enough). The demo uses a personal project with no org, so this is documented, not built.
+**Org-policy caveat:** in a Workspace org created after May 2024, domain-restricted sharing will reject the grant to our service account. The admin must add ShipCube's organization principal set or customer ID to `iam.allowedPolicyMemberDomains`, or use `iam.managed.allowedPolicyMembers` [S13]. That requires ShipCube to have a Cloud Identity organization (Cloud Identity Free is enough). **Production plan:** create the ShipCube Cloud Identity organization before inviting the first customer on a Workspace domain, move `shipcube-control` and `shipcube-apps` under it, and publish its customer ID in the link wizard for admins to allow-list. **Limit until then:** linking works for projects without an organization and for organizations that don't enforce domain-restricted sharing; the link script detects the error and shows the admin instructions.
 
 ## 4. Tenant isolation
 
-**Projects.** A project per tenant is the strongest boundary, but a free-trial billing account without an organization can't raise the project quota or any other quota [S14]. So:
+**Projects.** A project per tenant is the strongest boundary, but it needs an organization and a raised project quota, which a free-trial account can't get [S14]. **Decision:** two shared projects now; customers who need a hard boundary use a linked project (their own). Project-per-tenant for hosted apps is the plan once ShipCube has an organization and a paid account.
 
 - `shipcube-control`: control-plane API, MCP server, gateway, Cloud SQL, Secret Manager for platform secrets. No user code ever runs here.
 - `shipcube-apps`: every hosted user app and the profiler sandbox. It has no access to the control plane's database or secrets.
 - Linked user projects: that user's apps only.
 
-**Per-app service accounts.** Each hosted app runs as `app-<shortid>@shipcube-apps` with **no project-level roles**. It gets `secretmanager.secretAccessor` on its own secrets only, and permission to call the AI gateway. A compromised app can read only its own secrets and use its own metadata-server token. The default compute service account is never used. (100 service accounts per project is the ceiling here too; past that, apps in the same workspace share one account per workspace.)
+**Per-app service accounts.** Each hosted app runs as `app-<shortid>@shipcube-apps` with **no project-level roles**. It gets `secretmanager.secretAccessor` on its own secrets only, and permission to call the AI gateway. A compromised app can read only its own secrets and use its own metadata-server token. The default compute service account is never used. **Limit:** 100 service accounts in `shipcube-apps`, so about 95 hosted apps with their own identity. At 80 the deployer starts giving new apps one shared account per workspace (isolation between a workspace's own apps is weaker; between workspaces it is unchanged), and we request a quota increase once the account is paid.
 
 **Network.** Hosted apps get no VPC attachment, so they can't reach anything private. Ingress is IAP only. The control plane reaches Cloud SQL through the Cloud SQL connector with IAM database authentication, and no authorized networks are open.
 
@@ -152,12 +155,13 @@ GCP budgets **do not cap spending**: they alert, and cost data arrives hours lat
 
 | Layer | Control | Default (free plan) |
 |---|---|---|
-| Signup | `beforeCreate` blocking function: allow only invited emails or an invite code during the hackathon; one free workspace per Google account | Invite-only |
+| Signup | `beforeCreate` blocking function: allow only invited emails or an invite code; one free workspace per Google account | Invite-only while ShipCube runs on free-trial credits. Open signup needs a paid billing account and a payment method or card check per workspace |
 | Workspace | Max apps, max deploys per day, AI-gateway token budget per day, spend per app per month | 5 apps, 20 deploys/day, 200k Muse tokens/day, $5 per app per month (same defaults as networking) |
 | App (Cloud Run) | `--max-instances`, `--concurrency`, CPU/memory, request timeout, `--cpu-throttling` (CPU only during requests), job `--task-timeout`, `--max-retries` | max 2 instances, 1 vCPU, 512 MiB, 60 s request timeout; jobs 10 min, 0 retries |
 | App (gateway) | Requests per minute and token budget per app, enforced before forwarding to the model | 60 rpm |
 | Project | Lower Cloud Run quotas on `shipcube-apps` (quota decreases are allowed even when increases aren't) | e.g. 20 instances in total |
-| Billing | Budget on the ShipCube billing account at $50 / $150 / $250 with a Pub/Sub topic. A small function receives updates several times a day [S10] and, past $250, sets every hosted app in `shipcube-apps` to `max-instances=0` and blocks new deploys. It does **not** disable billing on the project, which would delete nothing but would break the demo | |
+| Billing (soft) | The API's own cost meter (every 5 minutes, from Cloud Monitoring usage and gateway tokens) pauses apps over their `spend_usd_per_month` cap and blocks deploys when the pool is 80% used | |
+| Billing (hard) | **Live.** A budget for the whole trial period (Oct 1, 2026 – Jan 31, 2027), counting spend before credits, at ₹24,000 (about $280 of the $300). Its Pub/Sub updates trigger `infra/budget-killswitch`, which **unlinks billing from every project on the account** at the cap [S10]. This stops everything, including the console; it is the last line, after the soft caps above. Cost data lags by hours, hence the ~₹1,000–2,000 headroom | ₹24,000 |
 | Abuse | Crypto mining is banned during the free trial [S14] and would get the account suspended. CPU throttling on services, short job timeouts and a check for jobs that sit at ~100% CPU for their whole run | |
 
 Apps on a linked project use the user's credits, so the same caps apply as defaults, which the owner can raise. We also recommend a budget on their billing account.
@@ -182,6 +186,19 @@ Credit pool math: Cloud Run's free tier is 180,000 vCPU-seconds and 360,000 GiB-
 | T12 | **SSRF through the AI gateway** | BYOK "OpenAI-compatible base URL" set to `http://metadata.google.internal` | Gateway resolves and rejects private, link-local and metadata IP ranges, allows only `https`, and runs with no VPC |
 | T13 | **Slow revocation** | Ex-employee removed from a group still opens the app for hours [S6] | UI warns; "revoke now" can pause the app until propagation finishes; per-user grants revoke in minutes |
 | T14 | **Shared static egress IP** | A customer allow-lists ShipCube's NAT IP for their database, which also lets in every other hosted app that uses static egress | Apps get static egress only when they opt in; the console warns that the IP is shared; customers who need a dedicated IP use a linked project (networking §5.5) |
+
+## Known limits and when they change
+
+| Limit | Today | Trigger | Plan |
+|---|---|---|---|
+| Service accounts per project | 100 (free trial can't raise) | 80 used in `shipcube-control` or `shipcube-apps` | Paid account + quota increase; then shared deployer + label challenge (§3), per-workspace app accounts (§4) |
+| No ShipCube organization | Domain-restricted orgs can't link | First customer on a Workspace domain with the default org policy | Create Cloud Identity org, move projects, publish customer ID (§3) |
+| Two shared projects | Hosted apps share `shipcube-apps` | First customer requiring a dedicated boundary, or an org + paid account | Linked project now; project-per-tenant later (§4) |
+| Free-trial credits | ₹24,000 hard cap, invite-only signup | Trial ends Jan 25, 2027, or 80% of credit used | Upgrade to paid with budgets per project; open signup with payment check (§6) |
+| IAP needs an external OAuth client per project without an org | One manual console step per such project | Link wizard telemetry shows users stuck there | Access proxy fallback (§2) |
+| Group-based access | IAP handles `group:` grants; the data layer can't see groups | A customer needs group-based data roles | Cloud Identity Groups API with the customer admin's consent |
+| Cloud SQL `db-f1-micro` | Shared core, no SLA, zonal | Paying customers, or CPU > 70% sustained | `db-custom-1-3840` regional (HA), ~5–8× cost (`sql_tier`, `sql_availability` variables) |
+| Revocation latency | 2–7 min (users), hours (groups) [S6] | Customer requirement for instant revoke | Pause app on revoke; or access proxy with 30-second cache |
 
 ## Open questions for other workstreams
 

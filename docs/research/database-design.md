@@ -568,6 +568,16 @@ create table datasources (
 );
 create unique index datasources_name_live on datasources (workspace_id, name) where deleted_at is null;
 
+-- Gateway rate counters, shared by all gateway instances. Unlogged: faster writes, and
+-- losing them in a crash only resets the current window.
+create unlogged table rate_counters (
+  app_id       uuid not null,
+  kind         text not null check (kind in ('requests_per_minute','ai_tokens_per_day')),
+  window_start timestamptz not null,
+  count        bigint not null default 0,
+  primary key (app_id, kind, window_start)
+);
+
 -- Audit -----------------------------------------------------------------
 
 create table audit_log (
@@ -748,7 +758,7 @@ The data layer never parses tokens. For every request, the API (or the MCP serve
 | `membership_role` | `memberships.role` | `owner > admin > developer > viewer`; null for someone who only reaches data through an app |
 | `scopes` | `api_tokens.scopes` | Console callers get the scopes their role allows |
 | `app_id` | `apps.id` | Set for traffic from a deployed app (below) |
-| `groups` | not available for now | Neither IAP nor the Google ID token tells us a user's groups. Group principals in `data_role_assignments` only match once someone connects the Cloud Identity Groups API (security-tenancy §1). Until then, data roles should use `user`, `domain` or `workspace_role` |
+| `groups` | empty unless the workspace connects Cloud Identity | Neither IAP nor the Google ID token tells us a user's groups. **Limit:** group principals in `data_role_assignments` match nothing until a workspace admin connects the Cloud Identity Groups API (security-tenancy, Known limits). The console warns when a data role is assigned to a group in a workspace without that connection |
 | `via` | `console`, `mcp` or `app` | |
 
 **Tenant id for schema routing:** `ws_` followed by the workspace UUID as 32 hex characters (e.g. `ws_0192f0c4…`). It is derived, not stored, so it can't drift, and it is always a valid SQL identifier. A sub-tenant inside a workspace comes from the data layer's own `data_attributes` (key `tenant`), never from the request.

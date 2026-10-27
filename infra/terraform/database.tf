@@ -3,18 +3,39 @@ resource "google_sql_database_instance" "main" {
   name                = "shipcube-pg"
   region              = var.region
   database_version    = "POSTGRES_16"
-  deletion_protection = true
+  deletion_protection = true # Terraform refuses to destroy it
 
   settings {
-    edition           = "ENTERPRISE"
-    tier              = "db-f1-micro"
-    disk_type         = "PD_SSD"
-    disk_size         = 10
-    availability_type = "ZONAL"
+    edition                     = "ENTERPRISE"
+    tier                        = var.sql_tier
+    disk_type                   = "PD_SSD"
+    disk_size                   = 10
+    disk_autoresize             = true
+    disk_autoresize_limit       = 50
+    availability_type           = var.sql_availability
+    deletion_protection_enabled = true # the API refuses to delete it too
 
     backup_configuration {
       enabled                        = true
-      point_in_time_recovery_enabled = false
+      start_time                     = "20:30" # UTC = 02:00 IST
+      location                       = var.region
+      point_in_time_recovery_enabled = true
+      transaction_log_retention_days = 7
+      backup_retention_settings {
+        retained_backups = 14
+        retention_unit   = "COUNT"
+      }
+    }
+
+    maintenance_window {
+      day          = 7  # Sunday
+      hour         = 21 # UTC = 02:30 IST
+      update_track = "stable"
+    }
+
+    insights_config {
+      query_insights_enabled  = true
+      record_application_tags = true
     }
 
     ip_configuration {
@@ -25,6 +46,21 @@ resource "google_sql_database_instance" "main" {
     database_flags {
       name  = "cloudsql.iam_authentication"
       value = "on"
+    }
+
+    # pgaudit: DDL and role changes from any session go to Cloud Logging. Row-level
+    # actions are recorded by the application's own audit_log table instead.
+    database_flags {
+      name  = "cloudsql.enable_pgaudit"
+      value = "on"
+    }
+    database_flags {
+      name  = "pgaudit.log"
+      value = "ddl,role"
+    }
+    database_flags {
+      name  = "log_min_duration_statement"
+      value = "1000" # log statements slower than 1 s
     }
   }
 
