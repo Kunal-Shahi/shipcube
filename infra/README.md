@@ -2,7 +2,9 @@
 
 Infrastructure as code for ShipCube's own GCP projects, plus the scripts users run to link their own project. Design and reasoning: [docs/research/security-tenancy.md](../docs/research/security-tenancy.md).
 
-**Status (Oct 28):** `terraform validate` passes and `terraform plan` against the real projects shows **8 imports, 71 additions, 1 change, 0 destroys**. Nothing has been applied; applying waits for Kunal's approval of the plan and its cost. The budget kill switch is already live (see `budget-killswitch/`).
+**Status (Oct 28): applied.** Kunal approved the plan and cost and ran `terraform apply`; a follow-up `terraform plan` shows no changes. State is in `gs://shipcube-control-ks-tfstate` (versioned, prefix `shipcube`). Cloud SQL connection name: `shipcube-control-ks:asia-south1:shipcube-pg`. The budget kill switch is live (see `budget-killswitch/`).
+
+Not yet done: the Postgres roles from database-design §5 (`shipcube_owner`, `shipcube_app`, `shipcube_worker`) and the first schema migration. The IAM database users `sc-api` and `sc-worker` exist but have no privileges until that migration grants them. The built-in `postgres` user has no password set, so it can't be used to sign in.
 
 | Path | What it is |
 |---|---|
@@ -36,7 +38,7 @@ gcloud storage buckets create gs://<control-project>-tfstate --location=asia-sou
 gcloud storage buckets update gs://<control-project>-tfstate --versioning
 cd infra/terraform
 cp terraform.tfvars.example terraform.tfvars   # fill in project IDs and billing account; gitignored
-terraform init -backend-config="bucket=<control-project>-tfstate"
+terraform init -backend-config="bucket=<control-project>-tfstate" -backend-config="prefix=shipcube"
 terraform plan -out=tfplan
 terraform apply tfplan   # only after the plan and its cost are approved
 ```

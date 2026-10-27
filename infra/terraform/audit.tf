@@ -3,12 +3,14 @@
 # answer "who read or used what":
 #   - Secret Manager reads (who accessed a BYOK key or the token pepper)
 #   - Cloud SQL admin data access
-#   - IAM (who minted tokens for which service account)
+#   - IAM, including the IAM Credentials API (who minted tokens for which service account)
 #   - IAP in the apps project (who opened which app)
 # Every audit log from both projects is also copied to a dedicated bucket kept 365 days.
 
 locals {
-  control_data_access = ["secretmanager.googleapis.com", "cloudsql.googleapis.com", "iam.googleapis.com", "iamcredentials.googleapis.com"]
+  # iam.googleapis.com also covers the IAM Credentials API (generateAccessToken etc.);
+  # iamcredentials.googleapis.com can't be configured on its own.
+  control_data_access = ["secretmanager.googleapis.com", "cloudsql.googleapis.com", "iam.googleapis.com"]
 }
 
 resource "google_project_iam_audit_config" "control" {
