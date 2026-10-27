@@ -1,0 +1,23 @@
+{
+  "name": "workload-classifier",
+  "version": "wc-20261027-5b477361",
+  "file": "model.json",
+  "sha256": "0c559d322ad38e1abffa5ede81afdc2a4455eeb772849baa57d7e2db6fac3f6b",
+  "bytes": 901082,
+  "created": "2026-10-27",
+  "temperature": 1.0,
+  "min_confidence": 0.5,
+  "metrics": {
+    "trace_held_out_macro_f1": 0.8695,
+    "loso_macro_f1": {
+      "alibaba_batch": 0.669,
+      "alibaba_online": 0.4649,
+      "azure_functions": 0.2021,
+      "azure_vm": 0.3098,
+      "google_borg": 0.3108
+    },
+    "traces_to_profiler_macro_f1": 0.9792,
+    "profiler_holdout_accuracy": 1.0,
+    "profiler_holdout_policy_accuracy": 1.0
+  }
+}

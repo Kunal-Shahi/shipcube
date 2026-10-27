@@ -1,0 +1,27 @@
+[project]
+name = "shipcube-classifier"
+version = "0.1.0"
+description = "ShipCube workload classifier: shared feature space and pure-Python inference of a LightGBM model trained on public cluster traces"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = []
+
+[project.optional-dependencies]
+# Only needed to rebuild the dataset and retrain (scripts/). macOS also needs `brew install libomp`.
+train = ["lightgbm>=4.5", "numpy>=2.0", "pandas>=2.2", "scikit-learn>=1.5"]
+# GCS model registry (registry.py) and the shared REST client (gcp.py).
+gcp = ["google-auth>=2.30", "requests>=2.32"]
+test = ["pytest>=8"]
+
+[dependency-groups]
+# Installed by `uv sync` (CI): everything the tests import, including the training
+# stack used by the weak-label and LightGBM-parity tests.
+dev = ["pytest>=8", "lightgbm>=4.5", "numpy>=2.0", "pandas>=2.2", "scikit-learn>=1.5",
+       "google-auth>=2.30", "requests>=2.32"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shipcube_classifier"]
