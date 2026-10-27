@@ -25,7 +25,7 @@ def ai():
     if not GATEWAY:
         return jsonify(error="SHIPCUBE_AI_GATEWAY is not set"), 500
     token = google.oauth2.id_token.fetch_id_token(google.auth.transport.requests.Request(), GATEWAY)
-    r = requests.post(f"{GATEWAY}/v1/chat/completions", timeout=120, headers={"Authorization": f"Bearer {token}"},
+    r = requests.post(f"{GATEWAY}/v1/chat/completions", timeout=50,  # inside the 60 s request timeout headers={"Authorization": f"Bearer {token}"},
                       json={"model": "default", "max_tokens": 2000,
                             "messages": [{"role": "user", "content": "In one sentence, what is ShipCube?"}]})
     body = r.json()
