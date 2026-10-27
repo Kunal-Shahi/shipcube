@@ -37,3 +37,9 @@ Manual steps Terraform can't do:
 1. Enable Identity Platform and the Google provider in the console.
 2. Create the external OAuth client for IAP in `shipcube-apps` (the IAP OAuth Admin API is shut down for new projects).
 3. Add secret values: `meta-api-key`, `token-hmac-pepper`, `oauth-client-secret`.
+   Already done by hand in `shipcube-control-ks` (Oct 28): `meta-api-key` (from `.env`) and `token-hmac-pepper` (32 random bytes, base64url, 43 characters), each at version 1. Import them before the first apply so Terraform doesn't try to recreate them:
+
+   ```bash
+   terraform import 'google_secret_manager_secret.platform["meta-api-key"]' projects/shipcube-control-ks/secrets/meta-api-key
+   terraform import 'google_secret_manager_secret.platform["token-hmac-pepper"]' projects/shipcube-control-ks/secrets/token-hmac-pepper
+   ```
