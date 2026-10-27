@@ -1,0 +1,81 @@
+"""estimate_load's engine.
+
+Production uses the load-estimator workstream's `shipcube_placement.estimate` (PR #7): it profiles
+the code (in the sandboxed Cloud Run job when SHIPCUBE_PROFILER_JOB names its service account, otherwise by static
+analysis, never by running user code in this process), classifies, sizes, prices and explains
+(Muse Spark with a rule-based fallback). If the package is not installed, estimates fail with a
+typed `estimator_unavailable` error instead of returning made-up numbers. The canned estimate
+exists only in DEV_MODE.
+"""
+
+from __future__ import annotations
+
+import logging
+import tempfile
+from pathlib import Path
+from typing import Any, Protocol
+
+from .deploy.base import Deployer, DeployError
+from .settings import settings
+
+log = logging.getLogger(__name__)
+
+
+class Estimator(Protocol):
+    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str) -> dict[str, Any]: ...
+
+
+class PlacementEstimator:
+    def __init__(self, deployer: Deployer) -> None:
+        from shipcube_placement import estimate  # noqa: F401 — fail fast if missing
+
+        self.d = deployer
+
+    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str) -> dict[str, Any]:
+        from shipcube_placement import estimate
+        from shipcube_profiler import CloudRunJobRunner, StaticRunner
+
+        # The sandbox (security §4: no-egress VPC, roleless SA) runs only once infra has created it.
+        runner = CloudRunJobRunner(project=settings.apps_project, region=settings.region,
+                                   service_account=settings.profiler_job) if settings.profiler_job else StaticRunner()
+        tmp = Path(tempfile.mkdtemp(prefix="shipcube-upload-"))
+
+        def fetch_upload(upload_id: str) -> Path:
+            return self.d.download_upload(workspace_id, upload_id, tmp / f"{upload_id}.tgz")
+
+        res = estimate(source, {k: v for k, v in hints.items() if v is not None}, runner=runner, fetch_upload=fetch_upload)
+        out = res.model_dump(mode="json") if hasattr(res, "model_dump") else dict(res.__dict__)
+        out.setdefault("estimate_id", f"est_{op_id.replace('-', '')[:12]}")
+        return out
+
+
+class UnavailableEstimator:
+    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str) -> dict[str, Any]:
+        raise DeployError("estimator_unavailable",
+                          "the load estimator (shipcube_placement) is not installed on this server; deploy with an explicit tier")
+
+
+class DevEstimator:
+    """DEV_MODE only: the classifier's canned numbers plus the explainer."""
+
+    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str) -> dict[str, Any]:
+        from .explain import explain
+
+        classified = {
+            "estimate_id": f"est_{op_id.replace('-', '')[:12]}", "workload_class": "bursty_interactive", "confidence": 0.87,
+            "tier": "T1", "target": "cloud_run_service",
+            "resources": {"cpu": "1", "memory": "512Mi", "concurrency": 40, "min_instances": 0, "max_instances": 2},
+            "monthly_cost_usd": {"low": 0.0, "expected": 1.8, "high": 6.5},
+            "profile": {"peak_rss_mb": 210, "cpu_seconds": 3.4, "wall_seconds": 5.1, "queries": 12, "io_mb": 18},
+        }
+        return {**classified, **explain(classified).model_dump(mode="json"), "dev_mode": True}
+
+
+def make_estimator(deployer: Deployer) -> Estimator:
+    if settings.dev_mode:
+        return DevEstimator()
+    try:
+        return PlacementEstimator(deployer)
+    except ImportError:
+        log.warning("shipcube_placement not installed; estimate_load will return estimator_unavailable")
+        return UnavailableEstimator()
