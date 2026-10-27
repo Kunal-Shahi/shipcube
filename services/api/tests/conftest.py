@@ -1,5 +1,8 @@
-"""Tests run against a real Postgres: SHIPCUBE_TEST_DATABASE_URL (CI service container), or a
-throwaway local cluster started with initdb/pg_ctl when those binaries are on PATH."""
+"""Tests run against a real Postgres, in this order:
+1. SHIPCUBE_TEST_DATABASE_URL, if set;
+2. DATABASE_URL when running in CI (the postgres:16 service container in .github/workflows/ci.yml).
+   Outside CI it is ignored, so tests never write into a developer's own database;
+3. a throwaway local cluster started with initdb/pg_ctl."""
 
 import os
 import shutil
@@ -34,7 +37,7 @@ def _start_local_cluster() -> tuple[str, callable]:
     return f"postgresql://postgres@/shipcube_test?host={sock}&port={port}", stop
 
 
-_url = os.environ.get("SHIPCUBE_TEST_DATABASE_URL")
+_url = os.environ.get("SHIPCUBE_TEST_DATABASE_URL") or (os.environ.get("DATABASE_URL") if os.environ.get("CI") else None)
 _stop = None
 if not _url:
     if not shutil.which("initdb"):
