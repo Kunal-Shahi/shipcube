@@ -300,9 +300,39 @@ Each step was a profiler or feature fix found on the dev suite. The held-out sui
    - Invocation features come from the traffic model: `office_hours` (30 requests per active user-hour, 9 h a day) or `always_on` (Poisson around the clock). For scripts they come from the cron schedule, defaulting to daily.
    - Every assumption is returned.
 
-### 4.2 Not yet verified on real GCP
+### 4.2 Verified on real GCP (Oct 27)
 
-`CloudRunJobRunner` is unit-tested against a scripted fake of each REST call: specs, digest pinning, cleanup, typed failures per stage and retries. The real-GCP integration test (`test_gcp_runner.py::test_gcp_integration_profiles_the_batch_sample`, run with `SHIPCUBE_GCP_IT=1`) has **not been run yet**. It needs the resources in §9.3. Kunal approved them on Oct 27: the sandbox goes in `shipcube-apps`, and the ML bucket stays in `shipcube-control-ks`. They're waiting on the infra/security Terraform.
+The resources come from security's Terraform module `infra/terraform/modules/profiler` (commit `025172a`):
+- the sandbox in `shipcube-apps-ks`
+- the bucket `shipcube-ks-ml` in `shipcube-control-ks`
+
+The runs used Kunal's user credentials, not the worker SA, so the worker's least-privilege IAM is still untested.
+
+**Integration test:** `test_gcp_integration_profiles_the_batch_sample` passes in about 90 s. In sequence:
+1. Cloud Build built the image.
+2. A gen2 job ran in the deny-all VPC as `profiler-sandbox`.
+3. The result came back from Cloud Logging.
+4. The job and the tarball were deleted.
+
+**End to end, `estimate()` with no DEV_MODE:** the sandbox profiler, the GCS model (`latest`, sha256-pinned) and Muse.
+
+| App | Profile | Class / decided by | Tier | Muse | Wall time |
+|---|---|---|---|---|---|
+| nightly_batch | measured on GCP: 6.9 s, 0.96 vCPU, 28 MiB, psutil I/O; webhook to `hooks.example.com` **blocked** | batch_cron (0.88) / classifier | T2 | muse-spark-1.3, 1 attempt | ~70 s |
+| dashboard | measured on GCP: 120/120 requests, 0.11 vCPU, 41 MiB | bursty_interactive (0.87) / classifier | T1 | muse-spark-1.3, 1 attempt | 63 s |
+
+Every log line carried `estimate_id`, `operation_id` and `logging.googleapis.com/trace`.
+
+**Bugs the fakes hid, found and fixed on real GCP:**
+1. **Cloud Build's operation name.** A regional build returns a global-style operation name (`operations/build/<project>/…`), and polling it returns 404. The runner now polls `projects/{p}/locations/{r}/builds/{id}`.
+2. **Logging read quota.** User credentials from `gcloud auth application-default login` bill API quota to gcloud's shared OAuth client project, where `entries.list` returned 429 for the whole wait. One end-to-end run fell back to a static profile, flagged and logged, as designed. Two fixes:
+   - The client now sets the quota project explicitly (`x-goog-user-project` = the profiler project, or `SHIPCUBE_QUOTA_PROJECT`). The caller needs `serviceusage.serviceUsageConsumer` there.
+   - Log polling is quota-aware: at most one query per 5 s, a timestamp bound on the filter, and a 429 means back off and keep waiting until the deadline.
+
+**Model registry on GCS:** `wc-20261027-5b477361` published to `gs://shipcube-ks-ml/models/workload-classifier/`, with sha256 `0c559d32…`.
+- `latest` and pinned loads pass the checksum, and the bytes are identical to the bundled copy.
+- A wrong pin and a missing version raise `ModelLoadError`.
+- Re-publishing leaves the immutable objects untouched (412).
 
 ## 5. Placement (`packages/placement`)
 
@@ -400,11 +430,11 @@ The demo sets `SHIPCUBE_DEV_MODE=1` and runs the samples locally.
 - **`io_bound` is thin:** 598 trace rows and F1 0.62 on the trace split.
 - **Unit assumptions** (§2.2) drive memory labels for Alibaba and Borg.
 - **Traffic model.** Invocation features for profiled apps come from hints and a fixed traffic model, not measurement.
-- **Untested on real GCP.** `CloudRunJobRunner` hasn't run against real GCP yet (§4.2).
+- **Real GCP so far.** `CloudRunJobRunner` was verified with Kunal's user credentials. The worker SA's least-privilege IAM path hasn't been exercised yet (§4.2).
 - **Local runs are not a sandbox.** `LocalRunner` blocks egress only at the Python level.
 - **Conservative costs.** The free tier isn't subtracted, and only two regions were checked.
 - **Next:**
-  1. Run the GCP integration test once the resources exist.
+  1. Re-run the GCP integration test as the API worker SA.
   2. Write a fresh held-out suite, including community apps from public repos.
   3. Record live telemetry next to each estimate, so labels can come from real ShipCube apps.
   4. Add Bitbrains for more I/O signal.
@@ -423,6 +453,7 @@ All configuration comes from the environment.
 | `SHIPCUBE_MODEL_URI` | `bundled` | `gs://<bucket>/models/workload-classifier/<version or latest>` |
 | `SHIPCUBE_MODEL_SHA256` | unset | Pin; loading fails on mismatch |
 | `SHIPCUBE_MODEL_CACHE` | `$TMPDIR/shipcube-models` | Verified local cache |
+| `SHIPCUBE_QUOTA_PROJECT` | the profiler project | Project billed for API quota (`x-goog-user-project`) |
 | `META_API_KEY` | — | From Secret Manager in production, never a literal |
 | `META_BASE_URL` | `https://api.meta.ai/v1` | Muse endpoint |
 | `SHIPCUBE_EXPLAINER_MODEL` | `muse-spark-1.3` | Muse model id |
@@ -481,7 +512,7 @@ The host calls `shipcube_classifier.obs.configure_logging()` once. It logs JSON 
 |---|---|---|
 | `estimate_load` fails with `ProfilerError: config` | Worker env | Set the `SHIPCUBE_PROFILER_*` variables (Terraform outputs; see `deploy/RESOURCES.md`) |
 | Many `profile.failed stage=build` | Cloud Build history, tag `shipcube-profiler` | App requirements don't install. The estimate still returns a static profile; the user fixes requirements |
-| `profile.failed stage=logs` | Log entries for `resource.type=cloud_run_job`, `job_name=prof-…` | Log ingestion lag (raise `log_wait_s`), or the agent crashed (see the job's stderr) |
+| `profile.failed stage=logs` or many `profile.logs_throttled` | Log entries for `resource.type=cloud_run_job`, `job_name=prof-…`; the 429 message's `consumer` | If the consumer isn't our project, set `SHIPCUBE_QUOTA_PROJECT` and grant `serviceUsageConsumer`. Otherwise it's ingestion lag (raise `log_wait_s`) or the agent crashed (see the job's stderr) |
 | `ModelLoadError` at startup | `model.loaded` / exception text | Wrong URI, missing `storage.objectViewer`, or a tampered object. Re-publish, or pin the previous version |
 | `explainer.fallback reason=auth` | Secret Manager version of `META_API_KEY` | Rotate the key |
 | `explainer.fallback reason=timeout` or `rate_limited` | `muse.call` latency | Raise `SHIPCUBE_MUSE_DEADLINE_S`, or accept the rule text |

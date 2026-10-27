@@ -41,6 +41,7 @@ The **caller** is the service account that runs `estimate()` (the API worker). I
   - `roles/cloudbuild.builds.editor`
   - `roles/logging.viewer`
   - `roles/iam.serviceAccountUser` on `profiler-sandbox` and on `profiler-build`
+  - `roles/serviceusage.serviceUsageConsumer`: the client bills API quota to this project (`x-goog-user-project`). Without it, user credentials billed Cloud Logging reads to gcloud's shared client project, which returned 429.
 - on `gs://shipcube-ks-ml`:
   - `roles/storage.objectAdmin`, with the condition prefix `profiler-src/` (it uploads and deletes tarballs)
   - `roles/storage.objectViewer`, with the condition prefix `models/workload-classifier/` (model registry reads)

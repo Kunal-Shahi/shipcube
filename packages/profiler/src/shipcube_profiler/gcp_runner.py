@@ -51,6 +51,9 @@ LOGGING = "https://logging.googleapis.com/v2/entries:list"
 STORAGE_UPLOAD = "https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o"
 STORAGE_OBJ = "https://storage.googleapis.com/storage/v1/b/{bucket}/o/{name}"
 
+LOG_POLL_S = 5.0
+BUILD_TERMINAL = {"SUCCESS", "FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED"}
+
 DOCKERFILE = """\
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -128,7 +131,7 @@ class CloudRunJobRunner:
     name = "gcp"
 
     def __init__(self, config: GcpProfilerConfig | None = None, client: GcpClient | None = None,
-                 log_wait_s: float = 90.0, poll_s: float = 3.0):
+                 log_wait_s: float = 150.0, poll_s: float = 3.0):
         self.config = config or GcpProfilerConfig.from_env()
         self._client = client
         self.log_wait_s, self.poll_s = log_wait_s, poll_s
@@ -136,7 +139,7 @@ class CloudRunJobRunner:
     @property
     def client(self) -> GcpClient:
         if self._client is None:
-            self._client = GcpClient(timeout_s=30)
+            self._client = GcpClient(timeout_s=30, quota_project=self.config.project)
         return self._client
 
     # --- specs ------------------------------------------------------------------------
@@ -201,11 +204,21 @@ class CloudRunJobRunner:
 
     def _build(self, object_name: str, image: str) -> str:
         c = self.config
-        op = self.client.post(f"{BUILD}/projects/{c.project}/locations/{c.region}/builds",
-                              json=self.build_spec(object_name, image))
-        done = self.client.wait_operation(f"{BUILD}/{op['name']}", timeout_s=c.build_timeout_s + 60,
-                                          poll_s=self.poll_s)
-        build = done.get("response", {})
+        base = f"{BUILD}/projects/{c.project}/locations/{c.region}/builds"
+        op = self.client.post(base, json=self.build_spec(object_name, image))
+        # The returned operation name is global-style ("operations/build/<project>/...")
+        # even for a regional build, and GET on it 404s. Poll the regional build instead.
+        build_id = op.get("metadata", {}).get("build", {}).get("id")
+        if not build_id:
+            raise ProfilerError("build", f"no build id in create response: {str(op)[:200]}")
+        end = time.monotonic() + c.build_timeout_s + 60
+        while True:
+            build = self.client.get(f"{base}/{build_id}")
+            if build.get("status") in BUILD_TERMINAL:
+                break
+            if time.monotonic() > end:
+                raise ProfilerError("build", f"build {build_id} not finished after {c.build_timeout_s + 60}s")
+            time.sleep(self.poll_s)
         if build.get("status") != "SUCCESS":
             raise ProfilerError("build", f"status {build.get('status')}: {build.get('statusDetail', '')[:200]} "
                                          f"(build {build.get('id')})")
@@ -236,22 +249,41 @@ class CloudRunJobRunner:
         return execution
 
     def _read_result(self, job_id: str, execution: dict) -> dict:
+        """Find the agent's result line in the execution's logs.
+
+        Cloud Logging's entries.list has a low per-project read quota (it returned 429 in
+        the first real run, when this polled every 3 s), so: one query per LOG_POLL_S at
+        most, a timestamp bound to keep each query small, and a 429 means wait and try
+        again until the deadline rather than fail.
+        """
         c = self.config
         ex_name = execution.get("name", "").rsplit("/", 1)[-1]
+        since = execution.get("createTime") or execution.get("startTime")
         flt = (f'resource.type="cloud_run_job" AND resource.labels.job_name="{job_id}" '
                f'AND labels."run.googleapis.com/execution_name"="{ex_name}" '
                f'AND textPayload:"{RESULT_PREFIX.strip()}"')
+        if since:
+            flt += f' AND timestamp>="{since}"'
         end = time.monotonic() + self.log_wait_s
+        wait = max(self.poll_s, LOG_POLL_S)
         while True:   # log ingestion lags execution completion by a few seconds
-            r = self.client.post(LOGGING, json={"resourceNames": [f"projects/{c.project}"], "filter": flt,
-                                                "orderBy": "timestamp desc", "pageSize": 5}, idempotent=True)
+            try:
+                r = self.client.request("POST", LOGGING, idempotent=False, json={
+                    "resourceNames": [f"projects/{c.project}"], "filter": flt,
+                    "orderBy": "timestamp desc", "pageSize": 5})
+            except GcpError as e:
+                if e.status != 429:
+                    raise
+                obs.event(log, "profile.logs_throttled", logging.WARNING, wait_s=wait)
+                r = {}
+                wait = min(wait * 2, 30.0)
             for entry in r.get("entries", []):
                 text = entry.get("textPayload", "")
                 if text.startswith(RESULT_PREFIX):
                     return json.loads(text[len(RESULT_PREFIX):])
-            if time.monotonic() > end:
+            if time.monotonic() + wait > end:
                 raise ProfilerError("logs", f"no result line for execution {ex_name} after {self.log_wait_s:.0f}s")
-            time.sleep(self.poll_s)
+            time.sleep(wait)
 
     def _cleanup(self, job_id: str, object_name: str | None) -> None:
         for url in ([f"{self._job_parent()}/{job_id}"]

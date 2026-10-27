@@ -20,8 +20,9 @@ CFG = GcpProfilerConfig(project="p", region="asia-south1", bucket="b", repositor
 class FakeClient:
     """Scripted GCP: answers each REST call the runner makes, records them."""
 
-    def __init__(self, build_status="SUCCESS", succeeded=1, log_text=None, fail_at=None):
+    def __init__(self, build_status="SUCCESS", succeeded=1, log_text=None, fail_at=None, throttle=False):
         self.calls = []
+        self.throttle = throttle
         self.build_status, self.succeeded, self.fail_at = build_status, succeeded, fail_at
         prof = Profile(mode="measured", runner="local", kind="script", wall_s=1.2, cpu_mean_cores=0.9)
         self.log_text = log_text if log_text is not None else RESULT_PREFIX + json.dumps(
@@ -31,6 +32,9 @@ class FakeClient:
         if self.fail_at == what:
             raise GcpError(500, f"{what} broke", method="X", url=what)
 
+    def request(self, method, url, **kw):
+        return self.post(url, **kw)
+
     def post(self, url, **kw):
         self.calls.append(("POST", url, kw))
         if "upload/storage" in url:
@@ -38,20 +42,29 @@ class FakeClient:
             return {}
         if "cloudbuild" in url:
             self._maybe_fail("build")
-            return {"name": "projects/p/locations/asia-south1/operations/build-op"}
+            # Real API shape: a global-style operation name, the build id in metadata.
+            return {"name": "operations/build/p/b64id", "metadata": {"build": {"id": "b1", "status": "QUEUED"}}}
         if url.endswith(":run"):
             return {"name": "projects/p/locations/asia-south1/operations/run-op"}
         if "run.googleapis.com" in url:
             return {"name": "projects/p/locations/asia-south1/operations/create-op"}
         if "logging" in url:
+            self.log_calls = getattr(self, "log_calls", 0) + 1
+            if self.throttle and self.log_calls == 1:
+                raise GcpError(429, "Quota exceeded for 'Read requests'", method="POST", url=url)
             return {"entries": [{"textPayload": self.log_text}]}
         raise AssertionError(url)
 
+    def get(self, url, **kw):
+        self.calls.append(("GET", url, kw))
+        assert url.endswith("/locations/asia-south1/builds/b1"), url   # regional build, not the op name
+        self.build_polls = getattr(self, "build_polls", 0) + 1
+        if self.build_polls == 1:
+            return {"id": "b1", "status": "WORKING"}
+        return {"id": "b1", "status": self.build_status, "results": {"images": [{"digest": "sha256:abc"}]}}
+
     def wait_operation(self, url, **kw):
         self.calls.append(("WAIT", url, kw))
-        if url.endswith("build-op"):
-            return {"done": True, "response": {"status": self.build_status, "id": "b1",
-                                               "results": {"images": [{"digest": "sha256:abc"}]}}}
         if url.endswith("run-op"):
             return {"done": True, "response": {"name": "projects/p/locations/r/jobs/j/executions/j-x1",
                                                "succeededCount": self.succeeded,
@@ -63,8 +76,8 @@ class FakeClient:
         return {}
 
 
-def run(fake, tmp_path=None):
-    r = CloudRunJobRunner(CFG, client=fake, log_wait_s=0.1, poll_s=0.01)
+def run(fake, tmp_path=None, log_wait_s=0.1):
+    r = CloudRunJobRunner(CFG, client=fake, log_wait_s=log_wait_s, poll_s=0.01)
     return r.run(SAMPLES / "nightly_batch", summarize(SAMPLES / "nightly_batch"), Hints(schedule="0 2 * * *"))
 
 
@@ -103,6 +116,14 @@ def test_run_happy_path_and_cleanup():
     assert upload[2]["params"]["ifGenerationMatch"] == "0"
     deleted = [c[1] for c in fake.calls if c[0] == "DELETE"]
     assert any("/jobs/prof-" in u for u in deleted) and any("profiler-src" in u for u in deleted)
+
+
+def test_log_read_waits_out_quota_429(monkeypatch):
+    import shipcube_profiler.gcp_runner as gr
+    monkeypatch.setattr(gr, "LOG_POLL_S", 0.01)
+    fake = FakeClient(throttle=True)
+    p = run(fake, log_wait_s=5)
+    assert p.runner == "gcp" and fake.log_calls == 2
 
 
 @pytest.mark.parametrize("kw,stage", [({"build_status": "FAILURE"}, "build"), ({"succeeded": 0}, "run"),

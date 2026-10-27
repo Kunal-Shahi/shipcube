@@ -12,6 +12,7 @@ Run, or `gcloud auth application-default login` locally).
 from __future__ import annotations
 
 import logging
+import os
 import random
 import time
 from typing import Any
@@ -38,11 +39,18 @@ class GcpError(Exception):
 
 class GcpClient:
     def __init__(self, session: Any = None, *, timeout_s: float = 30.0, max_attempts: int = 4,
-                 backoff_s: float = 0.5):
+                 backoff_s: float = 0.5, quota_project: str | None = None):
         if session is None:
             import google.auth
             from google.auth.transport.requests import AuthorizedSession
             creds, _ = google.auth.default(scopes=SCOPES)
+            # Charge API quota to our project. Without this, user credentials from
+            # `gcloud auth application-default login` bill quota to gcloud's shared OAuth
+            # client project, where Cloud Logging reads were throttled (429) on the first
+            # real runs. Needs serviceusage.services.use on that project.
+            quota_project = quota_project or os.environ.get("SHIPCUBE_QUOTA_PROJECT")
+            if quota_project and hasattr(creds, "with_quota_project"):
+                creds = creds.with_quota_project(quota_project)
             session = AuthorizedSession(creds)
         self.session = session
         self.timeout_s, self.max_attempts, self.backoff_s = timeout_s, max_attempts, backoff_s
