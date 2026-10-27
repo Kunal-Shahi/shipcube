@@ -1,0 +1,19 @@
+{
+  "python": "3.12.16",
+  "sqlglot": "30.25.0",
+  "process wall ms p50: bare interpreter": 9.7,
+  "process wall ms p50: import sqlglot": 257.8,
+  "process wall ms p50: import sqlglot + optimizer": 258.8,
+  "process wall ms p50: import fastapi": 372.1,
+  "process wall ms p50: import fastapi + sqlglot + optimizer (service)": 506.3,
+  "per-query cost (warm)": {
+    "first_parse+transpile_ms": 32.79,
+    "parse_ms": 0.41,
+    "generate_bigquery_ms": 0.333,
+    "optimize_ms": 5.12
+  },
+  "importtime cumulative us": {
+    "sqlglot.optimizer": 200,
+    "sqlglot": 245974
+  }
+}

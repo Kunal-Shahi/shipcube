@@ -1,0 +1,56 @@
+{
+  "machine": {
+    "os": "macOS-26.6-arm64-arm-64bit",
+    "cpu": "Apple M5",
+    "ncpu": 10,
+    "go": "go version go1.27.3 darwin/arm64",
+    "node": "v22.23.4",
+    "python": "Python 3.12.16",
+    "oha": "oha 1.16.0",
+    "runs": 20,
+    "duration": "10s",
+    "concurrency": "64"
+  },
+  "results": {
+    "go-http (net/http)": {
+      "ready_ms_p50": 14.941187499999842,
+      "ready_ms_p95": 17.439165999999062,
+      "first_response_ms_p50": 15.355874999999797,
+      "first_response_ms_p95": 17.891207999999992,
+      "rss_idle_mb_p50": 11.3203125,
+      "runs": 20
+    },
+    "py-http (FastAPI+uvicorn)": {
+      "ready_ms_p50": 471.5009994999999,
+      "ready_ms_p95": 1231.8955000000003,
+      "first_response_ms_p50": 471.868624499999,
+      "first_response_ms_p95": 1232.2564159999984,
+      "rss_idle_mb_p50": 59.0859375,
+      "runs": 20
+    },
+    "go-mcp (official go-sdk)": {
+      "ready_ms_p50": 12.055749999998255,
+      "ready_ms_p95": 16.560832999999775,
+      "first_response_ms_p50": 12.764146000002086,
+      "first_response_ms_p95": 17.467625000001874,
+      "rss_idle_mb_p50": 13.921875,
+      "runs": 20
+    },
+    "py-mcp (official python sdk)": {
+      "ready_ms_p50": 632.9026670000069,
+      "ready_ms_p95": 648.6602910000058,
+      "first_response_ms_p50": 633.9837710000076,
+      "first_response_ms_p95": 649.7605000000065,
+      "rss_idle_mb_p50": 76.046875,
+      "runs": 20
+    },
+    "ts-mcp (official ts sdk)": {
+      "ready_ms_p50": 138.0502084999975,
+      "ready_ms_p95": 144.2048749999998,
+      "first_response_ms_p50": 147.22345799999204,
+      "first_response_ms_p95": 152.1082919999941,
+      "rss_idle_mb_p50": 71.8828125,
+      "runs": 20
+    }
+  }
+}
