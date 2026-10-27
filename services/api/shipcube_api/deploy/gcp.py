@@ -4,7 +4,7 @@ Flow for one deploy (docs/research/networking.md §4):
   stage_source  inline -> tar.gz in the uploads bucket; upload -> check the object exists. Both
                 live under the workspace's prefix (ws/<workspace>/), derived from the token
   build         Cloud Build, buildpacks (no Dockerfile), runs as the workspace's builder SA, publishes
-                to the workspace's repo <region>-docker.pkg.dev/<project>/ws-<ws12>/<app>:<op id>;
+                to the workspace's repo <region>-docker.pkg.dev/<project>/ws-<ws_short>/<app>:<op id>;
                 the deploy then pins the pushed digest (isolation.py, red-team C-1)
   deploy        per-app runtime SA with no roles; Cloud Run v2 service, gen2, scale to zero, caps,
                 --no-allow-unauthenticated + IAP; IAP service agent gets run.invoker; wait until ready
@@ -40,9 +40,28 @@ BUILD = "https://cloudbuild.googleapis.com/v1"
 IAM = "https://iam.googleapis.com/v1"
 IAP = "https://iap.googleapis.com/v1"
 AR = "https://artifactregistry.googleapis.com/v1"
+GCS = "https://storage.googleapis.com/storage/v1"
 INVOKER = "roles/run.invoker"
 ACCESSOR = "roles/iap.httpsResourceAccessor"
 UPLOAD_MAX_BYTES = 100 * 1024 * 1024
+# Same as the shared repo's policy in security's Terraform: keep the 5 newest, delete after 30 days.
+REPO_CLEANUP = {
+    "keep-5-newest": {"id": "keep-5-newest", "action": "KEEP", "mostRecentVersions": {"keepCount": 5}},
+    "delete-after-30d": {"id": "delete-after-30d", "action": "DELETE", "condition": {"olderThan": "2592000s"}},
+}
+
+
+def _add_binding(policy: dict[str, Any], role: str, member: str) -> bool:
+    """Add member to role in an IAM policy; False when it was already there."""
+    bindings = policy.setdefault("bindings", [])
+    b = next((b for b in bindings if b["role"] == role and "condition" not in b), None)
+    if b is None:
+        bindings.append({"role": role, "members": [member]})
+        return True
+    if member in b["members"]:
+        return False
+    b["members"].append(member)
+    return True
 
 
 def _now() -> str:
@@ -62,6 +81,7 @@ class GcpDeployer:
         self._sessions: dict[str | None, AuthorizedSession] = {}
         self._project_numbers: dict[str, str] = {}
         self._iap_agents: dict[str, str] = {}
+        self._provisioned: set[str] = set()
 
     # --- credentials ------------------------------------------------------------------
 
@@ -164,6 +184,67 @@ class GcpDeployer:
             bucket.blob(name).upload_from_string(buf.getvalue(), content_type="application/gzip")
         return {"storageSource": {"bucket": self.s.upload_bucket, "object": name}}
 
+    # --- per-workspace builder (security's provision-workspace-builder.sh, in Python) ------
+
+    def ensure_builder(self, workspace_id: str) -> None:
+        """Create the workspace's builder SA, registry repo and upload folder, and grant each to the
+        builder only. Idempotent (409 = exists); runs as security's sc-provisioner."""
+        if workspace_id in self._provisioned:
+            return
+        sess = self._session(self.s.provisioner_sa)
+        project, region, bucket = self.s.apps_project, self.s.region, self.s.upload_bucket
+        sa = isolation.builder_sa(self.s, workspace_id)
+        member = f"serviceAccount:{sa}"
+        repo = isolation.ar_repo(self.s, workspace_id)
+        folder = isolation.upload_prefix(self.s, workspace_id)
+
+        # a. the builder SA
+        self._call(sess, "POST", f"{IAM}/projects/{project}/serviceAccounts", ok=(200, 409),
+                   json={"accountId": sa.split("@")[0],
+                         "serviceAccount": {"displayName": f"ShipCube builds for workspace {workspace_id}"[:100]}})
+        # b. its registry repo, writable by the builder only
+        repo_url = f"{AR}/projects/{project}/locations/{region}/repositories/{repo}"
+        op = self._call(sess, "POST", f"{AR}/projects/{project}/locations/{region}/repositories", ok=(200, 409),
+                        params={"repositoryId": repo},
+                        json={"format": "DOCKER", "description": f"ShipCube workspace {workspace_id}",
+                              "cleanupPolicies": REPO_CLEANUP})
+        if op.get("name") and not op.get("done"):
+            self._wait_op(sess, AR, op)
+        self._grant(sess, f"{repo_url}:getIamPolicy", f"{repo_url}:setIamPolicy", "roles/artifactregistry.writer", member,
+                    get="GET")
+        # c. its upload folder (a managed folder), readable by the builder only
+        self._call(sess, "POST", f"{GCS}/b/{bucket}/managedFolders", ok=(200, 409), json={"name": folder})
+        folder_iam = f"{GCS}/b/{bucket}/managedFolders/{requests.utils.quote(folder, safe='')}/iam"
+        policy = self._retry_new(lambda: self._call(sess, "GET", folder_iam))
+        if _add_binding(policy, "roles/storage.objectViewer", member):
+            self._call(sess, "PUT", folder_iam, json=policy)
+        # d. who may use the builder: the worker mints its tokens, the hosted deployer submits builds as it
+        sa_url = f"{IAM}/projects/{project}/serviceAccounts/{sa}"
+        policy = self._retry_new(lambda: self._call(sess, "POST", f"{sa_url}:getIamPolicy", json={}))
+        changed = _add_binding(policy, "roles/iam.serviceAccountTokenCreator", f"serviceAccount:{self.s.worker_sa}")
+        changed |= _add_binding(policy, "roles/iam.serviceAccountUser", f"serviceAccount:{self.s.build_submitter_sa}")
+        if changed:
+            self._call(sess, "POST", f"{sa_url}:setIamPolicy", json={"policy": policy})
+        self._provisioned.add(workspace_id)
+        log.info("workspace builder ready", extra={"workspace_id": workspace_id, "builder_sa": sa, "repo": repo})
+
+    def _grant(self, sess: AuthorizedSession, get_url: str, set_url: str, role: str, member: str, get: str = "POST") -> None:
+        policy = self._retry_new(lambda: self._call(sess, get, get_url, **({"json": {}} if get == "POST" else {})))
+        if _add_binding(policy, role, member):
+            self._retry_new(lambda: self._call(sess, "POST", set_url, json={"policy": policy}))
+
+    @staticmethod
+    def _retry_new(fn: Callable[[], Any], tries: int = 8) -> Any:
+        """A just-created SA or resource can 404 (or fail as an unknown member) for a few seconds."""
+        for i in range(tries):
+            try:
+                return fn()
+            except DeployError as e:
+                if e.code not in ("not_found", "invalid_argument") or i == tries - 1:
+                    raise
+                time.sleep(min(2 ** i, 8))
+        raise AssertionError("unreachable")
+
     # --- build --------------------------------------------------------------------------
 
     def _repo(self, app: AppRef) -> str:
@@ -190,6 +271,7 @@ class GcpDeployer:
         project, region = app.target.project, app.region
         image = self.image_for(app, op_id.replace("_", "-"))
         if app.target.kind == "shipcube":
+            self.ensure_builder(app.workspace_id)
             builder_sa = isolation.builder_sa(self.s, app.workspace_id)
         elif app.target.builder_sa:
             builder_sa = app.target.builder_sa

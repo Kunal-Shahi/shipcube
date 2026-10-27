@@ -5,7 +5,7 @@ workspace (the token's, never the request's), and anything outside it is refused
 - each workspace builds as its own builder SA, which can only read that prefix
 - each workspace pushes to its own Artifact Registry repo, and deploys pin the digest
 
-Names come from Settings templates ({ws} = workspace uuid, {ws12} = its first 12 hex digits,
+Names come from Settings templates ({ws} = workspace uuid, {ws_short} = its first 20 hex digits,
 {apps_project}, {region}), so infra can rename without a code change.
 """
 
@@ -22,12 +22,12 @@ UPLOAD_ID = re.compile(r"^upl_[0-9a-f]{8,32}$")
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 
 
-def ws12(workspace_id: str) -> str:
-    return uuid.UUID(str(workspace_id)).hex[:12]
+def ws_short(workspace_id: str) -> str:
+    return uuid.UUID(str(workspace_id)).hex[:20]
 
 
 def _fill(template: str, s: Settings, workspace_id: str) -> str:
-    return template.format(ws=uuid.UUID(str(workspace_id)), ws12=ws12(workspace_id), apps_project=s.apps_project,
+    return template.format(ws=uuid.UUID(str(workspace_id)), ws_short=ws_short(workspace_id), apps_project=s.apps_project,
                            region=s.region)
 
 

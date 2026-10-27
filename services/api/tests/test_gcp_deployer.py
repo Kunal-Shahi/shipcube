@@ -58,7 +58,7 @@ def test_caps_follow_cloud_run_rules():
 
 
 WS = APP.workspace_id
-REPO = f"asia-south1-docker.pkg.dev/shipcube-apps-ks/ws-{WS.replace('-', '')[:12]}"
+REPO = f"asia-south1-docker.pkg.dev/shipcube-apps-ks/ws-{WS.replace('-', '')[:20]}"
 DIGEST = "sha256:" + "a" * 64
 OTHER_WS = "9f0e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c"
 
@@ -71,6 +71,7 @@ def test_build_runs_as_the_workspace_builder_and_pins_the_digest(deployer):
         ("GET", "/tags/op-1"): (200, {"version": f"projects/p/locations/l/repositories/r/packages/x/versions/{DIGEST}"}),
     })
     deployer._sessions[None] = sess
+    deployer._provisioned.add(WS)
     seen = []
     image = deployer.build(APP, {"storageSource": {"bucket": "shipcube-uploads-ks", "object": obj}}, "op_1", lambda: False, seen.append)
     assert seen == ["b1"] and image == f"{REPO}/{APP.service}@{DIGEST}"
@@ -78,12 +79,45 @@ def test_build_runs_as_the_workspace_builder_and_pins_the_digest(deployer):
     step = body["steps"][0]
     assert step["name"] == "gcr.io/k8s-skaffold/pack" and "--publish" in step["args"]
     assert f"{REPO}/{APP.service}:op-1" in step["args"]  # pushes only into the workspace's repo
-    assert body["serviceAccount"] == (f"projects/shipcube-apps-ks/serviceAccounts/wsb-{WS.replace('-', '')[:12]}"
+    assert body["serviceAccount"] == (f"projects/shipcube-apps-ks/serviceAccounts/sc-build-{WS.replace('-', '')[:20]}"
                                       "@shipcube-apps-ks.iam.gserviceaccount.com")
     assert body["source"] == {"storageSource": {"bucket": "shipcube-uploads-ks", "object": obj}}
     assert body["options"]["logging"] == "CLOUD_LOGGING_ONLY"
     tag = next(c for c in sess.calls if "/tags/" in c[1])
-    assert f"/repositories/ws-{WS.replace('-', '')[:12]}/packages/{APP.service}/tags/op-1" in tag[1]
+    assert f"/repositories/ws-{WS.replace('-', '')[:20]}/packages/{APP.service}/tags/op-1" in tag[1]
+
+
+def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer):
+    short = WS.replace("-", "")[:20]
+    sa = f"sc-build-{short}@shipcube-apps-ks.iam.gserviceaccount.com"
+    folder_iam = {"bindings": [{"role": "roles/storage.objectViewer", "members": ["serviceAccount:someone@x"],
+                                "condition": {"title": "c"}}]}
+    prov = FakeSession({
+        ("POST", ":setIamPolicy"): (200, {}),
+        ("POST", "/repositories"): (409, {"error": {"message": "exists"}}),  # a retry: already created
+        ("GET", ":getIamPolicy"): (200, {"bindings": []}),
+        ("GET", "/iam"): (200, folder_iam),
+        ("POST", ":getIamPolicy"): (200, {"etag": "e"}),
+    })
+    deployer._sessions[deployer.s.provisioner_sa] = prov
+    deployer.ensure_builder(WS)
+    deployer.ensure_builder(WS)  # cached: no second round of calls
+    calls = [(m, u.split("/v1/")[-1], b, p) for m, u, b, p in prov.calls]
+    assert calls[0][0:2] == ("POST", "projects/shipcube-apps-ks/serviceAccounts") and calls[0][2]["accountId"] == f"sc-build-{short}"
+    assert calls[1][3] == {"repositoryId": f"ws-{short}"} and calls[1][2]["format"] == "DOCKER"
+    repo_set = next(c for c in calls if c[1].endswith(f"repositories/ws-{short}:setIamPolicy"))
+    assert repo_set[2]["policy"]["bindings"] == [{"role": "roles/artifactregistry.writer", "members": [f"serviceAccount:{sa}"]}]
+    mf = next(c for c in calls if c[0] == "POST" and c[1].endswith("/managedFolders"))
+    assert mf[2] == {"name": f"ws/{WS}/"}
+    put = next(c for c in calls if c[0] == "PUT")
+    assert put[1].endswith(f"managedFolders/ws%2F{WS}%2F/iam")
+    assert {"role": "roles/storage.objectViewer", "members": [f"serviceAccount:{sa}"]} in put[2]["bindings"]
+    sa_set = next(c for c in calls if c[1].endswith(f"serviceAccounts/{sa}:setIamPolicy"))
+    assert sa_set[2]["policy"]["etag"] == "e" and sorted(b["role"] for b in sa_set[2]["policy"]["bindings"]) == [
+        "roles/iam.serviceAccountTokenCreator", "roles/iam.serviceAccountUser"]
+    assert len(prov.calls) == 9  # SA, repo + its IAM get/set, folder + its IAM get/put, SA IAM get/set
+    # A hosted build provisions first, as the provisioner, never with the deployer's own identity.
+    assert all("managedFolders" not in u and "repositories?" not in u for _, u, _, _ in deployer._sessions.get(None, FakeSession({})).calls)
 
 
 @pytest.mark.parametrize("bucket,obj", [
@@ -94,6 +128,7 @@ def test_build_runs_as_the_workspace_builder_and_pins_the_digest(deployer):
 ])
 def test_build_refuses_source_outside_the_workspace(deployer, bucket, obj):
     deployer._sessions[None] = sess = FakeSession({})
+    deployer._provisioned.add(WS)
     with pytest.raises(DeployError) as e:
         deployer.build(APP, {"storageSource": {"bucket": bucket, "object": obj}}, "op_1", lambda: False, lambda _: None)
     assert e.value.code == "permission_denied" and sess.calls == []  # nothing was submitted
@@ -108,10 +143,10 @@ def test_uploads_are_named_from_the_callers_workspace_only(deployer):
 
 
 @pytest.mark.parametrize("image,code", [
-    (f"asia-south1-docker.pkg.dev/shipcube-apps-ks/ws-{OTHER_WS.replace('-', '')[:12]}/victim-123456@{DIGEST}", "permission_denied"),
+    (f"asia-south1-docker.pkg.dev/shipcube-apps-ks/ws-{OTHER_WS.replace('-', '')[:20]}/victim-123456@{DIGEST}", "permission_denied"),
     (f"asia-south1-docker.pkg.dev/shipcube-apps-ks/shipcube/victim-123456@{DIGEST}", "permission_denied"),
     (f"asia-south1-docker.pkg.dev/shipcube-apps-ks/profiler/x@{DIGEST}", "permission_denied"),
-    (f"us-docker.pkg.dev/shipcube-apps-ks/ws-{WS.replace('-', '')[:12]}/x@{DIGEST}", "permission_denied"),
+    (f"us-docker.pkg.dev/shipcube-apps-ks/ws-{WS.replace('-', '')[:20]}/x@{DIGEST}", "permission_denied"),
     (f"gcr.io/shipcube-control-ks/x@{DIGEST}", "permission_denied"),
     (f"ASIA-SOUTH1-DOCKER.PKG.DEV/SHIPCUBE-APPS-KS/shipcube/x@{DIGEST}", "permission_denied"),
     (f"{REPO}/tracker-abc123:latest", "invalid_argument"),  # own repo, but a movable tag
