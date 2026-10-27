@@ -1,0 +1,11 @@
+app,rep,src,kind,label,rule_label,ran_ok,cpu_mean_cores,cpu_p95_cores,cpu_util_mean,cpu_cv,cpu_peak_to_mean,mem_mean_gb,mem_peak_gb,mem_per_core_gb,io_mb_per_s,net_mb_per_s,io_per_cpu_s,invocations_per_hour,invocation_cv,idle_fraction,duration_s
+h-sort,0,profiler,script,batch_cron,batch_cron,True,0.9902,0.999,0.9902,0.012441,1.008887,0.151971,0.232742,0.235046,0.104179,0.0,0.10521,0.005952,100.394223,0.999901,0.562431
+h-text,0,profiler,script,batch_cron,batch_cron,True,1.01925,1.01925,0.509625,0.071636,1.0,0.025543,0.034149,0.033504,0.0,0.0,0.0,1.0,7.681146,0.983333,0.460842
+h-primes2,0,profiler,script,compute_heavy,compute_heavy,True,1.862324,1.862324,0.931162,1.169536,1.0,0.086985,0.126236,0.067784,0.561289,0.0,0.301392,0.041667,37.934153,0.999306,0.341012
+h-primes4,0,profiler,script,compute_heavy,compute_heavy,True,2.692816,3.342,0.673204,0.693052,1.24108,0.11631,0.152786,0.056738,0.0,0.0,0.0,0.041667,37.934153,0.999306,0.458857
+h-dict,0,profiler,script,memory_heavy,memory_heavy,True,0.118526,0.998,0.118526,1.414214,8.420071,1.914796,2.002228,16.892686,0.000878,0.0,0.007408,0.041667,37.934153,0.999306,4.448689
+h-copy,0,profiler,script,io_bound,batch_cron,True,0.817556,1.0,0.817556,0.332914,1.223158,0.140693,0.213547,0.261202,976.613511,0.0,1194.553086,0.041667,37.934153,0.999306,1.024203
+h-html-10,0,profiler,web,bursty_interactive,bursty_interactive,True,0.008115,0.001,0.008115,,0.123223,0.040421,0.040421,0.808411,0.006409,0.068892,7.530073,112.5,1.48324,0.627527,0.002006
+h-html-40,0,profiler,web,bursty_interactive,bursty_interactive,True,0.011,0.001,0.011,,0.090909,0.040382,0.04039,0.8078,0.0,0.163594,14.872212,450.0,1.341641,0.625,0.002337
+h-api-1k,0,profiler,web,steady_service,steady_service,True,1.274,0.998,1.0,,0.783359,0.028793,0.039856,0.031284,0.0,0.811686,0.637116,30000.0,0.044721,0.0,0.000839
+h-api-3k,0,profiler,web,steady_service,steady_service,True,0.64,0.596,0.64,,0.93125,0.028295,0.039856,0.062275,0.0,0.769667,1.202605,90000.0,0.02582,0.0,0.000878
