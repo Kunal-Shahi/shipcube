@@ -1,3 +1,4 @@
+# shellcheck shell=bash disable=SC2034  # sourced by the other scripts, which use these variables
 # Shared settings for deploy/*.sh. Override any of them in the environment.
 : "${PROJECT:=shipcube-control-ks}"
 : "${REGION:=asia-south1}"
@@ -12,3 +13,4 @@ SA_API="sc-api@$PROJECT.iam.gserviceaccount.com"
 SA_GATEWAY="sc-gateway@$PROJECT.iam.gserviceaccount.com"
 SA_WEB="sc-web@$PROJECT.iam.gserviceaccount.com"
 SA_BUILD="sc-platform-build@$PROJECT.iam.gserviceaccount.com"
+SA_MIGRATOR="sc-migrator@$PROJECT.iam.gserviceaccount.com"

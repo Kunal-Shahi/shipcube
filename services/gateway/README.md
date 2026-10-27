@@ -99,9 +99,9 @@ at the Cloud Run level because it verifies app identity itself.
 
 ## Operate (runbook)
 
-**Dashboards and alerts.** `deploy/monitoring.sh` creates an uptime check on `/healthz` and alerts on
-uptime failure, a 5xx ratio above 5% for 5 min, and p95 latency (log-based metric
-`shipcube_gateway_chat_latency`). Usage per app: Logs Explorer with `jsonPayload.shipcube_usage=true`.
+**Alerts.** `deploy/monitoring.py` creates an uptime check on `/healthz` (every 5 min, 3 regions) and
+alerts on uptime failure and a 5xx ratio above 5% for 5 min. There is no latency alert, because streamed
+completions are long by design. Usage per app: Logs Explorer with `jsonPayload.shipcube_usage=true`.
 
 | Symptom | Likely cause | What to do |
 |---|---|---|

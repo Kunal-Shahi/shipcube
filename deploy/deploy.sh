@@ -23,6 +23,7 @@ GATEWAY_URL="$(run_url shipcube-gateway)"
 WEB_URL="$(run_url shipcube-console)"
 
 # Common flags: request-based billing (CPU only while serving), scale to zero, small instances.
+# DEV_MODE is never set here: production services refuse mock data.
 common=(--project "$PROJECT" --region "$REGION" --min-instances 0 --cpu-throttling --cpu-boost --quiet)
 
 # MCP server + API. Public at the Cloud Run level: MCP clients send PATs, which the API checks.
@@ -37,7 +38,7 @@ gcloud run deploy shipcube-mcp "${common[@]}" --image "$IMAGES/mcp:$TAG" \
 gcloud run deploy shipcube-gateway "${common[@]}" --image "$IMAGES/gateway:$TAG" \
   --service-account "$SA_GATEWAY" --allow-unauthenticated --max-instances 2 --cpu 1 --memory 256Mi \
   --concurrency 80 --timeout 3600 \
-  --set-env-vars "GATEWAY_AUDIENCE=$GATEWAY_URL,GATEWAY_REGISTRY_FILE=/etc/shipcube/registry/registry.json,META_SECRET_REF=projects/$PROJECT/secrets/meta-api-key/versions/1" \
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT,GATEWAY_AUDIENCE=$GATEWAY_URL,GATEWAY_REGISTRY_FILE=/etc/shipcube/registry/registry.json,META_SECRET_REF=projects/$PROJECT/secrets/meta-api-key/versions/1" \
   --set-secrets "/etc/shipcube/registry/registry.json=gateway-registry:latest"
 
 # Console. Public: sign-in happens in the app (Identity Platform).
