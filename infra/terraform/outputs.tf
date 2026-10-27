@@ -4,7 +4,7 @@ output "service_accounts" {
     gateway         = google_service_account.gateway.email
     worker          = google_service_account.worker.email
     hosted_deployer = google_service_account.hosted_deployer.email
-    profiler        = google_service_account.profiler.email
+    migrator        = google_service_account.migrator.email
     builder         = google_service_account.builder.email
   }
 }
@@ -19,4 +19,13 @@ output "apps_registry" {
 
 output "budget_topic" {
   value = google_pubsub_topic.budget.id
+}
+
+output "profiler" {
+  description = "Environment for the estimate worker (packages/profiler/deploy/RESOURCES.md)."
+  value       = module.profiler.env
+}
+
+output "uploads_bucket" {
+  value = google_storage_bucket.uploads.name
 }

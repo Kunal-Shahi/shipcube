@@ -25,12 +25,6 @@ resource "google_service_account" "hosted_deployer" {
   display_name = "Deploys hosted apps into the apps project"
 }
 
-resource "google_service_account" "profiler" {
-  project      = var.apps_project_id
-  account_id   = "sc-profiler"
-  display_name = "Profiler sandbox (no roles, no egress)"
-}
-
 resource "google_service_account" "builder" {
   project      = var.apps_project_id
   account_id   = "sc-builder"
@@ -120,4 +114,34 @@ resource "google_project_iam_member" "worker_run_developer" {
   project = var.apps_project_id
   role    = "roles/run.developer"
   member  = google_service_account.worker.member
+}
+
+# Production deploys run in the worker (python -m shipcube_api.worker, as sc-worker), which
+# impersonates the hosted deployer just like the API does.
+resource "google_service_account_iam_member" "worker_impersonates_hosted_deployer" {
+  service_account_id = google_service_account.hosted_deployer.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = google_service_account.worker.member
+}
+
+# Runs schema migrations (python -m shipcube_api.admin migrate) as the table owner.
+resource "google_service_account" "migrator" {
+  project      = var.control_project_id
+  account_id   = "sc-migrator"
+  display_name = "Schema migrations (owns the tables)"
+}
+
+resource "google_project_iam_member" "migrator_sql" {
+  for_each = toset(["roles/cloudsql.client", "roles/cloudsql.instanceUser"])
+  project  = var.control_project_id
+  role     = each.value
+  member   = google_service_account.migrator.member
+}
+
+# People and CI identities allowed to run migrations by impersonating sc-migrator.
+resource "google_service_account_iam_member" "migrator_operators" {
+  for_each           = toset(var.migration_operators)
+  service_account_id = google_service_account.migrator.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = each.value
 }

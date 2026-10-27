@@ -57,3 +57,27 @@ variable "sql_availability" {
   type        = string
   default     = "ZONAL"
 }
+
+variable "migration_operators" {
+  description = "Principals that may impersonate sc-migrator to run schema migrations (people and CI)."
+  type        = list(string)
+  default     = []
+}
+
+variable "ml_bucket_name" {
+  description = "Model registry and profiler source uploads, in the control project."
+  type        = string
+  default     = "shipcube-ks-ml"
+}
+
+variable "uploads_bucket_name" {
+  description = "Source uploads for deploys (created by networking's gcp_setup.sh, adopted here)."
+  type        = string
+  default     = "shipcube-uploads-ks"
+}
+
+variable "postgres_password_version" {
+  description = "Bump to rotate the postgres password (Secret Manager gets a new version too)."
+  type        = number
+  default     = 1
+}

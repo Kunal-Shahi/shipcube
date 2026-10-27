@@ -76,11 +76,46 @@ resource "google_sql_database" "shipcube" {
 # IAM database users: no passwords. Postgres roles and grants are set by migrations.
 resource "google_sql_user" "iam" {
   for_each = {
-    api    = google_service_account.api.email
-    worker = google_service_account.worker.email
+    api      = google_service_account.api.email
+    worker   = google_service_account.worker.email
+    migrator = google_service_account.migrator.email
   }
   project  = var.control_project_id
   instance = google_sql_database_instance.main.name
   name     = trimsuffix(each.value, ".gserviceaccount.com")
   type     = "CLOUD_IAM_SERVICE_ACCOUNT"
+}
+
+# The built-in `postgres` user (cloudsqlsuperuser) is used only to bootstrap roles
+# (infra/db/bootstrap.sql) and for break-glass access. Its password is generated as an
+# ephemeral value and written with write-only attributes, so it never appears in
+# Terraform state or plan output; the only copy is in Secret Manager.
+ephemeral "random_password" "postgres" {
+  length  = 40
+  special = false
+}
+
+resource "google_secret_manager_secret" "postgres_password" {
+  project   = var.control_project_id
+  secret_id = "sql-postgres-password"
+  labels    = { owner = "shipcube", kind = "platform" }
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "postgres_password" {
+  secret                 = google_secret_manager_secret.postgres_password.id
+  secret_data_wo         = ephemeral.random_password.postgres.result
+  secret_data_wo_version = var.postgres_password_version
+}
+
+resource "google_sql_user" "postgres" {
+  project             = var.control_project_id
+  instance            = google_sql_database_instance.main.name
+  name                = "postgres"
+  type                = "BUILT_IN"
+  password_wo         = ephemeral.random_password.postgres.result
+  password_wo_version = var.postgres_password_version
+  deletion_policy     = "ABANDON"
 }
