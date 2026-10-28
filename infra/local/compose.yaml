@@ -59,7 +59,8 @@ services:
       - migrate-venv:/venv
       - uv-cache:/uv-cache
     working_dir: /src/services/api
-    command: ["uv", "run", "--locked", "--no-dev", "python", "-m", "shipcube_api.admin", "migrate"]
+    # --extra data: `admin migrate` also applies shipcube-data's shared catalog (schema `catalog`) after the API's schema.
+    command: ["uv", "run", "--locked", "--no-dev", "--extra", "data", "python", "-m", "shipcube_api.admin", "migrate"]
 
   secretmanager:
     image: python:3.12-alpine
