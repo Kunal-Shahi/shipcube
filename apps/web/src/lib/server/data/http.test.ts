@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalFromOperation, camelize, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, placementOf, type ApiOperation } from "./http";
+import { approvalFromOperation, camelize, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, placementOf, providerFromApi, type ApiOperation } from "./http";
 
 const op = (over: Partial<ApiOperation>): ApiOperation => ({
   id: "op_1",
@@ -123,6 +123,19 @@ describe("camelize (/v1/data bodies)", () => {
       proposedBy: { tokenName: "t", user: "u" },
       impact: { appsBroken: ["a"], breaks: [{ query: "q", app: "a", error: "e" }] },
       ops: [{ op: "add_measure", name: "orders.unique_customers", impersonate_service_account: "x" }],
+    });
+  });
+});
+
+describe("providerFromApi", () => {
+  it("keeps only the key hint, and maps the rest to lib/types", () => {
+    const p = providerFromApi({
+      id: "anthropic", label: "Anthropic", description: "Your own Anthropic API key.", connected: true, default: true,
+      key_hint: "…Wxyz", base_url: null, model: "claude-haiku-5-5", added_at: "2026-10-29T03:00:00Z",
+    });
+    expect(p).toEqual({
+      id: "anthropic", label: "Anthropic", description: "Your own Anthropic API key.", connected: true,
+      keyHint: "…Wxyz", baseUrl: undefined, defaultModel: "claude-haiku-5-5", addedAt: "2026-10-29T03:00:00Z",
     });
   });
 });

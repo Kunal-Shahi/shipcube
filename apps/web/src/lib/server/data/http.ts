@@ -19,6 +19,7 @@ import type {
   LogLine,
   Migration,
   Monitoring,
+  ProviderConfig,
   Role,
   TierId,
   Warehouse,
@@ -275,7 +276,7 @@ async function optional<T>(what: string, p: Promise<T>): Promise<T | undefined> 
 }
 
 const notConnected = (f: Feature) => new NotConnectedError(FEATURE_ENDPOINT[f].name, FEATURE_ENDPOINT[f].endpoint);
-const AVAILABLE = new Set<Feature>(["tokens", "data"]);
+const AVAILABLE = new Set<Feature>(["tokens", "data", "approvals_inbox", "providers"]);
 
 interface ApiTokenRow {
   id: string;
@@ -286,6 +287,30 @@ interface ApiTokenRow {
   expires_at: string;
   last_used_at: string | null;
 }
+
+interface ApiProvider {
+  id: ProviderConfig["id"];
+  label: string;
+  description: string;
+  connected: boolean;
+  default: boolean;
+  key_hint: string | null;
+  base_url: string | null;
+  model: string | null;
+  added_at: string | null;
+}
+
+// The API never returns a stored key, only its last 4 characters (key_hint).
+export const providerFromApi = (p: ApiProvider): ProviderConfig => ({
+  id: p.id,
+  label: p.label,
+  description: p.description,
+  connected: p.connected,
+  keyHint: p.key_hint ?? undefined,
+  baseUrl: p.base_url ?? undefined,
+  defaultModel: p.model ?? undefined,
+  addedAt: p.added_at ?? undefined,
+});
 
 const tokenFromApi = (t: ApiTokenRow): ApiToken => ({
   id: t.id,
@@ -388,7 +413,9 @@ export const httpData: ConsoleData = {
   },
 
   async listApprovals() {
-    throw notConnected("approvals_inbox");
+    // Pending ones, plus recent operations a person decided (they keep approval_actions).
+    const { operations } = await api<{ operations: ApiOperation[] }>("/v1/operations?limit=100");
+    return operations.filter((op) => op.status === "awaiting_approval" || (op.approval_actions?.length ?? 0) > 0).map(approvalFromOperation);
   },
 
   async getApproval(id) {
@@ -407,7 +434,8 @@ export const httpData: ConsoleData = {
   },
 
   async pendingApprovalCount() {
-    return null;
+    const r = await optional("pending approvals", api<{ operations: ApiOperation[] }>("/v1/operations?status=awaiting_approval&limit=200"));
+    return r ? r.operations.length : null;
   },
 
   async listTokens() {
@@ -423,13 +451,18 @@ export const httpData: ConsoleData = {
     await api<void>(`/v1/tokens/${enc(id)}`, { method: "DELETE" });
   },
   async listProviders() {
-    throw notConnected("providers");
+    const { providers } = await api<{ providers: ApiProvider[] }>("/v1/ai/providers");
+    return providers.map(providerFromApi);
   },
-  async saveProviderKey() {
-    throw notConnected("providers");
+  async saveProviderKey(id, input) {
+    const p = await api<ApiProvider>(`/v1/ai/providers/${enc(id)}`, {
+      method: "PUT",
+      body: { key: input.key || undefined, base_url: input.baseUrl || undefined, model: input.model || undefined },
+    });
+    return providerFromApi(p);
   },
-  async removeProviderKey() {
-    throw notConnected("providers");
+  async removeProviderKey(id) {
+    await api<void>(`/v1/ai/providers/${enc(id)}`, { method: "DELETE" });
   },
   async getBilling() {
     throw notConnected("billing");
