@@ -58,9 +58,12 @@ function writePending(p: Pending | null) {
   }
 }
 
-/** Popups don't come back from in-app browsers (Facebook, Instagram, LINE, Android WebViews). */
+/**
+ * Popups don't come back from in-app browsers: Facebook, Instagram, LINE, Android WebViews, and
+ * the Claude desktop app's browser pane, which opens the window in the same tab.
+ */
 function embeddedBrowser() {
-  return /FBAN|FBAV|Instagram|Line\/|; wv\)/.test(navigator.userAgent);
+  return /FBAN|FBAV|Instagram|Line\/|; wv\)|Claude\//.test(navigator.userAgent);
 }
 
 /** Errors after which only the redirect flow can work. */
@@ -92,8 +95,6 @@ export function GoogleSignIn({
 }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Offer "continue in this tab" once a popup has failed. */
-  const [offerRedirect, setOfferRedirect] = useState(false);
   /** A popup opened in this tab and never reported back: popups can't work in this browser. */
   const [popupBroken, setPopupBroken] = useState(false);
   const router = useRouter();
@@ -134,7 +135,6 @@ export function GoogleSignIn({
       if (p.flow === "popup") {
         setPending(false);
         setPopupBroken(true);
-        setOfferRedirect(true);
         return;
       }
       setPending(true);
@@ -142,7 +142,12 @@ export function GoogleSignIn({
         const { a, fa } = await firebaseAuth(webConfig);
         await fa.setPersistence(a, fa.browserSessionPersistence);
         const cred = await fa.getRedirectResult(a);
-        if (!cred) return;
+        // No result: the browser went to Google's popup page in this tab instead (the redirect
+        // raced a blocked popup's navigation). Use the redirect flow from now on.
+        if (!cred) {
+          setPopupBroken(true);
+          return;
+        }
         const idToken = await cred.user.getIdToken();
         await fa.signOut(a);
         await finish(idToken, p.intent, p.returnTo);
@@ -192,9 +197,13 @@ export function GoogleSignIn({
         let cred;
         try {
           cred = await fa.signInWithPopup(a, provider);
-        } finally {
-          writePending(null);
+        } catch (e) {
+          // A blocked popup may still have sent this tab to Google (the Claude browser pane does);
+          // keep the marker so that coming back here switches to the redirect flow.
+          if (!USE_REDIRECT.has((e as { code?: string }).code ?? "")) writePending(null);
+          throw e;
         }
+        writePending(null);
         idToken = await cred.user.getIdToken();
         await fa.signOut(a);
       }
@@ -202,7 +211,6 @@ export function GoogleSignIn({
     } catch (e) {
       const code = (e as { code?: string }).code ?? "";
       if (USE_REDIRECT.has(code)) return redirect();
-      if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") setOfferRedirect(true);
       fail(e);
     } finally {
       setPending(false);
@@ -220,11 +228,12 @@ export function GoogleSignIn({
         {pending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <GoogleG />}
         {pending ? "Waiting for Google…" : label}
       </button>
-      {offerRedirect && !pending && (
+      {webConfig && !pending && (
+        // Always offered: no detection catches every browser where the popup can't work.
         <p className="text-[12px] text-fg-muted">
-          Sign-in window didn&apos;t work?{" "}
+          {popupBroken ? "The sign-in window opened in this tab and couldn't finish. " : "Sign-in window not opening? "}
           <button type="button" onClick={redirect} className="text-accent hover:underline">
-            Continue in this tab
+            Sign in in this tab
           </button>
         </p>
       )}
