@@ -52,12 +52,17 @@ SEED
   echo "seeded: user $email, workspace demo ($ws); PAT and console token in $STATE/seed.env"
 }
 
+data_seed() {  # shipcube-data: catalog + demo warehouse for the seeded workspace (idempotent)
+  dc run --rm --no-deps data-seed
+}
+
 case "${1:-}" in
   up)
     dc build
     docker pull -q python:3.12-slim >/dev/null   # base of the profiler sandbox (PR #30): first estimate is faster
     migrate
     seed
+    data_seed
     dc --profile ollama up -d --wait --remove-orphans "${services[@]}"
     if [ "$ollama" = 1 ]; then dc exec ollama ollama pull "${LOCAL_LLM_MODEL:-qwen2.5:0.5b}" >/dev/null; fi
     dc ps
@@ -77,13 +82,17 @@ URLS
     echo "reset: database, seed and deployed local apps removed"
     ;;
   migrate) migrate ;;
-  seed) seed ;;
+  seed) seed; data_seed ;;
   smoke)
     [ -f "$STATE/seed.env" ] || { echo "run 'up' first" >&2; exit 1; }
     cd "$HERE/../.."
     export SHIPCUBE_MCP_URL="http://localhost:${SHIPCUBE_API_PORT:-18080}/mcp"
     export SHIPCUBE_GATEWAY_URL="http://localhost:${SHIPCUBE_GATEWAY_PORT:-18090}"
-    exec uv run --project deploy/local/smoke python deploy/local/smoke/smoke.py "${@:2}"
+    rc=0
+    uv run --project deploy/local/smoke python deploy/local/smoke/smoke.py "${@:2}" || rc=$?
+    echo; echo "== data layer smoke (shipcube-data)"
+    (cd "$HERE" && dc run --rm --no-deps data-seed shipcube-data smoke) || rc=$?
+    exit $rc
     ;;
   logs) dc logs -f --tail 100 "${@:2}" ;;
   ps) dc ps ;;

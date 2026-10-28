@@ -28,7 +28,15 @@ x-switches: &switches
   DOCKER_HOST: unix:///var/run/docker.sock
   SHIPCUBE_TOKEN_PEPPER: local-dev-pepper-not-a-secret-0123456789abcdef
   SHIPCUBE_AI_GATEWAY_URL: http://gateway:8080
-  SHIPCUBE_DATA_DEMO_TENANTS: shipcube.local=acme,example.com=acme   # seeded user's domain -> demo tenant
+  # Data layer (shipcube-data PR #7): catalog in this stack's Postgres, Olist demo warehouse in DuckDB.
+  SHIPCUBE_DATA_CATALOG_URL: postgresql://postgres:local@postgres:5432/shipcube_data
+  SHIPCUBE_DATA_WAREHOUSE: ${SHIPCUBE_DATA_WAREHOUSE:-duckdb}
+  SHIPCUBE_DATA_DUCKDB_PATH: /data/olist.duckdb
+  SHIPCUBE_DATA_WAREHOUSE_URL: postgresql://postgres:local@postgres:5432/warehouse?sslmode=disable
+  SHIPCUBE_DATA_ALLOWED_DB_HOSTS: postgres
+  SHIPCUBE_DATA_DEMO_TENANTS: shipcube.local=acme,example.com=acme,globex.test=globex   # seeded user's domain -> demo tenant
+  SHIPCUBE_DATA_QUERY_TIMEOUT_S: "30"
+  SHIPCUBE_DATA_MAX_ROWS: "10000"
   SHIPCUBE_LOCAL_NETWORK: shipcube-local
   META_API_KEY: ${META_API_KEY:-}
   META_BASE_URL: ${META_BASE_URL:-https://api.meta.ai/v1}
@@ -71,8 +79,20 @@ services:
       SHIPCUBE_DATABASE_URL: postgresql://sc-worker%40shipcube-control-ks.iam:local@postgres:5432/shipcube
     entrypoint: ["python", "-m", "shipcube_api.admin"]
 
+  # One-off: shipcube-data's catalog + demo warehouse for the seeded workspace (idempotent).
+  data-seed:
+    <<: *control-plane
+    profiles: [tools]
+    environment:
+      <<: *switches
+    volumes: ["shipcube-data:/data"]
+    command: ["shipcube-data", "seed"]
+
   api:
     <<: *control-plane
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - shipcube-data:/data:ro
     environment:
       <<: *switches
       SHIPCUBE_DATABASE_URL: postgresql://sc-api%40shipcube-control-ks.iam:local@postgres:5432/shipcube
@@ -120,5 +140,6 @@ networks:
     name: shipcube-local
 
 volumes:
+  shipcube-data:
   pgdata:
   ollama:

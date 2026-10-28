@@ -118,6 +118,25 @@ async def run(r: Report) -> None:
         if me:
             r.add("whoami", "PASS", f"{me.get('email')} in {me['workspace']['name']}")
 
+        # 2a. load estimator on an inline app: the profiler must measure it in the Docker sandbox
+        inline = {"kind": "inline", "files": [
+            {"path": "app.py", "content": "from flask import Flask\napp = Flask(__name__)\n\n"
+             "@app.get('/')\ndef index():\n    return 'hello'\n"},
+            {"path": "requirements.txt", "content": "flask>=3.0\n"}]}
+        est = await step("estimate_load (inline, sandbox)",
+                         call("estimate_load", {"source": inline, "expected_users": 25, "wait_s": 30}))
+        if est:
+            op = await step("estimate_load (operation)", finish(est["operation"], "inline estimate", 600))
+            if op and op["status"] == "succeeded":
+                res = op["result"]
+                meas = (res.get("profile") or {}).get("measurements") or {}
+                ok = meas.get("runner") == "docker" and meas.get("mode") == "measured"
+                r.add("estimate_load (inline, sandbox)", "PASS" if ok else "FAIL",
+                      f"runner={meas.get('runner')} mode={meas.get('mode')} → {res.get('workload_class')} "
+                      f"{res.get('tier')}, explained_by={res.get('explained_by')}")
+            elif op:
+                r.add("estimate_load (inline, sandbox)", "FAIL", f"{op['status']}: {op.get('error')}")
+
         # 2. source upload
         source = None
         up = await step("create_upload", call("create_upload"))
