@@ -1368,7 +1368,7 @@ source = { git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=ml%2Fwork
 [[package]]
 name = "shipcube-data"
 version = "0.2.0"
-source = { git = "https://github.com/Kunal-Shahi/shipcube-data?rev=21fc62d#21fc62d892d9e7f422a2645850d5f20310152ba5" }
+source = { git = "https://github.com/Kunal-Shahi/shipcube-data?rev=d0faf0b35f55#d0faf0b35f558936eab09c72ba041d81f06feb4a" }
 dependencies = [
     { name = "pydantic" },
     { name = "sqlglot" },
@@ -1377,6 +1377,9 @@ dependencies = [
 [package.optional-dependencies]
 duckdb = [
     { name = "duckdb" },
+]
+http = [
+    { name = "fastapi" },
 ]
 postgres = [
     { name = "psycopg", extra = ["binary"] },
@@ -1397,7 +1400,7 @@ dependencies = [
 
 [package.optional-dependencies]
 data = [
-    { name = "shipcube-data", extra = ["duckdb", "postgres"] },
+    { name = "shipcube-data", extra = ["duckdb", "http", "postgres"] },
 ]
 estimator = [
     { name = "shipcube-api", extra = ["estimator"] },
@@ -1416,7 +1419,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9" },
     { name = "shipcube-api", editable = "../api" },
     { name = "shipcube-api", extras = ["estimator"], marker = "extra == 'estimator'", editable = "../api" },
-    { name = "shipcube-data", extras = ["duckdb", "postgres"], marker = "extra == 'data'", git = "https://github.com/Kunal-Shahi/shipcube-data?rev=21fc62d" },
+    { name = "shipcube-data", extras = ["duckdb", "postgres", "http"], marker = "extra == 'data'", git = "https://github.com/Kunal-Shahi/shipcube-data?rev=d0faf0b35f55" },
     { name = "starlette" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
