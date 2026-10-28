@@ -13,10 +13,10 @@ from .conftest import new_workspace  # noqa: E402
 
 
 @pytest.fixture
-def seeded(tmp_path):
+def seeded(client, tmp_path):  # client first: startup applies the API and catalog migrations
     w = new_workspace(scopes=["apps:read", "data:read", "data:migrate"])
     local.seed(local.Settings(catalog_url=os.environ["SHIPCUBE_DATA_CATALOG_URL"], workspace=str(w["workspace_id"]),
-                              duckdb_path=str(tmp_path / "olist.duckdb"), tenants={"example.com": "acme"}))
+                              duckdb_path=str(tmp_path / "olist.duckdb"), tenants={"example.com": "acme"}, shared=True))
     return w
 
 
@@ -44,15 +44,16 @@ def test_scopes_and_workspaces(client, seeded):
     other = new_workspace(scopes=["apps:read"])
     r = client.get("/v1/data/cubes", headers=other["agent"])
     assert r.status_code == 403 and r.json()["error"]["code"] == "permission_denied"
-    # Another workspace has no catalog of its own and never sees this one's.
-    r = client.get("/v1/data/migrations", headers=other["human"])
-    assert r.status_code == 404 and r.json()["error"]["code"] == "catalog_not_migrated"
+    # Another workspace never sees this one's catalog: row-level security on the shared catalog.
+    assert client.get("/v1/data/migrations", headers=other["human"]).json() == []
+    assert client.get("/v1/data/cubes", headers=other["human"]).json() == []
+    assert client.get("/v1/data/warehouse", headers=other["human"]).json() == {"connected": False, "model_version": 0}
 
 
 def test_only_a_different_person_applies(client, seeded):
-    from shipcube_data.local import tools_from_env
+    from shipcube_api import data_layer
 
-    mid = tools_from_env().call("data_propose_migration", {
+    mid = data_layer.tools().call("data_propose_migration", {
         "description": "Buyers", "ops": [{"op": "add_measure", "name": "orders.buyers", "sql": "customer_id", "agg": "count_distinct"}],
     }, agent_caller(seeded))["id"]
     m = client.get(f"/v1/data/migrations/{mid}", headers=seeded["human"]).json()
@@ -89,3 +90,55 @@ def test_put_warehouse_is_console_admin_only(client, seeded):
     r = client.post("/v1/data/warehouse:test", headers=seeded["human"], json=body)
     assert r.status_code == 403 and "non-public" in r.json()["error"]["message"]  # private hosts are refused
 
+
+
+def test_put_warehouse_end_to_end_with_the_api_secret_store(client, tmp_path, monkeypatch):
+    """Save a Postgres warehouse through the API's own secret store (#35) and secret_refs, then read it back."""
+    workspace = pytest.importorskip("shipcube_api.workspace")
+    from psycopg.conninfo import conninfo_to_dict
+
+    from shipcube_api import auth, db
+    from shipcube_api.settings import settings
+
+    pg = conninfo_to_dict(os.environ["SHIPCUBE_DATABASE_URL"])
+    host = pg.get("host") or "localhost"
+    if host.startswith("/"):
+        pytest.skip("needs a TCP Postgres host for the warehouse test")
+    monkeypatch.setenv("SHIPCUBE_DATA_ALLOWED_DB_HOSTS", host)
+    monkeypatch.setenv("SHIPCUBE_LOCAL_SECRETS_FILE", str(settings.local_secrets_file))  # where the API's store writes
+    w = new_workspace(scopes=["apps:read", "data:read"])
+    base = os.environ["SHIPCUBE_DATABASE_URL"].rsplit("/", 1)[0]
+    warehouse_db = f"wh_{uuid.uuid4().hex[:8]}"
+    local.seed(local.Settings(catalog_url=os.environ["SHIPCUBE_DATA_CATALOG_URL"], workspace=str(w["workspace_id"]), warehouse="postgres",
+                              warehouse_url=f"{base}/{warehouse_db}?sslmode=disable", tenants={"example.com": "acme"}, shared=True))
+    body = {"kind": "postgres", "host": host, "port": int(pg.get("port") or 5432), "database": warehouse_db,
+            "user": pg.get("user") or "postgres", "password": pg.get("password") or "local-pw", "ssl": "disable"}
+    tested = client.post("/v1/data/warehouse:test", headers=w["human"], json=body)
+    assert tested.status_code == 200 and tested.json()["tables"] > 0, tested.text
+    saved = client.put("/v1/data/warehouse", headers=w["human"], json=body)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["warehouse"]["connected"] and {"label": "Status", "value": "reachable"} in saved.json()["warehouse"]["details"]
+    caller = auth.verify(w["human"]["Authorization"].removeprefix("Bearer "))
+    with db.tx(caller) as conn:
+        refs = conn.execute("select kind, resource_name, last4 from secret_refs where workspace_id = %s and destroyed_at is null"
+                            " and kind = 'warehouse_credential'", (caller.workspace_id,)).fetchall()
+    assert len(refs) == 1 and refs[0]["resource_name"].startswith(f"projects/local/secrets/ws-{w['workspace_id']}-warehouse_credential-")
+    assert workspace.verified_projects(caller) == []  # nothing linked: BigQuery is refused
+    bq = {"kind": "bigquery", "project": "p", "location": "US", "service_account_key": "{}"}
+    assert client.post("/v1/data/warehouse:test", headers=w["human"], json=bq).status_code == 403
+
+
+def test_the_catalog_is_under_row_level_security(client, seeded):
+    """Security's requirement: the API's role sees catalog rows only for app.workspace_id, and none without it."""
+    from shipcube_api import auth, db
+
+    caller = auth.verify(seeded["human"]["Authorization"].removeprefix("Bearer "))
+    with db.tx(caller) as conn:
+        assert conn.execute("select count(*) as n from catalog.cubes").fetchone()["n"] == 5
+    with db.tx(role=db.APP) as conn:  # no app.workspace_id: fail closed
+        assert conn.execute("select count(*) as n from catalog.cubes").fetchone()["n"] == 0
+    with db.tx(role=db.APP) as conn:
+        flags = conn.execute("select bool_and(relrowsecurity and relforcerowsecurity) as ok from pg_class c"
+                             " join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'catalog' and c.relkind = 'r'"
+                             " and c.relname <> 'catalog_schema_migrations'").fetchone()
+    assert flags["ok"] is True

@@ -85,6 +85,9 @@ def main(argv: list[str] | None = None) -> None:
 
     if a.cmd == "migrate":  # infra/db/migrate.sh runs this as sc-migrator
         print("applied:", db.migrate() or "nothing")
+        from . import data_layer  # shipcube-data's shared catalog, right after the API's schema (it uses app_workspace())
+
+        print("data catalog applied:", data_layer.migrate_catalog(db.dsn()) or "nothing")
         return
     if pending := db.pending_migrations():
         sys.exit(f"schema not current ({', '.join(pending)}); run infra/db/migrate.sh first")

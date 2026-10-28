@@ -41,6 +41,7 @@ def startup() -> None:
     """Also called by the combined MCP + API server, whose lifespan the API app doesn't get."""
     obs.setup_logging()
     db.check_schema(migrate_if_dev=settings.dev_mode)  # production: migrations run via infra/db/migrate.sh
+    data_layer.check_catalog(migrate_if_dev=settings.dev_mode)
     deployer()  # fail at startup, not on the first request, if the backend is misconfigured
     if settings.dev_mode and (tok := os.environ.get("SHIPCUBE_DEV_CONSOLE_TOKEN")):
         with db.tx(role=db.APP) as conn:  # DEV_MODE stand-in for a console login, for the bootstrap user
