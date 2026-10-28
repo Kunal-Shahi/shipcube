@@ -16,10 +16,23 @@ def test_every_migration_is_applied_with_its_checksum(client):
         applied = {r["version"]: r["sha256"] for r in conn.execute("select version, sha256 from schema_migrations")}
     files = sorted(db.MIGRATIONS.glob("*.sql"))
     assert [f.stem for f in files] == ["0001_security_schema", "0002_operations_runner",
-                                       "0003_tenant_rls_and_rate_counters", "0004_api_token_lookup"]
+                                       "0003_tenant_rls_and_rate_counters", "0004_api_token_lookup",
+                                       "0005_lock_migration_ledger"]
     for f in files:
         assert applied[f.stem] == hashlib.sha256(f.read_bytes()).hexdigest()
     assert db.pending_migrations() == []
+
+
+def test_service_roles_can_read_but_not_forge_the_migration_ledger(client):
+    import psycopg
+
+    for role in (db.APP, db.WORKER):
+        with db.tx(role=role) as conn:
+            assert conn.execute("select count(*) as n from schema_migrations").fetchone()["n"] >= 5  # check_schema reads it
+        for stmt in ("insert into schema_migrations (version, sha256) values ('9999_forged', 'x')",
+                     "update schema_migrations set sha256 = 'x'", "delete from schema_migrations", "truncate schema_migrations"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege), db.tx(role=role) as conn:
+                conn.execute(stmt)
 
 
 def test_tenant_tables_are_isolated_for_the_api_role_and_open_to_the_worker(client):
