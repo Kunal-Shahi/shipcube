@@ -1,9 +1,0 @@
-substitutions:
-  _IMAGES: asia-south1-docker.pkg.dev/shipcube-control-ks/platform
-  _TAG: dev
-options:
-  logging: CLOUD_LOGGING_ONLY
-steps:
-  - name: gcr.io/cloud-builders/docker
-    args: ["build", "-f", "deploy/migrate.Dockerfile", "-t", "${_IMAGES}/migrate:${_TAG}", "."]
-images: ["${_IMAGES}/migrate:${_TAG}"]
