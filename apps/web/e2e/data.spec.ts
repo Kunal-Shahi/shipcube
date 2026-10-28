@@ -51,7 +51,7 @@ test("the proposer can't apply their own change, but can reject it with a note",
   await page.getByRole("button", { name: "Apply to the model" }).click();
   // The seeded console user also owns the PAT that proposed it, so the API refuses (two-person rule, 403).
   // The console currently shows its generic permission message rather than the API's reason.
-  await expect(page.getByText(/person who proposed it|doesn't allow this/i)).toBeVisible();
+  await expect(page.getByText(/person who proposed it/i)).toBeVisible();
   await page.locator("#mig-note").fill("e2e: rejected by the local stack's Playwright run");
   await page.getByRole("button", { name: "Reject" }).click();
   await expect(page.getByText("Rejected", { exact: true })).toBeVisible();
