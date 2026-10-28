@@ -137,6 +137,10 @@ def test_linking_a_gcp_project(client, ws):
     me = client.get("/v1/me", headers=ws["agent"]).json()
     assert [g["project"] for g in me["gcp_targets"] if g["kind"] == "linked"] == ["my-proj-123"]
     assert client.get("/v1/billing", headers=ws["agent"]).json()["gcp"]["project_id"] == "my-proj-123"
+    from shipcube_api import auth, workspace
+
+    caller = auth.verify(ws["agent"]["Authorization"].removeprefix("Bearer "), None)
+    assert workspace.verified_projects(caller) == ["my-proj-123"]  # broken links don't count
 
 
 def test_recently_deleted_apps(client, ws):

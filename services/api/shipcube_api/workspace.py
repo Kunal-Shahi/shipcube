@@ -186,6 +186,15 @@ def gcp_targets(caller: Caller) -> dict[str, Any]:
     return {"deployer_sa": isolation.link_deployer_sa(settings, caller.workspace_id), "targets": [_link_view(r) for r in rows]}
 
 
+def verified_projects(caller: Caller) -> list[str]:
+    """Project ids of the workspace's active links (testIamPermissions passed); for shipcube-data,
+    which only accepts BigQuery warehouses in these projects."""
+    with db.tx(caller) as conn:
+        return [r["project_id"] for r in conn.execute(
+            "select project_id from gcp_links where workspace_id = %s and status = 'active' order by created_at",
+            (caller.workspace_id,)).fetchall()]
+
+
 def link_project(deployer: Deployer, caller: Caller, project_id: str, region: str) -> dict[str, Any]:
     """Record the link and check it as the workspace's deployer. Missing permissions leave it
     'broken' with the list, so the console can show what link-project.sh still has to grant."""
