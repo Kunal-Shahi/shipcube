@@ -112,6 +112,11 @@ URLS
     ;;
   e2e)   # console + Auth emulator, then frontend's Playwright suite (run after `smoke`)
     [ -f "$STATE/seed.env" ] || { echo "run 'up' and 'smoke' first" >&2; exit 1; }
+    # compose interpolates ${SHIPCUBE_DEV_CONSOLE_TOKEN} from the shell, not from env_file: load the seed.
+    set -a
+    # shellcheck source=/dev/null
+    . "$STATE/seed.env"
+    set +a
     dc --profile console up -d --wait --build console auth-emulator
     cd "$ROOT/apps/web"
     npm ci --silent
