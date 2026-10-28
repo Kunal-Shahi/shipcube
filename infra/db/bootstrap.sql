@@ -20,6 +20,13 @@ grant usage, create on schema public to shipcube_owner;
 grant usage on schema public to shipcube_app, shipcube_worker, shipcube_readonly;
 revoke create on schema public from public;
 
+-- shipcube-data's catalog: schema `catalog`, tables created by `admin migrate` as shipcube_owner, every
+-- one under FORCE ROW LEVEL SECURITY on app_workspace(). Created here because shipcube_owner has no
+-- CREATE on the database; owned by postgres like public (postgres can't act as shipcube_owner on Cloud SQL).
+create schema if not exists catalog;
+grant usage, create on schema catalog to shipcube_owner;
+grant usage on schema catalog to shipcube_app, shipcube_worker, shipcube_readonly;
+
 -- Each service's IAM database user can act only as its own role.
 grant shipcube_owner  to "sc-migrator@shipcube-control-ks.iam";
 grant shipcube_app    to "sc-api@shipcube-control-ks.iam";

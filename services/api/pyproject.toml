@@ -37,7 +37,7 @@ packages = ["shipcube_api"]
 testpaths = ["tests"]
 
 [tool.uv.sources]
-shipcube-data = { git = "https://github.com/Kunal-Shahi/shipcube-data", rev = "34cf139f4636508555767fa17c5b4062bbb8232d" }  # PR #7; repin to its merge commit
+shipcube-data = { git = "https://github.com/Kunal-Shahi/shipcube-data", rev = "ca1bd16f8952f284d84cdc85d04f51d2fb7396d1" }  # PR #7; repin to its merge commit
 shipcube-placement = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "packages/placement" }
 shipcube-profiler = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "packages/profiler" }
 shipcube-classifier = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "ml/workload-classifier" }

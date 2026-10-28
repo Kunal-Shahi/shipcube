@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
 import uuid
 from typing import Any, Callable
 
@@ -90,7 +91,10 @@ def migrate_catalog(conn_str: str) -> list[str]:
     try:
         from shipcube_data.db import migrate_shared_catalog
     except ImportError:
-        return []
+        if os.environ.get("SHIPCUBE_DATA_OPTIONAL") == "1":
+            return []
+        raise RuntimeError("shipcube-data is not installed, so the data catalog can't be migrated: run with the `data` extra "
+                           "(uv run --extra data), or set SHIPCUBE_DATA_OPTIONAL=1 for a deployment without the data layer") from None
     return migrate_shared_catalog(conn_str)
 
 
