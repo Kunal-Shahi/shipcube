@@ -107,7 +107,7 @@ Rollout:
 
 ```bash
 brew install cloud-sql-proxy libpq                      # once
-infra/db/bootstrap.sh                                   # once per instance, as postgres
+infra/db/bootstrap.sh                                   # per instance, and again when bootstrap.sql changes (idempotent), as postgres
 API_DIR=services/api PYTHON=python3.12 infra/db/migrate.sh   # every migration, as sc-migrator
 ```
 
@@ -116,5 +116,13 @@ API_DIR=services/api PYTHON=python3.12 infra/db/migrate.sh   # every migration, 
 ```bash
 LOGIN=sc-api infra/db/checks/check.sh
 ```
+
+### Pending live steps (Cloud SQL), in order
+
+The instance must be running. Take an on-demand backup first (`gcloud sql backups create --instance shipcube-pg --project shipcube-control-ks`), and run `check.sh` after each step. An API build refuses to start while its migrations are pending (`check_schema`), so each step must come **before** the deploy that needs it.
+
+1. **Before deploying #38 (shipcube-data catalog):** re-run `infra/db/bootstrap.sh`. `bootstrap.sql` now creates schema `catalog` (owned by postgres) and grants `shipcube_owner` CREATE in it. Without this step, the catalog migration fails with "permission denied for database shipcube".
+2. **Before deploying #35 (migration 0005, read-only migration ledger):** `migrate.sh` applies `0005_lock_migration_ledger.sql`. After that, `check.sh` reports `PASS 5` for `public.schema_migrations`.
+3. **With #38:** the same `migrate.sh` run applies the catalog (`data catalog applied: ['0001_catalog.sql']`), and `check.sh` then runs `PASS 6` on the catalog tables.
 
 The `postgres` password is only in Secret Manager (`sql-postgres-password`); rotate it by bumping `postgres_password_version`.
