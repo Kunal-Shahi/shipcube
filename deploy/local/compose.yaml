@@ -147,6 +147,45 @@ services:
     depends_on:
       secretmanager: {condition: service_healthy}
 
+  # Console + Firebase Auth emulator (frontend, PR #34; needs #13's /v1/tokens): `make e2e`.
+  auth-emulator:
+    image: node:22-slim
+    profiles: [console]
+    working_dir: /emu
+    command: ["npx", "-y", "firebase-tools@13", "emulators:start", "--only", "auth", "--project", "demo-shipcube"]
+    volumes: ["./firebase.json:/emu/firebase.json:ro"]
+    ports: ["127.0.0.1:${SHIPCUBE_AUTH_EMULATOR_PORT:-9099}:9099"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9099/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      retries: 40
+
+  console:
+    build: {context: ../.., dockerfile: deploy/web.Dockerfile}
+    image: shipcube-local/console:dev
+    profiles: [console]
+    environment:
+      PORT: "3000"
+      DEV_MODE: "1"
+      AUTH_PROVIDER: ${SHIPCUBE_CONSOLE_AUTH:-firebase-emulator}   # mock = fallback without the emulator
+      FIREBASE_AUTH_EMULATOR_HOST: auth-emulator:9099
+      FIREBASE_AUTH_EMULATOR_PUBLIC_URL: http://localhost:${SHIPCUBE_AUTH_EMULATOR_PORT:-9099}
+      SHIPCUBE_API_URL: http://api:8080
+      SHIPCUBE_API_TIMEOUT_MS: "30000"
+      SHIPCUBE_MCP_URL: http://localhost:${SHIPCUBE_API_PORT:-18080}/mcp
+      SHIPCUBE_DEV_API_SESSION: ${SHIPCUBE_DEV_CONSOLE_TOKEN:-}   # the API can't verify emulator tokens
+    env_file:
+      - path: .state/seed.env
+        required: false
+    ports: ["127.0.0.1:${SHIPCUBE_CONSOLE_PORT:-3000}:3000"]
+    depends_on:
+      api: {condition: service_healthy}
+      auth-emulator: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      retries: 40
+
   # Optional local model for the gateway's OpenAI-compatible upstream: LOCAL_LLM=ollama in .env.
   ollama:
     image: ollama/ollama:0.12.6

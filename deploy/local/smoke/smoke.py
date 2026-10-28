@@ -262,6 +262,18 @@ async def run(r: Report) -> None:
                         op = await step("operation (delete)", finish(a.json(), "delete"))
                 if op and op.get("status") == "succeeded":
                     r.add("delete_app (approved in console)", "PASS", "soft-deleted, restorable for 7 days")
+                    # Restore it (a console action), so the app is running again for the console e2e tests.
+                    rs = console.post(f"/v1/apps/{APP}/restore")
+                    if rs.status_code != 202:
+                        r.add("restore (console)", "FAIL", f"{rs.status_code}: {rs.text[:200]}")
+                    else:
+                        op2 = await step("operation (restore)", finish(rs.json(), "restore"))
+                        if op2 and op2.get("status") == "succeeded":
+                            back = httpx.get(direct, headers=headers, timeout=30)
+                            r.add("restore (console)", "PASS" if back.status_code == 200 else "FAIL",
+                                  f"app answers again: {back.status_code}")
+                        elif op2:
+                            r.add("restore (console)", "FAIL", f"{op2['status']}: {op2.get('error')}")
                 elif op:
                     r.add("delete_app (approved in console)", "FAIL", f"{op['status']}: {op.get('error')}")
 

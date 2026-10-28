@@ -99,11 +99,29 @@ Then open http://localhost:3000. The dev sign-in acts as the seeded user.
 Each step prints `ok`, `FAIL` or `skip`, and the exit code is non-zero on any failure. CI runs the
 same `make up && make smoke` (job `local-stack`).
 
+## Console end-to-end tests
+
+`make e2e` (after `make smoke`) starts the console and the Firebase Auth emulator, the `console`
+compose profile from frontend's PR #34, then runs the Playwright suite in `apps/web`:
+
+1. sign in through the emulator;
+2. create a PAT;
+3. check that the setup guide shows the local MCP URL;
+4. find the smoke app in the list;
+5. grant access and change the spending cap;
+6. delete the app (approved in the console), then restore it.
+
+It needs PR #13 (`/v1/tokens`) and PR #34 merged, and internet access (the emulator's sign-in popup
+loads Google scripts). `SHIPCUBE_CONSOLE_AUTH=mock` uses the mock sign-in instead of the emulator. The
+console then calls the API as the seeded dev user, whoever signs in; the API verifies only
+Google-signed tokens.
+
 ## Runbook
 
 | Symptom | Fix |
 |---|---|
 | `Docker isn't running` | `colima start` (macOS) |
+| A container can't find a mounted file (e.g. `secretmanager` exits 2) | Colima shares only `$HOME` into its VM: keep the checkout under your home directory, not `/tmp` |
 | `api` unhealthy, logs say `schema is not current` | `make migrate`. Services never migrate themselves. |
 | Database roles or passwords changed (`infra/local/`) | `make reset`. `db-init` sets up an empty database. |
 | App build fails in `[detector]` with an `asm_amd64` stack | An amd64-only builder on an arm64 host: set `SHIPCUBE_BUILDER=heroku/builder:24` |
