@@ -25,6 +25,7 @@ from typing import Any, Callable
 import google.auth
 import requests
 from google.auth import impersonated_credentials
+from google.oauth2 import credentials as user_credentials
 from google.auth.transport.requests import AuthorizedSession, Request
 
 from ..settings import Settings
@@ -53,8 +54,9 @@ class GcpDeployer:
         self.s = s
         self._adc, _ = google.auth.default(scopes=SCOPES)
         # User ADC without a quota project shares the gcloud client's quotas (Resource Manager
-        # returned 429 in testing). Bill API quota to our control project instead.
-        if hasattr(self._adc, "with_quota_project") and not getattr(self._adc, "quota_project_id", None):
+        # returned 429 in testing). Bill API quota to our control project instead. Service accounts
+        # already bill their own project; a quota project would also need serviceUsageConsumer there.
+        if isinstance(self._adc, user_credentials.Credentials) and not self._adc.quota_project_id:
             self._adc = self._adc.with_quota_project(s.control_project)
         self._sessions: dict[str | None, AuthorizedSession] = {}
         self._project_numbers: dict[str, str] = {}
@@ -238,6 +240,8 @@ class GcpDeployer:
 
     def _service_body(self, app: AppRef, image: str, caps: dict[str, Any], env: dict[str, str], sa: str) -> dict[str, Any]:
         c = normalize_caps(caps)
+        if self.s.ai_gateway_url:
+            env = {"SHIPCUBE_AI_GATEWAY": self.s.ai_gateway_url, **env}
         return {
             "labels": {"shipcube-app": app.name, "shipcube-workspace": app.workspace_id[:8], "managed-by": "shipcube"},
             "ingress": "INGRESS_TRAFFIC_ALL",

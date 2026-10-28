@@ -53,6 +53,7 @@ cd ../mcp && uv run python -m shipcube_mcp.server          # /mcp + /v1 on :8080
 |---|---|---|
 | `SHIPCUBE_DATABASE_URL` | required | Postgres. On Cloud SQL, connect as the IAM database user for `shipcube_app` (API) or `shipcube_worker` (standalone worker). |
 | `SHIPCUBE_DB_SET_ROLE` | `1` | `SET LOCAL ROLE shipcube_app` (API) or `shipcube_worker` (worker, CLI) per transaction, for local and test logins that are superusers. **Set to `0` on Cloud SQL**, where each IAM login already starts in its role (`infra/db/bootstrap.sql`). |
+| `SHIPCUBE_DB_IAM_AUTH` | unset | `1` on Cloud Run: each new connection authenticates with an IAM token for the service account (Cloud SQL IAM database auth over the built-in `/cloudsql/<instance>` socket; no proxy, no password) |
 | `SHIPCUBE_TOKEN_PEPPER` | required outside DEV_MODE | HMAC pepper for token digests, from Secret Manager |
 | `SHIPCUBE_IDP_PROJECT` | unset | Identity Platform project for console ID tokens (approvals, restore) |
 | `SHIPCUBE_BACKEND` | `gcp` (`mock` in DEV_MODE) | `mock` is refused outside DEV_MODE |
@@ -77,9 +78,9 @@ printf 'access_settings:\n  oauth_settings:\n    client_id: CLIENT_ID\n    clien
 
 **Schema:** `API_DIR=services/api infra/db/migrate.sh` (security's script) applies pending migrations as `sc-migrator`, using `python -m shipcube_api.admin migrate`, before new code rolls out. Services check the schema at startup and refuse to start if a migration is pending.
 
-**Services:** one image, two Cloud Run services, both with `SHIPCUBE_DB_SET_ROLE=0`, `SHIPCUBE_TOKEN_PEPPER` from Secret Manager and Cloud SQL through the connector with IAM authentication.
-- `shipcube-api`: `python -m shipcube_mcp.server` (MCP + API), running as **`sc-api`**, with `min-instances=1`.
-- `shipcube-worker`: `python -m shipcube_api.worker`, running as **`sc-worker`**, with `min-instances=1` and CPU always allocated (it polls the queue). Add instances to deploy in parallel; workers coordinate through row locks.
+**Services:** one image (`deploy/api.Dockerfile`), two Cloud Run services, deployed by `deploy/deploy.sh` (runbook: `deploy/README.md`). Both use `SHIPCUBE_DB_SET_ROLE=0`, `SHIPCUBE_DB_IAM_AUTH=1` over the built-in `/cloudsql` socket, and `SHIPCUBE_TOKEN_PEPPER` from Secret Manager.
+- `shipcube-mcp`: `python -m shipcube_mcp.server` (MCP + API), running as **`sc-api`**, scaling to zero.
+- `shipcube-worker`: `deploy/runtime/worker_service.py` (this module's worker plus a `/healthz` server for Cloud Run), running as **`sc-worker`**, with `min-instances=1` and CPU always allocated (it polls the queue). Workers coordinate through row locks, so more instances deploy in parallel.
 
 Hosting ShipCube itself is the platform workstream's job; this section says what the API needs.
 
