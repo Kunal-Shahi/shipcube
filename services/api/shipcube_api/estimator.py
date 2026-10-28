@@ -11,6 +11,7 @@ exists only in DEV_MODE.
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Protocol
@@ -72,8 +73,15 @@ class DevEstimator:
 
 
 def make_estimator(deployer: Deployer) -> Estimator:
-    if settings.dev_mode:
+    # SHIPCUBE_ESTIMATOR=placement|dev picks explicitly (the local stack runs the real estimator in
+    # DEV_MODE); unset keeps the default: dev in DEV_MODE, placement otherwise.
+    choice = os.environ.get("SHIPCUBE_ESTIMATOR") or ("dev" if settings.dev_mode else "placement")
+    if choice == "dev":
+        if not settings.dev_mode:
+            raise RuntimeError("SHIPCUBE_ESTIMATOR=dev is allowed only with SHIPCUBE_DEV_MODE=1")
         return DevEstimator()
+    if choice != "placement":
+        raise ValueError(f"SHIPCUBE_ESTIMATOR must be placement or dev, not {choice!r}")
     try:
         return PlacementEstimator(deployer)
     except ImportError:

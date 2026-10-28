@@ -1,0 +1,121 @@
+# ShipCube local stack. Run it with `make up` (repo root), which also migrates and seeds; see
+# docs/LOCAL.md. Every component is the real implementation; the switches in .env choose local or GCP.
+name: shipcube-local
+
+x-control-plane: &control-plane
+  build: {context: ../.., dockerfile: deploy/local/api.Dockerfile}
+  image: shipcube-local/api:dev
+  networks: [shipcube-local]
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock   # local deployer, profiler sandbox, local monitor
+  env_file:
+    - path: .env
+      required: false
+    - path: .state/seed.env                       # written by `make seed`
+      required: false
+  depends_on:
+    postgres: {condition: service_healthy}
+
+x-switches: &switches
+  SHIPCUBE_DEV_MODE: "1"                  # dev console sign-in only; components below are real
+  SHIPCUBE_DB_SET_ROLE: "0"               # each login starts in its role, as on Cloud SQL
+  SHIPCUBE_EMBEDDED_WORKER: "0"           # the worker runs separately, as shipcube_worker
+  SHIPCUBE_BACKEND: ${SHIPCUBE_BACKEND:-local}
+  SHIPCUBE_MONITOR: ${SHIPCUBE_MONITOR:-local}
+  SHIPCUBE_ESTIMATOR: ${SHIPCUBE_ESTIMATOR:-placement}
+  SHIPCUBE_PROFILER: ${SHIPCUBE_PROFILER:-local}
+  SHIPCUBE_TOKEN_PEPPER: local-dev-pepper-not-a-secret-0123456789abcdef
+  SHIPCUBE_AI_GATEWAY_URL: http://gateway:8080
+  SHIPCUBE_LOCAL_NETWORK: shipcube-local
+  META_API_KEY: ${META_API_KEY:-}
+  META_BASE_URL: ${META_BASE_URL:-https://api.meta.ai/v1}
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: local
+    ports: ["127.0.0.1:55432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres:/docker-entrypoint-initdb.d:ro
+      - ../../infra/db:/shipcube/infra-db:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shipcube"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [shipcube-local]
+
+  # One-off: owner_defaults.sql + the API's migration runner, as sc-migrator (infra/db/migrate.sh).
+  migrate:
+    <<: *control-plane
+    profiles: [tools]
+    environment:
+      PGPASSWORD: local
+      SHIPCUBE_DATABASE_URL: postgresql://sc-migrator%40shipcube-control-ks.iam:local@postgres:5432/shipcube
+      SHIPCUBE_DB_SET_ROLE: "0"
+    command: >-
+      sh -c "psql 'host=postgres dbname=shipcube user=sc-migrator@shipcube-control-ks.iam' -q
+      -f /srv/infra/db/owner_defaults.sql && python -m shipcube_api.admin migrate"
+
+  # One-off: the operator CLI as sc-worker (shipcube_worker), e.g. bootstrap for `make seed`.
+  admin:
+    <<: *control-plane
+    profiles: [tools]
+    environment:
+      <<: *switches
+      SHIPCUBE_DATABASE_URL: postgresql://sc-worker%40shipcube-control-ks.iam:local@postgres:5432/shipcube
+    entrypoint: ["python", "-m", "shipcube_api.admin"]
+
+  api:
+    <<: *control-plane
+    environment:
+      <<: *switches
+      SHIPCUBE_DATABASE_URL: postgresql://sc-api%40shipcube-control-ks.iam:local@postgres:5432/shipcube
+      ALLOWED_HOSTS: localhost:*,127.0.0.1:*,api:*
+      SHIPCUBE_CONSOLE_URL: http://localhost:3000
+    ports: ["127.0.0.1:8080:8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  worker:
+    <<: *control-plane
+    environment:
+      <<: *switches
+      SHIPCUBE_DATABASE_URL: postgresql://sc-worker%40shipcube-control-ks.iam:local@postgres:5432/shipcube
+    command: ["python", "-m", "shipcube_api.worker"]
+
+  gateway:
+    build: {context: ../../services/gateway}
+    image: shipcube-local/gateway:dev
+    networks: [shipcube-local]
+    environment:
+      DEV_MODE: "1"                       # allows env: secret refs and private upstreams (Ollama)
+      GATEWAY_ALLOW_APP_TOKENS: "1"       # local apps have no Google ID token; per-app scg_ tokens
+      GATEWAY_ALLOW_PRIVATE_UPSTREAM: "1"
+      GATEWAY_REGISTRY_FILE: /state/gateway-registry.json
+      META_API_KEY: ${META_API_KEY:-}
+      META_SECRET_REF: ${META_API_KEY:+env:META_API_KEY}   # set only when a key is configured
+      META_BASE_URL: ${META_BASE_URL:-https://api.meta.ai/v1}
+      OLLAMA_API_KEY: ollama                               # Ollama ignores it; the gateway needs a key ref
+    volumes: ["./.state:/state:ro"]
+    ports: ["127.0.0.1:8090:8080"]
+
+  # Optional local model for the gateway's OpenAI-compatible upstream: `make up LOCAL_LLM=ollama`.
+  ollama:
+    image: ollama/ollama:0.12.6
+    profiles: [ollama]
+    volumes: [ollama:/root/.ollama]
+    networks: [shipcube-local]
+
+networks:
+  shipcube-local:
+    name: shipcube-local
+
+volumes:
+  pgdata:
+  ollama:
