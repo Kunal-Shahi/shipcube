@@ -40,7 +40,11 @@ r.model_dump()                     # -> the estimate_load operation result
   - `image`: static estimate only.
 - **`hints`**: `{expected_users, schedule, region, sample_input, traffic}`, all optional. `traffic` is `office_hours` or `always_on`. When it's omitted, API-only apps (every route under `/api`, `/v1` and similar) are treated as `always_on`.
 - **Keyword arguments:**
-  - `runner=` defaults to `default_runner()`: `CloudRunJobRunner` configured from the environment, or `LocalRunner` only when `SHIPCUBE_DEV_MODE=1`.
+  - `runner=` defaults to `runner_from_env()`, chosen by **`SHIPCUBE_PROFILER`**:
+    - `gcp`: `CloudRunJobRunner` (production)
+    - `local`: `DockerRunner`, the same image in a local container (§4.3)
+    - `inproc`: `LocalRunner` in this process, only with `SHIPCUBE_DEV_MODE=1`
+    - unset: `inproc` in DEV_MODE, otherwise `gcp`
   - `explainer=` defaults to `FallbackExplainer` (Muse, then rules).
 
 **Output.** The networking PR #1 §2.1 fields, plus `explained_by` from the Oct 28 decision, plus three fields added by this PR:
@@ -334,6 +338,61 @@ Every log line carried `estimate_id`, `operation_id` and `logging.googleapis.com
 - A wrong pin and a missing version raise `ModelLoadError`.
 - Re-publishing leaves the immutable objects untouched (412).
 
+### 4.3 Local sandbox: `SHIPCUBE_PROFILER=local` (Docker)
+
+The local stack runs the profiler in a Docker container instead of the Cloud Run job (`docker_runner.py`).
+
+**Same image as production.** It uses the same deterministic build context and Dockerfile as Cloud Build:
+- `python:3.12-slim`, with the app's requirements installed at build time (with network, as in Cloud Build)
+- the agent, running as non-root uid 10001, with `/app` and the agent code read-only
+
+The image tag is a hash of the context, so unchanged code is not rebuilt.
+
+**Isolation, enforced by Docker:**
+
+| Control | Setting |
+|---|---|
+| Network | `--network none`: loopback only, no DNS |
+| Filesystem | `--read-only` root; `/tmp` is a nosuid, nodev tmpfs (512 MiB) |
+| User and privileges | `--user 10001:10001`, `--cap-drop ALL`, `--security-opt no-new-privileges` |
+| CPU and memory | `--cpus 1`, `--memory 2048m`, swap off: the Cloud Run job's 1 vCPU / 2 GiB |
+| Processes and files | `--pids-limit 256`, `nofile 1024` |
+| Wall clock | 600 s; the container is killed after that |
+| Host access | nothing passes from the host environment except the hints; no host mounts |
+
+**Same metrics.** The agent measures inside the container with Linux psutil (CPU, RSS, I/O bytes, processes), plus wall time and blocked egress. Its result is read from `docker run` stdout instead of Cloud Logging. It then feeds the same classifier, policy and explainer: Muse when `META_API_KEY` is set, rules otherwise.
+
+**Tests** (`tests/test_docker_runner.py`; these run on CI's ubuntu runners, which have Docker):
+- **No network.** The app uses the raw `_socket` module, so the Python hook can't stop it. It tries TCP to 1.1.1.1:53, 8.8.8.8:443 and the Docker bridge, and DNS for example.com, and checks that `/proc/net/dev` shows only `lo`.
+  - A control run of the same image *with* the default network connects (exit 3). So the test does fail when the network is reachable.
+- **Locked down:** the app isn't root, can't write `/app`, `/usr` or `/etc`, can write `/tmp`, and has no capabilities.
+- **Limits:** a memory hog is reported as over its limit; a runaway is stopped by the timeout.
+- **Hygiene:** requirements install at build and import offline; the image is reused for the same code; no containers are left behind; no host environment leaks in.
+- **End to end:** both sample apps are measured, and `estimate()` picks the sandbox from the environment alone.
+
+**Measured on Kunal's Mac** (Colima, 4 vCPU, arm64):
+- nightly_batch: 1.0 s, 0.87 vCPU, 27 MiB, psutil I/O, webhook blocked
+- dashboard: 120/120 requests, 0.06 vCPU, 39 MiB
+
+Through `estimate()`, these give the same classes and tiers as the Cloud Run job (§4.2), explained by `muse-spark-1.3`. A first run builds the image in about 15 s.
+
+**Configuration:**
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SHIPCUBE_PROFILER_DOCKER` | `docker` | Docker CLI |
+| `DOCKER_HOST` | Docker's default | Daemon to use |
+| `SHIPCUBE_PROFILER_CPUS` | 1 | CPU limit |
+| `SHIPCUBE_PROFILER_MEMORY_MB` | 2048 | Memory limit (swap off) |
+| `SHIPCUBE_PROFILER_PIDS` | 256 | Process limit |
+| `SHIPCUBE_PROFILER_TIMEOUT_S` | 600 | Wall-clock limit |
+| `SHIPCUBE_PROFILER_TMPFS_MB` | 512 | Size of `/tmp` |
+| `SHIPCUBE_PROFILER_BUILD_TIMEOUT_S` | 900 | Image build limit |
+
+`shipcube_profiler.docker_runner.prune_images()` removes profiler images older than 24 h. It's the local equivalent of the registry's cleanup policy.
+
+**Limit:** this is container isolation on the developer's machine, not the Cloud Run job's microVM, so production still uses `gcp`.
+
 ## 5. Placement (`packages/placement`)
 
 ### 5.1 Tier rules
@@ -411,7 +470,7 @@ Monthly cost by tier:
 python packages/placement/scripts/demo.py           # --rules (no Muse), --json, --logs (structured logs)
 ```
 
-The demo sets `SHIPCUBE_DEV_MODE=1` and runs the samples locally.
+`--sandbox local` profiles in the Docker sandbox. Without it, the demo uses in-process DEV_MODE.
 
 | App | Class | Decided by | Tier → target | Cost/month (low / expected / high) |
 |---|---|---|---|---|
@@ -447,7 +506,8 @@ All configuration comes from the environment.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SHIPCUBE_DEV_MODE` | unset | `1` allows `LocalRunner` (tests, demo, laptops). Never in production |
+| `SHIPCUBE_PROFILER` | `gcp` (`inproc` in DEV_MODE) | Profiler sandbox: `gcp` (Cloud Run job), `local` (Docker, §4.3), or `inproc` |
+| `SHIPCUBE_DEV_MODE` | unset | `1` allows `SHIPCUBE_PROFILER=inproc` (tests, laptops). Never in production |
 | `SHIPCUBE_PROFILER_PROJECT`, `_REGION`, `_BUCKET`, `_REPOSITORY`, `_NETWORK`, `_SUBNET`, `_SERVICE_ACCOUNT` | required in production | Profiler sandbox; Terraform outputs (`packages/profiler/deploy/RESOURCES.md`) |
 | `SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT` | Cloud Build default | Build identity |
 | `SHIPCUBE_MODEL_URI` | `bundled` | `gs://<bucket>/models/workload-classifier/<version or latest>` |

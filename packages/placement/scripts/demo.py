@@ -1,5 +1,6 @@
 """Print an estimate for the two sample apps.
 
+    python packages/placement/scripts/demo.py --sandbox local   # profile in the local Docker sandbox
     python packages/placement/scripts/demo.py           # Muse Spark if META_API_KEY is set
     python packages/placement/scripts/demo.py --rules   # rule-based explanations only
     python packages/placement/scripts/demo.py --json    # full EstimateResult JSON
@@ -19,7 +20,7 @@ from dotenv import find_dotenv, load_dotenv
 
 from shipcube_classifier.obs import configure_logging
 from shipcube_placement import FallbackExplainer, RuleExplainer, estimate
-from shipcube_profiler import LocalRunner
+from shipcube_profiler import runner_from_env
 
 SAMPLES = Path(__file__).resolve().parents[2] / "profiler" / "samples"
 APPS = [
@@ -39,16 +40,25 @@ def main() -> None:
     ap.add_argument("--rules", action="store_true", help="skip Muse Spark")
     ap.add_argument("--json", action="store_true", help="print the full result")
     ap.add_argument("--logs", action="store_true", help="structured JSON logs on stderr")
+    ap.add_argument("--sandbox", choices=["local", "inproc", "gcp"], default=None,
+                    help="profiler: local = Docker sandbox, inproc = this process (DEV_MODE), gcp = Cloud Run "
+                         "job (default: $SHIPCUBE_PROFILER, else inproc)")
     a = ap.parse_args()
     load_dotenv(find_dotenv(usecwd=True))
     if a.logs:
         configure_logging(stream=sys.stderr)
-    # The demo runs the sample apps on this machine: that's DEV_MODE (LocalRunner).
-    # Production uses CloudRunJobRunner, configured from SHIPCUBE_PROFILER_* variables.
-    os.environ.setdefault("SHIPCUBE_DEV_MODE", "1")
+    # SHIPCUBE_PROFILER picks the sandbox (local Docker, Cloud Run job, or in-process).
+    # In-process profiling runs the samples directly on this machine: that's DEV_MODE.
+    if a.sandbox:
+        os.environ["SHIPCUBE_PROFILER"] = a.sandbox
+    os.environ.setdefault("SHIPCUBE_PROFILER", "inproc")
+    if os.environ["SHIPCUBE_PROFILER"] == "inproc":
+        os.environ.setdefault("SHIPCUBE_DEV_MODE", "1")
+    runner = runner_from_env()
+    print(f"profiler: {runner.name}")
     for name, hints in APPS:
         explainer = RuleExplainer() if a.rules else FallbackExplainer()
-        r = estimate(inline(SAMPLES / name), hints, explainer=explainer, runner=LocalRunner())
+        r = estimate(inline(SAMPLES / name), hints, explainer=explainer, runner=runner)
         if a.json:
             print(json.dumps(r.model_dump(), indent=2))
             continue
