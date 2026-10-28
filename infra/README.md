@@ -63,6 +63,29 @@ Manual steps Terraform can't do:
 2. The external OAuth client for IAP in `shipcube-apps`, applied with `gcloud iap settings set` (the IAP OAuth Admin API is shut down for new projects).
 3. Secret values: `meta-api-key` and `token-hmac-pepper` were added at version 1 on Oct 28 (adopted by `imports.tf`). Add or rotate with `printf '%s' "$VALUE" | gcloud secrets versions add NAME --data-file=-`.
 
+## Local stack (database and secrets)
+
+The local database is built the same way as Cloud SQL, so RLS and grants behave identically. Platform's `deploy/local/compose.yaml` includes `local/compose.yaml`; it also runs on its own:
+
+```bash
+python3 infra/local/localsecrets.py init      # .local/secrets.{json,env}, gitignored, 0600; idempotent
+docker compose --env-file .local/secrets.env -f infra/local/compose.yaml up -d --wait db secretmanager
+docker compose --env-file .local/secrets.env -f infra/local/compose.yaml run --rm db-init
+docker compose --env-file .local/secrets.env -f infra/local/compose.yaml run --rm migrate
+infra/local/test.sh
+```
+
+| Piece | Local | Cloud SQL / production | Shared |
+|---|---|---|---|
+| Logins | password logins named `sc-migrator@…iam`, `sc-api@…iam`, `sc-worker@…iam` (`db/local-init.sh`) | IAM database users (Terraform) | the names |
+| Roles, grants, default session roles | `db/bootstrap.sql` | `db/bootstrap.sql` (`bootstrap.sh`) | the file, unchanged |
+| Default privileges | `db/owner_defaults.sql` as sc-migrator | same, before every migration (`migrate.sh`) | the file, unchanged |
+| Migrations | `python -m shipcube_api.admin migrate` as sc-migrator (compose `migrate`) | same, through the proxy (`migrate.sh`) | the runner and `services/api/migrations` |
+| Secrets | `local/localsecrets.py` generates values (prefix `sclocal_`) into `.local/`; `local/secretmanager.py` serves them at Secret Manager's REST path; compose passes them as env | Secret Manager; Cloud Run injects env | the secret names and env names |
+| Isolation checks | `local/test.sh` | `db/checks/check.sh` | `db/checks/rls_and_token.sql` via `db/checks/run.sh` |
+
+Both secret tools refuse to run on Cloud Run (`K_SERVICE`, `CLOUD_RUN_JOB`) or with `SHIPCUBE_ENV` other than `local`. Values are never rotated once created, so restarting keeps the database usable. If `.env` has `MUSE_API_KEY` (or `META_API_KEY`), it becomes the local `meta-api-key`. `local/test.sh` runs the shared RLS/PAT SQL check as sc-api, a PAT login through `auth.verify_pat`, and the deployer's build-isolation checks (workspace A can't use B's upload or image). Real IAM on build service accounts needs GCP: `tests/build-isolation.sh`. CI's `local-db` job runs the same commands.
+
 ## Build isolation (per-workspace builders)
 
 Hosted builds run tenant code, so each workspace builds as its own service account with access to only its own uploads folder and image repo (design: security-tenancy §4).
