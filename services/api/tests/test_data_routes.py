@@ -89,3 +89,39 @@ def test_put_warehouse_is_console_admin_only(client, seeded):
     r = client.post("/v1/data/warehouse:test", headers=seeded["human"], json=body)
     assert r.status_code == 403 and "non-public" in r.json()["error"]["message"]  # private hosts are refused
 
+
+
+def test_put_warehouse_end_to_end_with_the_api_secret_store(client, tmp_path, monkeypatch):
+    """Save a Postgres warehouse through the API's own secret store (#35) and secret_refs, then read it back."""
+    workspace = pytest.importorskip("shipcube_api.workspace")
+    from psycopg.conninfo import conninfo_to_dict
+
+    from shipcube_api import auth, db
+    from shipcube_api.settings import settings
+
+    pg = conninfo_to_dict(os.environ["SHIPCUBE_DATABASE_URL"])
+    host = pg.get("host") or "localhost"
+    if host.startswith("/"):
+        pytest.skip("needs a TCP Postgres host for the warehouse test")
+    monkeypatch.setenv("SHIPCUBE_DATA_ALLOWED_DB_HOSTS", host)
+    monkeypatch.setenv("SHIPCUBE_LOCAL_SECRETS_FILE", str(settings.local_secrets_file))  # where the API's store writes
+    w = new_workspace(scopes=["apps:read", "data:read"])
+    base = os.environ["SHIPCUBE_DATABASE_URL"].rsplit("/", 1)[0]
+    warehouse_db = f"wh_{uuid.uuid4().hex[:8]}"
+    local.seed(local.Settings(catalog_url=os.environ["SHIPCUBE_DATA_CATALOG_URL"], workspace=str(w["workspace_id"]), warehouse="postgres",
+                              warehouse_url=f"{base}/{warehouse_db}?sslmode=disable", tenants={"example.com": "acme"}))
+    body = {"kind": "postgres", "host": host, "port": int(pg.get("port") or 5432), "database": warehouse_db,
+            "user": pg.get("user") or "postgres", "password": pg.get("password") or "local-pw", "ssl": "disable"}
+    tested = client.post("/v1/data/warehouse:test", headers=w["human"], json=body)
+    assert tested.status_code == 200 and tested.json()["tables"] > 0, tested.text
+    saved = client.put("/v1/data/warehouse", headers=w["human"], json=body)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["warehouse"]["connected"] and {"label": "Status", "value": "reachable"} in saved.json()["warehouse"]["details"]
+    caller = auth.verify(w["human"]["Authorization"].removeprefix("Bearer "))
+    with db.tx(caller) as conn:
+        refs = conn.execute("select kind, resource_name, last4 from secret_refs where workspace_id = %s and destroyed_at is null"
+                            " and kind = 'warehouse_credential'", (caller.workspace_id,)).fetchall()
+    assert len(refs) == 1 and refs[0]["resource_name"].startswith(f"projects/local/secrets/ws-{w['workspace_id']}-warehouse_credential-")
+    assert workspace.verified_projects(caller) == []  # nothing linked: BigQuery is refused
+    bq = {"kind": "bigquery", "project": "p", "location": "US", "service_account_key": "{}"}
+    assert client.post("/v1/data/warehouse:test", headers=w["human"], json=bq).status_code == 403

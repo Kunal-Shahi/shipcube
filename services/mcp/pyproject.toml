@@ -27,7 +27,7 @@ dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 
 [tool.uv.sources]
 shipcube-api = { path = "../api", editable = true }
-shipcube-data = { git = "https://github.com/Kunal-Shahi/shipcube-data", rev = "7fdbe3c5a285" }  # PR #7 (local catalog, typed tenant errors, /v1/data routes); repin to its merge commit
+shipcube-data = { git = "https://github.com/Kunal-Shahi/shipcube-data", rev = "213e9113a4ae" }  # PR #7 (local catalog, typed tenant errors, /v1/data routes); repin to its merge commit
 shipcube-placement = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "packages/placement" }
 shipcube-profiler = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "packages/profiler" }
 shipcube-classifier = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "ml/workload-classifier" }

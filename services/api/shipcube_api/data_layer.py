@@ -43,13 +43,21 @@ def record_secret(caller: Any, *, kind: str, label: str, resource_name: str, ver
 
 
 def _secret_store() -> Any | None:
-    try:  # the API's store (BYOK keys); see secret_store.py
-        from .secret_store import make_secret_store
-        from .settings import settings
+    try:  # the API's shared store (BYOK keys too), from the console endpoints (#35)
+        from .workspace import secret_store
 
-        return make_secret_store(settings)
+        return secret_store()
     except ImportError:
         return None  # PUT /v1/data/warehouse answers 501 until the store is available
+
+
+def _verified_projects() -> Callable[[Any], list[str]]:
+    try:  # the workspace's active linked GCP projects, read under the caller's RLS (#35)
+        from .workspace import verified_projects
+
+        return verified_projects
+    except ImportError:
+        return lambda _caller: []  # no GCP linking yet: only Postgres warehouses can be connected
 
 
 def unavailable_router() -> APIRouter:
@@ -71,7 +79,6 @@ def mount(app: FastAPI, caller: Callable[..., Any]) -> None:
         log.warning("shipcube-data not installed; /v1/data/* answers 501")
         app.include_router(unavailable_router(), prefix="/v1/data")
         return
-    # BigQuery warehouses must be in a verified GCP project of the workspace; until GCP linking has an
-    # endpoint, none are, so only Postgres warehouses can be connected.
+    # BigQuery warehouses must be in one of the workspace's verified GCP projects (workspace.verified_projects).
     app.include_router(data_router(caller_dependency=caller, secret_store=_secret_store(), record_secret=record_secret,
-                                   verified_projects=lambda _ws: []), prefix="/v1/data")
+                                   verified_projects=_verified_projects()), prefix="/v1/data")
