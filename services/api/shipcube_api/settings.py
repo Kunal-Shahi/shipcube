@@ -66,6 +66,17 @@ class Settings:
     ai_gateway_url: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_AI_GATEWAY_URL") or None)
     local_iap_port: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_LOCAL_IAP_PORT", "8088")))
     local_ready_timeout_s: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_LOCAL_READY_TIMEOUT_S", "90")))
+    # BYOK keys: Secret Manager in the control project, or a local JSON file (DEV_MODE; the format
+    # infra/local/secretmanager.py serves).
+    secret_store: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_SECRET_STORE", "local" if _dev_mode() else "gcp"))
+    local_secrets_file: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_SECRETS_FILE",
+                                                                           ".shipcube-local/secrets.json"))
+    # Linked projects: the per-workspace deployer the user grants roles to (infra/scripts/link-project.sh).
+    link_deployer_sa_template: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_LINK_DEPLOYER_SA_TEMPLATE", "ws-{ws12}-deployer@{control_project}.iam.gserviceaccount.com"))
+    # Billing page: the credit grant on ShipCube's billing account (GCP credits), shown against usage.
+    credit_grant_usd: float = field(default_factory=lambda: float(os.environ.get("SHIPCUBE_CREDIT_GRANT_USD", "0")))
+    credit_expires_at: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_CREDIT_EXPIRES_AT") or None)
     builder_image: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_BUILDER", "gcr.io/buildpacks/builder:latest"))
 
 

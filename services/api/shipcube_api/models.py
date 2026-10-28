@@ -197,7 +197,7 @@ class Workspace(BaseModel):
 class GcpTarget(BaseModel):
     id: str
     project: str
-    kind: Literal["shipcube", "linked"]
+    kind: Literal["shipcube", "linked", "local"] = Field(description="local: SHIPCUBE_BACKEND=local, apps run in Docker on this machine")
     default: bool
 
 
@@ -220,6 +220,7 @@ class Me(BaseModel):
     gcp_targets: list[GcpTarget]
     limits: Limits
     token: TokenInfo | None = Field(None, description="The token used for this request")
+    deployer_sa: str = Field(description="Grant this service account roles in a GCP project to link it (link-project.sh)")
 
 
 class Upload(BaseModel):
@@ -263,10 +264,23 @@ class AppSummary(BaseModel):
     tier: str
     status: str
     updated_at: str
+    target: str = Field("shipcube", description="shipcube (ShipCube's GCP project), local (Docker on this machine) or a linked project id")
+    deleted_at: str | None = None
+    restorable_until: str | None = None
 
 
 class AppList(BaseModel):
     apps: list[AppSummary]
+
+
+class AppEstimate(BaseModel):
+    estimate_id: str | None
+    workload_class: str
+    tier: str
+    confidence: float | None
+    monthly_cost_usd: dict[str, float]
+    explained_by: str | None
+    created_at: str | None
 
 
 class App(AppSummary):
@@ -281,6 +295,7 @@ class App(AppSummary):
     restorable_until: str | None = Field(None, description="Soft-deleted apps can be restored from the console until then")
     runtime: dict[str, Any] | None = Field(None, description="Live state from Cloud Run: ready, URL, revision, IAP, scaling")
     revisions: list[dict[str, Any]] = Field(default_factory=list, description="Recent deployments, newest first (for rollback)")
+    estimate: AppEstimate | None = Field(None, description="The load estimate the latest deploy used (estimate_id, or the latest for this app name)")
 
 
 class EstimateResult(BaseModel):
@@ -351,3 +366,86 @@ class ErrorBody(BaseModel):
 
 class Error(BaseModel):
     error: ErrorBody
+
+
+# --- console: approvals inbox, AI providers, billing, linked projects ------------------------
+
+
+class OperationList(BaseModel):
+    operations: list[Operation]
+
+
+ProviderId = Literal["meta", "openai-compatible", "openai", "anthropic"]
+
+
+class Provider(BaseModel):
+    id: ProviderId
+    label: str
+    description: str
+    connected: bool = Field(description="meta is always connected (ShipCube's key); BYOK providers once a key is stored")
+    default: bool = Field(description="The workspace default for apps without their own AI config")
+    key_hint: str | None = Field(None, description="Last 4 characters of the stored key; the key itself is never returned")
+    base_url: str | None = None
+    model: str | None = None
+    added_at: str | None = None
+
+
+class ProviderList(BaseModel):
+    providers: list[Provider]
+
+
+class ProviderKeyRequest(_Model):
+    key: str | None = Field(None, min_length=8, max_length=4096, description="Stored in Secret Manager; never returned")
+    base_url: str | None = Field(None, max_length=500, description="openai-compatible only")
+    model: str | None = Field(None, max_length=200)
+
+
+class GcpLink(BaseModel):
+    id: str
+    project_id: str
+    region: str
+    status: Literal["pending", "active", "broken", "revoked"]
+    deployer_sa: str
+    runtime_sa: str
+    missing_permissions: list[str]
+    linked_at: str | None
+    verified_at: str | None
+
+
+class GcpTargets(BaseModel):
+    deployer_sa: str = Field(description="Grant this service account roles in your project (link-project.sh), then link")
+    targets: list[GcpLink]
+
+
+class LinkRequest(_Model):
+    project_id: str = Field(pattern=r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+    region: str = Field("asia-south1", pattern=r"^[a-z]+-[a-z]+[0-9]$")
+
+
+class Credits(BaseModel):
+    granted_usd: float
+    used_usd: float
+    expires_at: str | None
+
+
+class AppCost(BaseModel):
+    app: str
+    billing: Literal["shipcube", "own-gcp"]
+    compute_usd: float
+    data_usd: float
+    llm_usd: float
+
+
+class DailyCost(BaseModel):
+    date: str
+    cost_usd: float
+
+
+class Billing(BaseModel):
+    credits: Credits
+    month_to_date_usd: float
+    forecast_usd: float
+    by_app: list[AppCost]
+    daily: list[DailyCost]
+    gcp: GcpLink | None
+    source: str
