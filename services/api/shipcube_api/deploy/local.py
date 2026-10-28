@@ -254,16 +254,23 @@ class LocalDeployer:
                 "--network-alias", revision, "-p", f"127.0.0.1::{PORT}",
                 "--cpus", str(c.get("cpu", "1")), "--memory", f"{mib}m", "--pids-limit", "512",
                 "--security-opt", "no-new-privileges", "--restart", "no",
-                "--label", "managed-by=shipcube", "--label", f"shipcube.service={app.service}",
+                "--label", "managed-by=shipcube", "--label", f"shipcube.app={app.name}",
+                "--label", f"shipcube.service={app.service}",
                 "--label", f"shipcube.workspace={app.workspace_id}", "--label", f"shipcube.revision={revision}"]
-        for k, v in {"PORT": str(PORT), "K_SERVICE": app.service, "K_REVISION": revision, **env}.items():
+        base = {"PORT": str(PORT), "K_SERVICE": app.service, "K_REVISION": revision}
+        if self.s.ai_gateway_url:
+            base["SHIPCUBE_AI_GATEWAY"] = self.s.ai_gateway_url
+        for k, v in {**base, **env}.items():
             args += ["-e", f"{k}={v}"]
         args.append(image.rsplit("@", 1)[1] if image.startswith(f"{isolation.LOCAL_REGISTRY}/") else image)
         self.docker.run(args, timeout=120)
 
-    def _host_port(self, revision: str) -> int:
+    def upstream(self, revision: str) -> str:
+        """Base URL of a revision's container, from wherever this process runs (settings.local_upstream)."""
+        if self.s.local_upstream == "network":
+            return f"http://{revision}:{PORT}"
         out = self.docker.run(["docker", "port", f"sc-{revision}", f"{PORT}/tcp"])
-        return int(out.splitlines()[0].rsplit(":", 1)[1])
+        return f"http://127.0.0.1:{int(out.splitlines()[0].rsplit(':', 1)[1])}"
 
     def _wait_ready(self, revision: str, timeout_s: float) -> None:
         deadline = time.monotonic() + timeout_s
@@ -275,7 +282,7 @@ class LocalDeployer:
             # Any HTTP answer counts. A bare TCP connect isn't enough: Docker Desktop and Colima accept
             # on the published port before the container listens.
             with contextlib.suppress(httpx.HTTPError, ValueError, IndexError, DeployError):
-                httpx.get(f"http://127.0.0.1:{self._host_port(revision)}/", timeout=2)
+                httpx.get(self.upstream(revision) + "/", timeout=2)
                 return
             time.sleep(0.5)
         raise DeployError("timeout", f"revision {revision} did not listen on port {PORT} within {timeout_s:.0f}s")

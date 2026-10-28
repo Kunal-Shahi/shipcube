@@ -29,7 +29,7 @@ if not shutil.which("docker") or subprocess.run(["docker", "info"], capture_outp
 
 GCS_IMAGE = "fsouza/fake-gcs-server:1.55.1"
 GCS_PORT = 4443
-NETWORK = "shipcube-test"
+NETWORK = "shipcube-local-test"
 WS_A = "3c1d5e2a-7b4f-4e8a-9c6d-2f1e0a9b8c7d"
 WS_B = "9f0e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c"
 APP_PY = """
@@ -118,7 +118,6 @@ def test_local_backend_end_to_end(deployer, monkeypatch):
         return {"sc_pat_alice": {"email": "alice@acme.com", "user_id": "u1"},
                 "sc_pat_bob": {"email": "bob@acme.com", "user_id": "u2"}}.get(token)
 
-    monkeypatch.setenv("SHIPCUBE_LOCAL_UPSTREAM", "published")
     client = TestClient(LocalIap(d.s, resolve=resolve), base_url=f"http://{a.service}.localhost:8088")
     assert client.get("/").status_code == 401
     assert client.get("/", headers={"Authorization": "Bearer sc_pat_bob"}).status_code == 403
