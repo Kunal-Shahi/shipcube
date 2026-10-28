@@ -148,6 +148,8 @@ def test_local_backend_end_to_end(deployer, monkeypatch):
 
     d.soft_delete(a)
     assert client.get("/", headers={"Authorization": "Bearer sc_pat_alice"}).status_code == 404
+    d.restore(a, ["user:alice@acme.com"])  # returns only once the revision answers again
+    assert client.get("/", headers={"Authorization": "Bearer sc_pat_alice"}).text.startswith("v1")
     d.purge(a)
     assert not d.status(a)["exists"]
     assert sh("docker", "ps", "-aq", "--filter", f"label=shipcube.service={a.service}") == ""

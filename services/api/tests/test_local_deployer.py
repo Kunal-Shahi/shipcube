@@ -167,7 +167,10 @@ def test_rollback_delete_restore_and_purge(d):
     d.soft_delete(app())
     st = d.status(app())
     assert st["ingress"] == "internal" and st["access"] == [] and not st["ready"]
+    waited = []
+    d._wait_ready = lambda rev, t: waited.append(rev)
     d.restore(app(), ["user:a@x.com"])
+    assert waited == [first]
     assert d.status(app())["ingress"] == "all" and d.status(app())["access"] == ["user:a@x.com"]
     d.purge(app())
     assert ["docker", "rm", "-f", f"sc-{second}"] in d.docker.calls and not d.status(app())["exists"]

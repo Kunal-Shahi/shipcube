@@ -376,6 +376,7 @@ class LocalDeployer:
         st = self._read(app)
         if st and st["traffic"]:
             self.docker.run(["docker", "start", f"sc-{st['traffic']}"])
+            self._wait_ready(st["traffic"], float(self.s.local_ready_timeout_s))  # like deploy: succeeded = answering
         with self._state(app) as st:
             st.update(ingress="all", access=sorted(set(principals)))
 
