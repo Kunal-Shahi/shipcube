@@ -37,7 +37,9 @@ EXPECTED_TOOLS = {
     "set_caps", "set_access", "ai_config", "delete_app", "data_list_cubes", "data_describe_cube",
     "data_query", "data_search_values", "data_propose_migration",
 }
-APP = os.environ.get("SMOKE_APP", "hello-local")
+# A fresh app per run: delete_app's idempotency key comes from its arguments, so re-using a name on a
+# re-run would replay the previous run's delete. The name is recorded for `make e2e`.
+APP = os.environ.get("SMOKE_APP") or f"hello-{time.strftime('%H%M%S')}"
 
 
 def seed() -> dict[str, str]:
@@ -307,6 +309,8 @@ async def run(r: Report) -> None:
 
 
 def main() -> None:
+    (ROOT / "deploy/local/.state/smoke-app").write_text(APP + "\n")
+    print(f"smoke app: {APP}")
     r = Report()
     try:
         asyncio.run(run(r))
