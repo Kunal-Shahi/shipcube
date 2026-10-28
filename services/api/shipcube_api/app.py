@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import auth, db, obs, store, workspace
+from . import auth, data_layer, db, obs, store, workspace
 from .auth import Caller
 from .deploy.base import DeployError
 from .models import (
@@ -340,22 +340,5 @@ def link_gcp_project(body: LinkRequest, c: Annotated[Caller, Depends(console_ses
     return workspace.link_project(deployer(), c, body.project_id, body.region)
 
 
-# --- data layer (Kunal-Shahi/shipcube-data): the console's Data page --------------------------------------------
-# Warehouse status, cubes, and migration review where a person applies or rejects what agents proposed.
-# shipcube-data owns these routes (shipcube_data.http.data_router) and opens the caller's own workspace catalog, so
-# tenant scoping and grants are enforced there; PATs can read but never apply. Mounted only when the package is
-# installed (the MCP image's `data` extra) and configured (SHIPCUBE_DATA_CATALOG_URL), like the data_* MCP tools.
-def _mount_data_routes() -> None:
-    if not os.environ.get("SHIPCUBE_DATA_CATALOG_URL"):
-        return
-    try:
-        from shipcube_data.http import data_router
-    except ImportError:
-        log.warning("shipcube-data not installed; /v1/data/* is not served")
-        return
-    # BigQuery warehouses must be in one of the workspace's verified GCP projects; until GCP linking has an
-    # endpoint (FEATURE gcp_link), none are verified, so only Postgres warehouses can be connected.
-    app.include_router(data_router(caller_dependency=caller, verified_projects=lambda _ws: []), prefix="/v1/data")
-
-
-_mount_data_routes()
+# --- data layer (Kunal-Shahi/shipcube-data): the console's Data page; see data_layer.py -----------------------
+data_layer.mount(app, caller)

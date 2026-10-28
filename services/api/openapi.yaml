@@ -260,6 +260,74 @@ paths:
         '201': { description: 'Linked (status active), or recorded as broken with missing_permissions', content: { application/json: { schema: { $ref: '#/components/schemas/GcpLink' } } } }
         '400': { $ref: '#/components/responses/Error' }
         '403': { $ref: '#/components/responses/Error' }
+  # --- data layer (served by Kunal-Shahi/shipcube-data, shipcube_data.http; docs/HTTP.md there) -------------------
+  # Mounted from the package; 501 data_unavailable when it isn't installed or configured. The caller's own
+  # workspace catalog only. PATs (data:read) can read; :test, PUT, :apply and :reject need a console session.
+  /v1/data/warehouse:
+    get:
+      summary: The workspace's warehouse connection and model version (data:read). Never returns credentials.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DataWarehouse' } } } }
+        '501': { $ref: '#/components/responses/Error' }
+    put:
+      summary: Test, then save warehouse credentials (console session, admin). The credential goes to the secret store; secret_refs keeps only the reference.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DataWarehouseInput' } } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, properties: { tables: { type: integer }, schemas: { type: integer }, warehouse: { $ref: '#/components/schemas/DataWarehouse' } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '501': { $ref: '#/components/responses/Error' }
+  /v1/data/warehouse:test:
+    post:
+      summary: Test warehouse credentials without storing them (console session, admin)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DataWarehouseInput' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { tables: { type: integer }, schemas: { type: integer } } } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /v1/data/cubes:
+    get:
+      summary: Cubes in the workspace's semantic model (data:read). Members the caller isn't granted are omitted, except for admins, who see restricted_to.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/DataCube' } } } } }
+  /v1/data/cubes/{name}:
+    parameters: [{ name: name, in: path, required: true, schema: { type: string } }]
+    get:
+      summary: One cube (data:read)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DataCube' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/data/migrations:
+    get:
+      summary: Model migrations, newest first, with diff, impact and decision (data:read)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/DataMigration' } } } } }
+  /v1/data/migrations/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get:
+      summary: One migration (data:read)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DataMigration' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /v1/data/migrations/{id}:apply:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Approve and apply a proposed migration (console session; never the proposer's own person; admin for exposure-widening or non-additive changes)
+      requestBody: { content: { application/json: { schema: { type: object, properties: { allow_breaking: { type: boolean, default: false } } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DataMigration' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { description: 'Already decided, a conflicting migration landed (conflict), or saved queries would break without allow_breaking (would_break)', content: { application/json: { schema: { type: object } } } }
+  /v1/data/migrations/{id}:reject:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Reject a proposed migration (console session, developer or above)
+      requestBody: { content: { application/json: { schema: { type: object, properties: { note: { type: string, maxLength: 1000 } } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DataMigration' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
 components:
   securitySchemes:
     bearer:
@@ -438,3 +506,84 @@ components:
         daily: { type: array, items: { type: object, properties: { date: { type: string, format: date }, cost_usd: { type: number } } } }
         gcp: { oneOf: [{ $ref: '#/components/schemas/GcpLink' }, { type: 'null' }] }
         source: { type: string }
+    # --- data layer --------------------------------------------------------------------------------------------
+    DataWarehouse:
+      type: object
+      required: [connected, model_version]
+      properties:
+        connected: { type: boolean }
+        kind: { type: string, description: 'bigquery | postgres | clickhouse; duckdb on local stacks' }
+        name: { type: string }
+        details: { type: array, items: { type: object, properties: { label: { type: string }, value: { type: string } } } }
+        connected_at: { type: string }
+        connected_by: { type: string }
+        last_checked_at: { type: string }
+        model_version: { type: integer }
+    DataWarehouseInput:
+      oneOf:
+        - type: object
+          required: [kind, host, database, user, password]
+          properties:
+            kind: { enum: [postgres, clickhouse] }
+            host: { type: string, description: 'Public hosts only (verify-full TLS), unless an operator allow-lists a private one' }
+            port: { type: integer, default: 5432 }
+            database: { type: string }
+            user: { type: string }
+            password: { type: string, writeOnly: true }
+            ssl: { type: string, default: verify-full }
+        - type: object
+          required: [kind, project, service_account_key]
+          properties:
+            kind: { const: bigquery }
+            project: { type: string, description: "One of the workspace's verified GCP projects" }
+            location: { type: string, default: US }
+            service_account_key: { type: string, writeOnly: true }
+    DataMember:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string, description: 'Dimension type (string, number, time, boolean) or measure aggregation (count, sum, avg, count_distinct, min, max, number)' }
+        sql: { type: string }
+        description: { type: string }
+        deprecated: { type: string }
+        restricted_to: { type: array, items: { type: string } }
+    DataCube:
+      type: object
+      properties:
+        name: { type: string }
+        title: { type: string }
+        description: { type: string }
+        table: { type: string }
+        schema: { type: string, description: "The warehouse schema this caller's tenant reads" }
+        dimensions: { type: array, items: { $ref: '#/components/schemas/DataMember' } }
+        measures: { type: array, items: { $ref: '#/components/schemas/DataMember' } }
+        joins: { type: array, items: { type: object, properties: { to: { type: string }, relationship: { enum: [many_to_one, one_to_many, one_to_one] }, 'on': { type: string } } } }
+        segments: { type: array, items: { type: object, properties: { name: { type: string }, sql: { type: string } } } }
+        partition: { type: string }
+        policies: { type: array, items: { type: string } }
+        used_by: { type: array, items: { type: string } }
+    DataMigration:
+      type: object
+      properties:
+        id: { type: string }
+        description: { type: string }
+        status: { enum: [proposed, applied, rejected] }
+        raw_status: { enum: [proposed, approved, applied, rejected, rolled_back] }
+        kind: { enum: [additive, change, breaking] }
+        proposed_by: { type: object, properties: { agent: { type: string }, token_name: { type: string }, user: { type: string } } }
+        drafted_by: { type: string, description: 'agent | muse-spark-1.3 | rules' }
+        proposed_at: { type: string }
+        base_version: { type: integer }
+        ops: { type: array, items: { type: object } }
+        diff: { type: object, properties: { added: { type: array, items: { type: string } }, changed: { type: array, items: { type: string } }, removed: { type: array, items: { type: string } } } }
+        impact:
+          type: object
+          properties:
+            breaks: { type: array, items: { type: object, properties: { query: { type: string }, app: { type: string }, error: { type: string } } } }
+            changes: { type: array, items: { type: object, properties: { query: { type: string }, app: { type: string }, note: { type: string } } } }
+            warnings: { type: array, items: { type: object, properties: { query: { type: string }, app: { type: string }, warnings: { type: array, items: { type: string } } } } }
+            unaffected: { type: integer }
+            apps_broken: { type: array, items: { type: string } }
+        approved: { type: object, properties: { at: { type: string }, by: { type: string } } }
+        applied: { type: object, properties: { version: { type: integer }, at: { type: string }, by: { type: string } } }
+        rejected: { type: object, properties: { at: { type: string }, by: { type: string }, note: { type: string } } }
