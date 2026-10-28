@@ -1,0 +1,83 @@
+# Local database and secrets, shaped like production. Included by deploy/local/compose.yaml
+# (platform); also runs on its own:
+#
+#   python3 infra/local/localsecrets.py init
+#   docker compose --env-file .local/secrets.env -f infra/local/compose.yaml up -d --wait
+#   infra/local/test.sh
+#
+# db             Postgres 16 (Cloud SQL's version), host port ${SHIPCUBE_DB_PORT:-54329}
+# db-init        infra/db/local-init.sh: the Cloud SQL IAM user names as logins, then bootstrap.sql
+#                and owner_defaults.sql unchanged
+# migrate        the API's forward runner (python -m shipcube_api.admin migrate) as sc-migrator
+# secretmanager  Secret Manager REST emulator over .local/secrets.json, http://secretmanager:8085/v1
+#                (host port ${SHIPCUBE_SECRETMANAGER_PORT:-8085})
+#
+# Services that need the database depend on `migrate` completing, and sign in as their own login:
+# ${SHIPCUBE_API_DATABASE_URL} (sc-api) or ${SHIPCUBE_WORKER_DATABASE_URL} (sc-worker).
+name: shipcube
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run python3 infra/local/localsecrets.py init and pass --env-file .local/secrets.env}
+    ports: ["127.0.0.1:${SHIPCUBE_DB_PORT:-54329}:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  db-init:
+    image: postgres:16
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      PGHOST: db
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      SC_MIGRATOR_DB_PASSWORD: ${SC_MIGRATOR_DB_PASSWORD:?}
+      SC_API_DB_PASSWORD: ${SC_API_DB_PASSWORD:?}
+      SC_WORKER_DB_PASSWORD: ${SC_WORKER_DB_PASSWORD:?}
+    volumes: [../db:/infra/db:ro]
+    entrypoint: ["bash", "/infra/db/local-init.sh"]
+
+  migrate:
+    build:
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /usr/local/bin/uv
+    depends_on:
+      db-init: {condition: service_completed_successfully}
+    environment:
+      SHIPCUBE_DATABASE_URL: ${SHIPCUBE_MIGRATOR_DATABASE_URL:?}
+      UV_PROJECT_ENVIRONMENT: /venv
+      UV_CACHE_DIR: /uv-cache
+      UV_LINK_MODE: copy
+    volumes:
+      - ../../services/api:/src/services/api:ro
+      - migrate-venv:/venv
+      - uv-cache:/uv-cache
+    working_dir: /src/services/api
+    command: ["uv", "run", "--locked", "--no-dev", "python", "-m", "shipcube_api.admin", "migrate"]
+
+  secretmanager:
+    image: python:3.12-alpine
+    environment:
+      SHIPCUBE_ENV: local
+      SHIPCUBE_LOCAL_DIR: /local
+    volumes:
+      - ./:/app:ro
+      - ../../.local:/local:ro
+    ports: ["127.0.0.1:${SHIPCUBE_SECRETMANAGER_PORT:-8085}:8085"]
+    command: ["python", "/app/secretmanager.py", "--port", "8085"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8085/v1/projects/local/secrets/token-hmac-pepper/versions/latest:access')"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  pgdata:
+  migrate-venv:
+  uv-cache:
