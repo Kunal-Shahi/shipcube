@@ -26,7 +26,7 @@ import { FEATURE_ENDPOINT, type ConsoleData, type Feature, type PendingApproval 
 
 interface ApiAppSummary { name: string; url: string; tier: string; status: string; updated_at: string }
 interface ApiAccess { principal: string; role: string; granted_at: string }
-interface ApiApp extends ApiAppSummary {
+export interface ApiApp extends ApiAppSummary {
   target: string;
   region: string;
   revision: string;
@@ -85,6 +85,13 @@ export function healthOf(status: string): Health {
 /** "512Mi" ↔ "512 MiB" */
 export const memoryToUi = (m: unknown) => (typeof m === "string" ? m.replace(/^(\d+)(Mi|Gi)$/, "$1 $2B") : "512 MiB");
 export const memoryToApi = (m: string) => m.replace(/^(\d+)\s*(Mi|Gi)B$/, "$1$2");
+
+/** Where an app runs. The local stack reports target "local", or the local backend in runtime. */
+export function placementOf(a: Pick<ApiApp, "target" | "region" | "runtime">): Pick<AppDetail, "runsLocally" | "billing" | "region"> {
+  const target = a.target ?? "";
+  if (target === "local" || a.runtime?.backend === "local") return { runsLocally: true };
+  return { billing: target.includes("linked") ? "own-gcp" : "shipcube", region: a.region };
+}
 
 export function capsFromApi(c: Record<string, unknown>): Caps {
   const n = (k: string, d = 0) => (typeof c[k] === "number" ? (c[k] as number) : d);
@@ -258,10 +265,9 @@ export const httpData: ConsoleData = {
       tier: tierOf(a.tier),
       health,
       url: a.url,
-      region: a.region,
+      ...placementOf(a),
       revision: a.revision,
       lastDeployAt: a.updated_at,
-      billing: a.target.startsWith("linked") || a.target.includes("linked") ? "own-gcp" : "shipcube",
       aiProvider: a.ai.provider === "meta" ? `Muse (${a.ai.model})` : `${a.ai.provider} (${a.ai.model})`,
       spendCap: caps.monthlySpend,
       caps,

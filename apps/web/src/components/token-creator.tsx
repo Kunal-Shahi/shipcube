@@ -16,14 +16,13 @@ export type CreatedToken = { token: ApiToken; secret: string };
 
 export function TokenCreator({
   onCreated,
-  defaultName = "",
   compact,
 }: {
   onCreated?: (t: CreatedToken) => void;
-  defaultName?: string;
   compact?: boolean;
 }) {
-  const [name, setName] = useState(defaultName);
+  // Empty, with the example as placeholder and help text: a prefilled example gets typed onto.
+  const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(SCOPES.map((s) => s.id));
   const [days, setDays] = useState(30);
   const [created, setCreated] = useState<CreatedToken | null>(null);

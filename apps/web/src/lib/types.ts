@@ -34,6 +34,8 @@ export interface AppSummary {
   url: string;
   region?: string;
   billing?: Billing;
+  /** Runs in the local stack's Docker, not on GCP (DEV_MODE only). */
+  runsLocally?: boolean;
   costMonthToDate?: number;
   spendCap?: number;
   requests24h?: number;
