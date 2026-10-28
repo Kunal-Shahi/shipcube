@@ -109,7 +109,10 @@ export default async function AppOverview({ params }: { params: Promise<{ id: st
           </a>
         ),
     },
-    { label: "Runs on", value: app.billing === undefined ? null : app.billing === "own-gcp" ? "Your GCP project" : "ShipCube's GCP project" },
+    {
+      label: "Runs on",
+      value: app.runsLocally ? "Local (Docker)" : app.billing === undefined ? null : app.billing === "own-gcp" ? "Your GCP project" : "ShipCube's GCP project",
+    },
     { label: "Region", value: app.region && <span className="font-mono text-[12px]">{app.region}</span> },
     { label: "Revision", value: app.revision && <span className="font-mono text-[12px] break-all">{app.revision}</span> },
     { label: "AI provider", value: app.aiProvider },
@@ -130,6 +133,13 @@ export default async function AppOverview({ params }: { params: Promise<{ id: st
           <PanelHeader title="Details" />
           <div className="p-4">
             <DescList items={details} />
+            {!app.deletedAt && (
+              // Deleting is agent-only by design: delete_app always waits for a person's approval.
+              <p className="mt-4 border-t border-border pt-3 text-[12px] text-fg-muted">
+                To delete this app, ask your agent (&ldquo;Delete {app.name}&rdquo;). The deletion waits for your approval under
+                Approvals, and you can restore the app for 7 days after.
+              </p>
+            )}
           </div>
         </Panel>
       </div>

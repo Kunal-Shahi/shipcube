@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalFromOperation, capsFromApi, capsToApi, grantFromApi, healthOf, type ApiOperation } from "./http";
+import { approvalFromOperation, capsFromApi, capsToApi, grantFromApi, healthOf, placementOf, type ApiOperation } from "./http";
 
 const op = (over: Partial<ApiOperation>): ApiOperation => ({
   id: "op_1",
@@ -33,6 +33,17 @@ describe("approvalFromOperation", () => {
 
   it("falls back to the operation kind when approval_actions is missing", () => {
     expect(approvalFromOperation(op({ kind: "delete", approval_actions: [] })).kind).toBe("delete_app");
+  });
+});
+
+describe("placementOf", () => {
+  it("shows local apps as local, with no GCP region or billing", () => {
+    expect(placementOf({ target: "local", region: "asia-south1" })).toEqual({ runsLocally: true });
+    expect(placementOf({ target: "shipcube", region: "asia-south1", runtime: { backend: "local" } })).toEqual({ runsLocally: true });
+  });
+  it("tells ShipCube's project from a linked one", () => {
+    expect(placementOf({ target: "shipcube", region: "asia-south1", runtime: { backend: "gcp" } })).toEqual({ billing: "shipcube", region: "asia-south1" });
+    expect(placementOf({ target: "linked:acme-prod", region: "us-central1" })).toEqual({ billing: "own-gcp", region: "us-central1" });
   });
 });
 
