@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Runs rls_and_token.sql on Cloud SQL as a given service login (through run.sh), inside a
 # transaction that is always rolled back. Optional PRE_SQL files run first in the same
-# transaction (for dry-running
-# migrations before they are applied).
+# transaction (for dry-running migrations before they are applied).
 #   LOGIN=sc-api ./check.sh                   # after migrations, as the API's role
 #   LOGIN=sc-migrator PRE_SQL="a.sql b.sql" ./check.sh   # dry run of pending migrations
 set -euo pipefail
