@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { CheckCircle2 } from "lucide-react";
 import { PageHeader, Panel, PanelHeader } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { TOOLS, type ToolGroup } from "@/lib/mcp";
+import { MCP_URL, TOOLS, type ToolGroup } from "@/lib/mcp";
 import { supports } from "@/lib/api";
 import { ConnectSteps } from "./connect-steps";
 
@@ -78,7 +78,7 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <Panel className="p-5">
-          <ConnectSteps canCreateTokens={await supports("tokens")} />
+          <ConnectSteps canCreateTokens={await supports("tokens")} mcpUrl={process.env.SHIPCUBE_MCP_URL || MCP_URL} />
         </Panel>
 
         <Panel className="self-start">
