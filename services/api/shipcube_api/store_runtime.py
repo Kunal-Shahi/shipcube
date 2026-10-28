@@ -18,11 +18,11 @@ def deployer() -> Deployer:
         from .deploy.gcp import GcpDeployer
 
         return GcpDeployer(settings)
-    if settings.backend == "local":  # the local stack: apps as Docker containers (deploy/local)
-        try:
-            from .deploy.local import LocalDeployer  # type: ignore[import-not-found]
-        except ImportError as e:
-            raise RuntimeError("SHIPCUBE_BACKEND=local needs shipcube_api.deploy.local (networking)") from e
+    if settings.backend == "local":
+        if not settings.dev_mode:  # a developer machine's Docker daemon is never a production backend
+            raise RuntimeError("SHIPCUBE_BACKEND=local is allowed only with SHIPCUBE_DEV_MODE=1")
+        from .deploy.local import LocalDeployer
+
         return LocalDeployer(settings)
     if settings.backend != "mock":
         raise RuntimeError(f"SHIPCUBE_BACKEND must be gcp, local or mock, not {settings.backend!r}")

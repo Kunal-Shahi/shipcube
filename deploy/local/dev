@@ -22,6 +22,10 @@ set -a
 . "$SECRETS"
 set +a
 
+# Production's buildpacks builder is amd64-only; use a multi-arch one on arm64 Docker hosts.
+if [ -z "${SHIPCUBE_BUILDER:-}" ] && [ "$(docker info --format '{{.Architecture}}')" = aarch64 ]; then
+  export SHIPCUBE_BUILDER=heroku/builder:24
+fi
 services=(api worker gateway)
 ollama=0
 if grep -qE '^LOCAL_LLM=ollama' .env 2>/dev/null || [ "${LOCAL_LLM:-}" = ollama ]; then ollama=1; services+=(ollama); fi
@@ -99,7 +103,9 @@ URLS
     rc=0
     uv run --project deploy/local/smoke python deploy/local/smoke/smoke.py "${@:2}" || rc=$?
     echo; echo "== data layer smoke (shipcube-data)"
-    (cd "$HERE" && dc run --rm --no-deps data-seed shipcube-data smoke) || rc=$?
+    # data-layer's MCP-level smoke (shipcube-data PR #7), through this stack's MCP server and seeded PAT.
+    (cd "$HERE" && dc run --rm --no-deps -e SHIPCUBE_MCP_URL=http://api:8080/mcp data-seed \
+      shipcube-data smoke --mcp) || rc=$?
     exit $rc
     ;;
   logs) dc logs -f --tail 100 "${@:2}" ;;

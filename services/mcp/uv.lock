@@ -1368,7 +1368,7 @@ source = { git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=ml%2Fwork
 [[package]]
 name = "shipcube-data"
 version = "0.2.0"
-source = { git = "https://github.com/Kunal-Shahi/shipcube-data?rev=2a370c4#2a370c4e0039f45423ec7251914ab4b713b7168f" }
+source = { git = "https://github.com/Kunal-Shahi/shipcube-data?rev=21fc62d#21fc62d892d9e7f422a2645850d5f20310152ba5" }
 dependencies = [
     { name = "pydantic" },
     { name = "sqlglot" },
@@ -1416,7 +1416,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9" },
     { name = "shipcube-api", editable = "../api" },
     { name = "shipcube-api", extras = ["estimator"], marker = "extra == 'estimator'", editable = "../api" },
-    { name = "shipcube-data", extras = ["duckdb", "postgres"], marker = "extra == 'data'", git = "https://github.com/Kunal-Shahi/shipcube-data?rev=2a370c4" },
+    { name = "shipcube-data", extras = ["duckdb", "postgres"], marker = "extra == 'data'", git = "https://github.com/Kunal-Shahi/shipcube-data?rev=21fc62d" },
     { name = "starlette" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]

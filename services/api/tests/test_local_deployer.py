@@ -138,7 +138,7 @@ def test_deploy_runs_a_capped_private_container_and_refuses_foreign_images(d):
                    {"FOO": "bar"})
     run = next(c for c in d.docker.calls if c[:2] == ["docker", "run"])
     assert run[run.index("--cpus") + 1] == "0.5" and run[run.index("--memory") + 1] == "1024m"
-    assert run[run.index("--network") + 1] == "shipcube" and "-e" in run and "FOO=bar" in run and "PORT=8080" in run
+    assert run[run.index("--network") + 1] == "shipcube-local" and "shipcube.app=tracker" in run and "-e" in run and "FOO=bar" in run and "PORT=8080" in run
     assert run[-1] == IMAGE_ID and out.url == f"http://{app().service}.localhost:8088"
     st = d.status(app())
     assert st["ready"] and st["caps"]["concurrency"] == 1 and st["latest_ready_revision"] == out.revision

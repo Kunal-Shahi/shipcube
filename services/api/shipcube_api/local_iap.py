@@ -73,7 +73,11 @@ class LocalIap:
         self.s = s
         self.state_dir = Path(s.local_state_dir)
         self.resolve = resolve or api_resolver(os.environ.get("SHIPCUBE_LOCAL_IAP_API_URL", "http://localhost:8080"))
-        self.upstream = upstream or self._upstream
+        if upstream is None:
+            from .deploy.local import LocalDeployer
+
+            upstream = LocalDeployer(s).upstream  # by network alias in compose, published port on the host
+        self.upstream = upstream
         self.client = httpx.AsyncClient(transport=transport, timeout=None, follow_redirects=False)
         self.slots: dict[str, asyncio.Semaphore] = {}
         self.app = Starlette(routes=[
@@ -83,15 +87,6 @@ class LocalIap:
 
     async def __call__(self, scope, receive, send) -> None:
         await self.app(scope, receive, send)
-
-    def _upstream(self, revision: str) -> str:
-        """In compose the proxy shares the apps' network; on the host it uses the published port."""
-        if os.environ.get("SHIPCUBE_LOCAL_UPSTREAM", "network") == "network":
-            return f"http://{revision}:8080"
-        from .deploy.local import Docker
-
-        out = Docker().run(["docker", "port", f"sc-{revision}", "8080/tcp"])
-        return f"http://127.0.0.1:{out.splitlines()[0].rsplit(':', 1)[1]}"
 
     def _state(self, request: Request) -> dict[str, Any] | None:
         service = request.headers.get("host", "").split(":")[0].split(".")[0]

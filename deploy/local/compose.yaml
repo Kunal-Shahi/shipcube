@@ -36,6 +36,10 @@ x-switches: &switches
   SHIPCUBE_LOCAL_STATE: /state
   SHIPCUBE_LOCAL_NETWORK: shipcube
   SHIPCUBE_LOCAL_IAP_PORT: ${SHIPCUBE_IAP_PORT:-8088}
+  SHIPCUBE_LOCAL_UPSTREAM: network        # readiness and the IAP reach apps at http://<revision>:8080
+  # Buildpacks builder. Production's gcr.io/buildpacks/builder is amd64-only; on arm64 hosts
+  # (Apple Silicon) `make up` picks heroku/builder:24, which is multi-arch. CI (amd64) uses production's.
+  SHIPCUBE_BUILDER: ${SHIPCUBE_BUILDER:-gcr.io/buildpacks/builder:latest}
   # Monitoring (platform): Docker stats + container logs.
   SHIPCUBE_MONITOR: ${SHIPCUBE_MONITOR:-local}
   # Load estimator + profiler sandbox (load-estimator, PR #30): docker run --network none.
