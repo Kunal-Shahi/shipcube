@@ -30,10 +30,7 @@ def _routes(paths: dict) -> set[tuple[str, str]]:
 
 
 def test_routes_match_openapi_contract():
-    # /v1/data/* belongs to shipcube-data (shipcube_data.http, documented in its docs/MCP.md) and is mounted
-    # only when that package is installed and configured.
-    ours = {r for r in _routes(app.openapi()["paths"]) if not r[1].startswith("/v1/data")}
-    assert ours == _routes(SPEC["paths"])
+    assert _routes(app.openapi()["paths"]) == _routes(SPEC["paths"])
 
 
 def test_requires_token(client):
