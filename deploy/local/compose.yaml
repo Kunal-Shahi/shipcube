@@ -26,6 +26,7 @@ x-switches: &switches
   SHIPCUBE_PROFILER: ${SHIPCUBE_PROFILER:-local}
   SHIPCUBE_TOKEN_PEPPER: local-dev-pepper-not-a-secret-0123456789abcdef
   SHIPCUBE_AI_GATEWAY_URL: http://gateway:8080
+  SHIPCUBE_DATA_DEMO_TENANTS: shipcube.local=acme,example.com=acme   # seeded user's domain -> demo tenant
   SHIPCUBE_LOCAL_NETWORK: shipcube-local
   META_API_KEY: ${META_API_KEY:-}
   META_BASE_URL: ${META_BASE_URL:-https://api.meta.ai/v1}
@@ -35,7 +36,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_PASSWORD: local
-    ports: ["127.0.0.1:55432:5432"]
+    ports: ["127.0.0.1:${SHIPCUBE_PG_PORT:-55432}:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres:/docker-entrypoint-initdb.d:ro
@@ -75,7 +76,7 @@ services:
       SHIPCUBE_DATABASE_URL: postgresql://sc-api%40shipcube-control-ks.iam:local@postgres:5432/shipcube
       ALLOWED_HOSTS: localhost:*,127.0.0.1:*,api:*
       SHIPCUBE_CONSOLE_URL: http://localhost:3000
-    ports: ["127.0.0.1:8080:8080"]
+    ports: ["127.0.0.1:${SHIPCUBE_API_PORT:-18080}:8080"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
       interval: 3s
@@ -103,7 +104,7 @@ services:
       META_BASE_URL: ${META_BASE_URL:-https://api.meta.ai/v1}
       OLLAMA_API_KEY: ollama                               # Ollama ignores it; the gateway needs a key ref
     volumes: ["./.state:/state:ro"]
-    ports: ["127.0.0.1:8090:8080"]
+    ports: ["127.0.0.1:${SHIPCUBE_GATEWAY_PORT:-18090}:8080"]
 
   # Optional local model for the gateway's OpenAI-compatible upstream: `make up LOCAL_LLM=ollama`.
   ollama:

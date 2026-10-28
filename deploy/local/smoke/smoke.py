@@ -204,25 +204,23 @@ async def run(r: Report) -> None:
             cube = "orders" if "orders" in names else names[0]
             desc = await step("data_describe_cube", call("data_describe_cube", {"cube": cube}))
             if desc:
-                r.add("data_describe_cube", "PASS", cube)
-                meas = [m["name"] if isinstance(m, dict) else m for m in (desc.get("measures") or desc.get("cube", {}).get("measures", []))]
-                dims = [d["name"] if isinstance(d, dict) else d for d in (desc.get("dimensions") or desc.get("cube", {}).get("dimensions", []))]
+                meas = [m["path"] for m in desc.get("measures", [])]
+                dims = [d["path"] for d in desc.get("dimensions", [])]
+                r.add("data_describe_cube", "PASS", f"{cube}: {len(meas)} measures, {len(dims)} dimensions")
                 if meas:
-                    q = {"measures": [f"{cube}.{meas[0]}" if "." not in meas[0] else meas[0]], "limit": 5}
-                    if dims:
-                        q["dimensions"] = [f"{cube}.{dims[0]}" if "." not in dims[0] else dims[0]]
+                    q = {"measures": [meas[0]], "limit": 5, **({"dimensions": [dims[0]]} if dims else {})}
                     res = await step("data_query", call("data_query", {"query": q}))
                     if res is not None:
                         r.add("data_query", "PASS", f"{len(res.get('rows', []))} rows")
                 if dims:
-                    dim = dims[0] if "." in dims[0] else f"{cube}.{dims[0]}"
-                    sv = await step("data_search_values", call("data_search_values", {"dimension": dim, "search": ""}))
+                    sv = await step("data_search_values", call("data_search_values", {"dimension": dims[0], "limit": 5}))
                     if sv is not None:
-                        r.add("data_search_values", "PASS", dim)
+                        r.add("data_search_values", "PASS", dims[0])
             prop = await step("data_propose_migration", call("data_propose_migration", {
-                "description": "Add a count measure to the orders cube (smoke test; not applied)"}))
+                "description": "Smoke test: add a count measure (proposed only; agents can't apply)",
+                "ops": [{"op": "add_measure", "name": f"{cube}.smoke_count_{int(time.time())}", "agg": "count"}]}))
             if prop:
-                r.add("data_propose_migration", "PASS", f"status={prop.get('status')}, approval in the console")
+                r.add("data_propose_migration", "PASS", f"status={prop.get('status')}; a person applies it in the console")
 
         # 6. delete (needs a person's approval in the console)
         if url:
