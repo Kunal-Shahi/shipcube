@@ -33,13 +33,25 @@ STATS = {"cpu_stats": {"cpu_usage": {"total_usage": 300}, "system_cpu_usage": 20
          "memory_stats": {"usage": 128 * 1024 * 1024, "limit": 512 * 1024 * 1024}}
 
 
-def docker(seen: list[httpx.Request]) -> httpx.Client:
+IAP_REQUESTS = [("hello-ab12cd", 200, 10), ("hello-ab12cd", 200, 20), ("hello-ab12cd", 500, 30),
+                ("hello-ab12cd", 200, 400), ("other-app", 200, 999)]
+IAP_LOGS = mux(*[(1, f"2026-10-29T11:59:{i:02d}.000Z " + json.dumps(
+    {"shipcube_request": True, "service": svc, "status": st, "latency_ms": ms}))
+    for i, (svc, st, ms) in enumerate(IAP_REQUESTS)])
+
+
+def docker(seen: list[httpx.Request], iap: bool = False) -> httpx.Client:
     def handler(r: httpx.Request) -> httpx.Response:
         seen.append(r)
         p = r.url.path
         if p == "/containers/json":
-            assert json.loads(r.url.params["filters"]) == {"label": ["shipcube.service=hello-ab12cd"]}
+            f = json.loads(r.url.params["filters"])
+            if f == {"label": ["com.docker.compose.service=local-iap"]}:
+                return httpx.Response(200, json=[{"Id": "iap", "State": "running"}] if iap else [])
+            assert f == {"label": ["shipcube.service=hello-ab12cd"]}
             return httpx.Response(200, json=[{"Id": "c1", "State": "running", "Names": ["/hello-ab12cd-1"]}])
+        if p == "/containers/iap/logs":
+            return httpx.Response(200, content=IAP_LOGS)
         if p.endswith("/logs"):
             return httpx.Response(200, content=LOGS)
         if p.endswith("/stats"):
@@ -59,6 +71,12 @@ def test_metrics_from_docker():
     assert m["cpu_utilization"] == 0.8  # 200/1000 of 4 CPUs = 0.8 vCPU against 1 requested
     assert m["memory_utilization"] == 0.25
     assert m["cost_usd"]["compute"] == 0.0 and m["latency_ms"] == {"p50": 0.0, "p95": 0.0}
+
+
+def test_metrics_from_the_local_iap():
+    m = LocalMonitor(client=docker([], iap=True), now=lambda: NOW).metrics(T, "1h")
+    assert m["requests"] == 4 and m["error_rate"] == 0.25          # other-app's line is ignored
+    assert m["latency_ms"] == {"p50": 30.0, "p95": 400.0}
 
 
 def test_logs_newest_first_with_severity_and_paging():
