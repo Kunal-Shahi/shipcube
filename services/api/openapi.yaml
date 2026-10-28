@@ -378,6 +378,17 @@ components:
             revisions: { type: array, items: { type: object, properties: { revision: { type: string }, status: { type: string }, created_at: { type: string } } } }
             runtime: { type: [object, 'null'], description: Live Cloud Run state }
             restorable_until: { type: [string, 'null'] }
+            estimate:
+              type: [object, 'null']
+              description: The load estimate the latest deploy used (its estimate_id, or the latest finished estimate for this app name)
+              properties:
+                estimate_id: { type: string }
+                workload_class: { type: string }
+                tier: { type: string }
+                confidence: { type: [number, 'null'] }
+                monthly_cost_usd: { type: object, properties: { low: { type: number }, expected: { type: number }, high: { type: number } } }
+                explained_by: { type: [string, 'null'] }
+                created_at: { type: string }
     EstimateResult:
       type: object
       description: The classifier fills the numbers; Muse Spark (or rules, as a fallback) fills reasoning, alternatives and recommended_caps.

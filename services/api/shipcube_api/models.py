@@ -273,6 +273,16 @@ class AppList(BaseModel):
     apps: list[AppSummary]
 
 
+class AppEstimate(BaseModel):
+    estimate_id: str | None
+    workload_class: str
+    tier: str
+    confidence: float | None
+    monthly_cost_usd: dict[str, float]
+    explained_by: str | None
+    created_at: str | None
+
+
 class App(AppSummary):
     target: str
     region: str
@@ -285,6 +295,7 @@ class App(AppSummary):
     restorable_until: str | None = Field(None, description="Soft-deleted apps can be restored from the console until then")
     runtime: dict[str, Any] | None = Field(None, description="Live state from Cloud Run: ready, URL, revision, IAP, scaling")
     revisions: list[dict[str, Any]] = Field(default_factory=list, description="Recent deployments, newest first (for rollback)")
+    estimate: AppEstimate | None = Field(None, description="The load estimate the latest deploy used (estimate_id, or the latest for this app name)")
 
 
 class EstimateResult(BaseModel):

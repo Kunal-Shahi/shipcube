@@ -224,6 +224,8 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
                       " left join secret_refs s on s.id = p.secret_ref_id where p.workspace_id = %s and"
                       " (p.app_id = %s or p.app_id is null) order by p.app_id nulls last limit 1",
                       (app["workspace_id"], app["id"])).fetchone()
+    est = conn.execute("select * from load_estimates where app_id = %s order by created_at desc limit 1",
+                       (app["id"],)).fetchone()
     history = conn.execute("select revision, status, created_at from deployments where app_id = %s and revision is not null"
                            " order by created_at desc limit 5", (app["id"],)).fetchall()
     return {
@@ -240,6 +242,10 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
         else {"provider": "meta", "model": "muse-spark", "key_secret": None},
         "updated_at": _iso(dep["finished_at"] if dep and dep["finished_at"] else app["created_at"]),
         "deleted_at": _iso(app["deleted_at"]), "restorable_until": _iso(app["purge_after"]),
+        "estimate": {"estimate_id": est["reasoning"].get("estimate_id"), "workload_class": est["workload_class"],
+                     "tier": est["recommended_tier"], "confidence": float(est["confidence"]) if est["confidence"] is not None else None,
+                     "monthly_cost_usd": est["reasoning"].get("monthly_cost_usd") or {"expected": float(est["monthly_cost_usd"] or 0)},
+                     "explained_by": est["reasoning"].get("explained_by"), "created_at": _iso(est["created_at"])} if est else None,
         "revisions": [{"revision": h["revision"], "status": h["status"], "created_at": _iso(h["created_at"])} for h in history],
     }
 
@@ -412,6 +418,8 @@ def start_deploy(caller: Caller, slug: str, payload: dict[str, Any], idem: str |
             except ValueError:
                 raise Conflict(f"unknown target {target}; see whoami") from None
         tgt = target_for(conn, link_id)
+        est = _finished_estimate(conn, caller, slug, payload.get("estimate_id"))
+        tier = payload.get("tier") or (est["result"].get("tier") if est else None)
         caps_ws = workspace_caps(conn, caller.workspace_id)
         app = conn.execute("select * from apps where workspace_id = %s and slug = %s and deleted_at is null",
                            (caller.workspace_id, slug)).fetchone()
@@ -424,7 +432,7 @@ def start_deploy(caller: Caller, slug: str, payload: dict[str, Any], idem: str |
             app = conn.execute(
                 "insert into apps (id, workspace_id, gcp_link_id, slug, name, tier, kind, service_name, region, runtime_sa,"
                 " status, created_by) values (%s,%s,%s,%s,%s,%s,'service',%s,%s,%s,'draft',%s) returning *",
-                (uuid.uuid4(), caller.workspace_id, link_id, slug, slug, payload.get("tier") or "T1", ref.service,
+                (uuid.uuid4(), caller.workspace_id, link_id, slug, slug, tier or "T1", ref.service,
                  settings.region, ref.runtime_sa, caller.user_id)).fetchone()
             conn.execute("insert into access_grants (id, workspace_id, app_id, principal_type, principal, granted_by)"
                          " values (%s,%s,%s,'user',%s,%s)", (uuid.uuid4(), caller.workspace_id, app["id"], caller.email,
@@ -445,14 +453,52 @@ def start_deploy(caller: Caller, slug: str, payload: dict[str, Any], idem: str |
             # A retry: enqueue() returns the original operation (or a conflict if the body changed).
             return enqueue(conn, caller, caller.workspace_id, "deploy", app["id"], tgt.project, payload, idem, reasons)
         dep_id = uuid.uuid4()
+        estimate_row = _record_estimate(conn, caller, app["id"], est) if est else None
         config = {"caps": payload.get("caps") or {}, "env_names": sorted((payload.get("env") or {}).keys()),
                   "secret_names": sorted((payload.get("secrets") or {}).keys()), "source_kind": payload["source"]["kind"]}
-        conn.execute("insert into deployments (id, workspace_id, app_id, config, status, requested_by, requested_via, token_id)"
-                     " values (%s,%s,%s,%s,'queued',%s,%s,%s)",
+        conn.execute("insert into deployments (id, workspace_id, app_id, config, status, requested_by, requested_via, token_id,"
+                     " load_estimate_id) values (%s,%s,%s,%s,'queued',%s,%s,%s,%s)",
                      (dep_id, caller.workspace_id, app["id"], Jsonb(config), caller.user_id,
-                      "mcp" if caller.via == "mcp" else "console", caller.token_id))
+                      "mcp" if caller.via == "mcp" else "console", caller.token_id, estimate_row))
+        # The estimate's tier goes in the unhashed part of the input, so a retry stays idempotent.
         return enqueue(conn, caller, caller.workspace_id, "deploy", app["id"], tgt.project, payload, idem, reasons,
-                       extra={"deployment_id": str(dep_id)})
+                       extra={"deployment_id": str(dep_id), **({"tier": tier} if tier and not payload.get("tier") else {})})
+
+
+def _finished_estimate(conn, caller: Caller, slug: str, estimate_id: str | None) -> dict[str, Any] | None:
+    """The estimate a deploy names, or else the latest finished estimate for that app name."""
+    if estimate_id:
+        row = conn.execute("select id, result, created_at from operations where workspace_id = %s and kind = 'estimate'"
+                           " and status = 'succeeded' and result->>'estimate_id' = %s", (caller.workspace_id, estimate_id)).fetchone()
+        if row is None:
+            raise Conflict(f"estimate {estimate_id} not found or not finished; poll it with operation first")
+        return row
+    return conn.execute("select id, result, created_at from operations where workspace_id = %s and kind = 'estimate'"
+                        " and status = 'succeeded' and input->>'app' = %s order by created_at desc limit 1",
+                        (caller.workspace_id, slug)).fetchone()
+
+
+def _record_estimate(conn, caller: Caller, app_id: Any, est: dict[str, Any]) -> Any:
+    """Store it against the app once (load_estimates); returns its id for deployments.load_estimate_id."""
+    r = est["result"]
+    prior = conn.execute("select id from load_estimates where app_id = %s and reasoning->>'estimate_id' = %s",
+                         (app_id, r["estimate_id"])).fetchone()
+    if prior:
+        return prior["id"]
+    res = r.get("resources") or {}
+    mem = str(res.get("memory", ""))
+    cost = r.get("monthly_cost_usd") or {}
+    return conn.execute(
+        "insert into load_estimates (id, workspace_id, app_id, workload_class, confidence, recommended_tier, cpu, memory_mib,"
+        " monthly_cost_usd, profile, reasoning, created_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
+        (uuid.uuid4(), caller.workspace_id, app_id, r.get("workload_class", "unknown"), r.get("confidence"), r.get("tier", "T1"),
+         float(res["cpu"]) if res.get("cpu") else None,
+         int(mem[:-2]) * (1024 if mem.endswith("Gi") else 1) if mem[-2:] in ("Mi", "Gi") else None,
+         cost.get("expected"), Jsonb(r.get("profile") or {}),
+         Jsonb({"estimate_id": r["estimate_id"], "operation_id": str(est["id"]), "monthly_cost_usd": cost,
+                "explained_by": r.get("explained_by"), "reasoning": r.get("reasoning"),
+                "recommended_caps": r.get("recommended_caps")}),
+         est["created_at"])).fetchone()["id"]
 
 
 def start_rollback(caller: Caller, slug: str, to: str, idem: str | None) -> Operation:

@@ -158,3 +158,32 @@ def test_hosted_target_is_reported_as_local_on_the_local_backend(client, ws, mon
     assert a["target"] == "local" and a["region"] == "local"
     assert client.get("/v1/apps", headers=ws["agent"]).json()["apps"][0]["target"] == "local"
     assert client.get("/v1/me", headers=ws["agent"]).json()["gcp_targets"][0]["kind"] == "local"
+
+
+def test_deploy_records_its_load_estimate_on_the_app(client, ws):
+    src = {"kind": "inline", "files": [{"path": "main.py", "content": "print(1)"}]}
+    est = client.post("/v1/estimates", json={"source": src, "app": "est-app"}, headers=ws["agent"]).json()
+    est = wait_op(client, ws["agent"], est["id"])
+    assert est["status"] == "succeeded", est
+    estimate_id = est["result"]["estimate_id"]
+
+    r = client.post("/v1/apps/est-app/deployments", json={"source": GIT, "estimate_id": "est_000000000000"}, headers=ws["agent"])
+    assert r.status_code == 409  # unknown estimates are refused, not ignored
+    r = client.post("/v1/apps/est-app/deployments", json={"source": GIT, "estimate_id": estimate_id}, headers=ws["agent"])
+    assert wait_op(client, ws["agent"], r.json()["id"])["status"] == "succeeded"
+    a = client.get("/v1/apps/est-app", headers=ws["agent"]).json()
+    e = a["estimate"]
+    assert e["estimate_id"] == estimate_id and e["workload_class"] == est["result"]["workload_class"]
+    assert e["tier"] == est["result"]["tier"] == a["tier"] and e["confidence"] == est["result"]["confidence"]
+    assert e["monthly_cost_usd"] == est["result"]["monthly_cost_usd"] and e["explained_by"] == est["result"]["explained_by"]
+
+    # Without estimate_id, the latest finished estimate for that app name is used; redeploys don't duplicate it.
+    r = client.post("/v1/apps/est-app/deployments", json={"source": GIT}, headers=ws["agent"])
+    wait_op(client, ws["agent"], r.json()["id"])
+    with db.tx() as conn:
+        n = conn.execute("select count(*) as n from load_estimates where workspace_id = %s", (ws["workspace_id"],)).fetchone()["n"]
+        dep = conn.execute("select load_estimate_id from deployments where workspace_id = %s order by created_at desc limit 1",
+                           (ws["workspace_id"],)).fetchone()
+    assert n == 1 and dep["load_estimate_id"] is not None
+    deployed(client, ws, "no-est-app")
+    assert client.get("/v1/apps/no-est-app", headers=ws["agent"]).json()["estimate"] is None
