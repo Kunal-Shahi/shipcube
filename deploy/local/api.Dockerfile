@@ -29,7 +29,7 @@ WORKDIR /srv/services/mcp
 RUN uv sync --locked --no-dev --extra data \
  && uv pip install --python .venv/bin/python --no-cache \
       "../../ml/workload-classifier[gcp]" ../../packages/profiler ../../packages/placement "../../packages/monitor[gcp]"
-ARG SHIPCUBE_DATA_REV=009a7dfb1314aa05d9a19c67cc87418a288775cd
+ARG SHIPCUBE_DATA_REV=213e9113a4ae791efd767f258443686403db1fd6
 RUN git init -q /tmp/sd && cd /tmp/sd \
  && git fetch -q --depth 1 https://github.com/Kunal-Shahi/shipcube-data "$SHIPCUBE_DATA_REV" \
  && git checkout -q FETCH_HEAD && mkdir -p /srv/data && cp -r examples/olist/migrations /srv/data/olist-migrations \

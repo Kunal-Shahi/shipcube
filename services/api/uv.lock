@@ -1152,7 +1152,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9" },
     { name = "requests", specifier = ">=2.32" },
     { name = "shipcube-classifier", marker = "extra == 'estimator'", git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=ml%2Fworkload-classifier&rev=fefbe7df1a5d3b686f40f5075a6754c68fe690ed" },
-    { name = "shipcube-data", extras = ["http", "duckdb", "postgres"], marker = "extra == 'data'", git = "https://github.com/Kunal-Shahi/shipcube-data?rev=009a7dfb1314aa05d9a19c67cc87418a288775cd" },
+    { name = "shipcube-data", extras = ["http", "duckdb", "postgres"], marker = "extra == 'data'", git = "https://github.com/Kunal-Shahi/shipcube-data?rev=213e9113a4ae791efd767f258443686403db1fd6" },
     { name = "shipcube-placement", marker = "extra == 'estimator'", git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=packages%2Fplacement&rev=fefbe7df1a5d3b686f40f5075a6754c68fe690ed" },
     { name = "shipcube-profiler", marker = "extra == 'estimator'", git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=packages%2Fprofiler&rev=fefbe7df1a5d3b686f40f5075a6754c68fe690ed" },
     { name = "uvicorn", specifier = ">=0.30" },
@@ -1174,7 +1174,7 @@ source = { git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=ml%2Fwork
 [[package]]
 name = "shipcube-data"
 version = "0.2.0"
-source = { git = "https://github.com/Kunal-Shahi/shipcube-data?rev=009a7dfb1314aa05d9a19c67cc87418a288775cd#009a7dfb1314aa05d9a19c67cc87418a288775cd" }
+source = { git = "https://github.com/Kunal-Shahi/shipcube-data?rev=213e9113a4ae791efd767f258443686403db1fd6#213e9113a4ae791efd767f258443686403db1fd6" }
 dependencies = [
     { name = "pydantic" },
     { name = "sqlglot" },
