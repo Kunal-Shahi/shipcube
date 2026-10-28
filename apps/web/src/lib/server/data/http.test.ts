@@ -153,7 +153,7 @@ describe("providerFromApi", () => {
       key_hint: "…Wxyz", base_url: null, model: "claude-haiku-5-5", added_at: "2026-10-29T03:00:00Z",
     });
     expect(p).toEqual({
-      id: "anthropic", label: "Anthropic", description: "Your own Anthropic API key.", connected: true,
+      id: "anthropic", label: "Anthropic", description: "Your own Anthropic API key.", connected: true, isDefault: true,
       keyHint: "…Wxyz", baseUrl: undefined, defaultModel: "claude-haiku-5-5", addedAt: "2026-10-29T03:00:00Z",
     });
   });
