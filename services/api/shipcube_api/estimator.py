@@ -36,9 +36,16 @@ class PlacementEstimator:
         from shipcube_placement import estimate
         from shipcube_profiler import CloudRunJobRunner, StaticRunner
 
-        # The sandbox (security §4: no-egress VPC, roleless SA) runs only once infra has created it.
-        runner = CloudRunJobRunner(project=settings.apps_project, region=settings.region,
-                                   service_account=settings.profiler_job) if settings.profiler_job else StaticRunner()
+        if os.environ.get("SHIPCUBE_PROFILER"):
+            # Explicit sandbox choice (e.g. `local`: docker run --network none on the local stack);
+            # shipcube_profiler.runner_from_env reads SHIPCUBE_PROFILER and its limits.
+            from shipcube_profiler import runner_from_env
+
+            runner = runner_from_env()
+        else:
+            # The sandbox (security §4: no-egress VPC, roleless SA) runs only once infra has created it.
+            runner = CloudRunJobRunner(project=settings.apps_project, region=settings.region,
+                                       service_account=settings.profiler_job) if settings.profiler_job else StaticRunner()
         tmp = Path(tempfile.mkdtemp(prefix="shipcube-upload-"))
 
         def fetch_upload(upload_id: str) -> Path:

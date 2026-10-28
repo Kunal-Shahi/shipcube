@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -97,9 +98,21 @@ func run(log *slog.Logger) error {
 		return errors.New("set GATEWAY_API_URL or GATEWAY_REGISTRY_FILE")
 	}
 
-	var secrets SecretSource = &SecretManager{Client: plain, Token: func(ctx context.Context) (string, error) {
+	sm := &SecretManager{Client: plain, Token: func(ctx context.Context) (string, error) {
 		return meta.get(ctx, "")
 	}}
+	// A local Secret Manager emulator (infra/local, the local stack) only in DEV_MODE; production
+	// refuses any endpoint but Google's, so a stray env var can't redirect key reads.
+	if ep := os.Getenv("SECRET_MANAGER_ENDPOINT"); ep != "" {
+		if !dev && !strings.HasPrefix(ep, "https://secretmanager.googleapis.com/") {
+			return errors.New("SECRET_MANAGER_ENDPOINT may point elsewhere than secretmanager.googleapis.com only with DEV_MODE=1")
+		}
+		sm.Endpoint = strings.TrimRight(ep, "/")
+		if dev {
+			sm.Token = func(context.Context) (string, error) { return "local", nil } // the emulator takes no credentials
+		}
+	}
+	var secrets SecretSource = sm
 	if dev {
 		secrets = EnvSecrets{Next: secrets}
 	}

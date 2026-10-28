@@ -23,7 +23,9 @@ x-switches: &switches
   SHIPCUBE_BACKEND: ${SHIPCUBE_BACKEND:-local}
   SHIPCUBE_MONITOR: ${SHIPCUBE_MONITOR:-local}
   SHIPCUBE_ESTIMATOR: ${SHIPCUBE_ESTIMATOR:-placement}
-  SHIPCUBE_PROFILER: ${SHIPCUBE_PROFILER:-local}
+  SHIPCUBE_PROFILER: ${SHIPCUBE_PROFILER:-local}     # PR #30: docker run --network none via the socket
+  SHIPCUBE_MODEL_URI: bundled                        # the classifier shipped in the package (no GCS)
+  DOCKER_HOST: unix:///var/run/docker.sock
   SHIPCUBE_TOKEN_PEPPER: local-dev-pepper-not-a-secret-0123456789abcdef
   SHIPCUBE_AI_GATEWAY_URL: http://gateway:8080
   SHIPCUBE_DATA_DEMO_TENANTS: shipcube.local=acme,example.com=acme   # seeded user's domain -> demo tenant
