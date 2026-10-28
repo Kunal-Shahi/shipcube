@@ -19,10 +19,12 @@ end $$;
 grant usage, create on schema public to shipcube_owner;
 grant usage on schema public to shipcube_app, shipcube_worker, shipcube_readonly;
 revoke create on schema public from public;
--- Migrations may add schemas of their own (shipcube-data's `catalog`), owned by shipcube_owner.
-do $$ begin
-  execute format('grant create on database %I to shipcube_owner', current_database());
-end $$;
+-- shipcube-data's catalog (tables come from `admin migrate` as shipcube_owner; FORCE RLS on
+-- app_workspace()). Created here, like public, so the migration role needs no CREATE on the
+-- database. Not `authorization shipcube_owner`: postgres isn't a member of it on Cloud SQL.
+create schema if not exists catalog;
+grant usage, create on schema catalog to shipcube_owner;
+grant usage on schema catalog to shipcube_app, shipcube_worker, shipcube_readonly;
 
 -- Each service's IAM database user can act only as its own role.
 grant shipcube_owner  to "sc-migrator@shipcube-control-ks.iam";
