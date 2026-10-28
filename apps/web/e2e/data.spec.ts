@@ -28,7 +28,7 @@ test("the warehouse is connected and reachable", async () => {
 });
 
 test("lists the demo cubes, and orders is partitioned in the tenant schema", async () => {
-  await page.goto("/data/cubes");
+  await page.goto("/data");  // the cube list is the Data overview; /data/cubes/<name> is one cube
   const cubes = page.locator('a[href^="/data/cubes/"]');
   await expect.poll(() => cubes.count()).toBeGreaterThanOrEqual(5);
   await page.goto("/data/cubes/orders");
