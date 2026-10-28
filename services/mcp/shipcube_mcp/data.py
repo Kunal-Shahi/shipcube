@@ -203,14 +203,14 @@ class StubDataBackend:
 
 
 class CatalogDataBackend(ShipcubeDataBackend):
-    """shipcube-data with its catalog in Postgres (SHIPCUBE_DATA_CATALOG_URL), as on the local stack
-    (`shipcube-data seed`) and, later, in production. Connections are per thread, so calls run on the
-    caller's thread."""
+    """shipcube-data on the shared catalog in ShipCube's database (schema `catalog`, FORCE RLS): the
+    same tools as the API's /v1/data routes, each call in db.tx(caller) as shipcube_app. Needs the API
+    in this process (the combined MCP + API server)."""
 
-    def __init__(self) -> None:  # noqa: D107 — no worker thread: tools_from_env is thread-safe
-        from shipcube_data.local import tools_from_env
+    def __init__(self) -> None:  # noqa: D107 — no worker thread: each call opens its own db.tx
+        from shipcube_api import data_layer
 
-        self._tools = tools_from_env()
+        self._tools = data_layer.tools()
 
     def call(self, name: str, args: dict[str, Any], caller: CallerInfo) -> dict[str, Any]:
         return self._call(name, args, caller)
@@ -222,7 +222,12 @@ def default_backend() -> DataBackend | None:
     shipcube-data PR #1 serves one catalog per process (its demo warehouse), bound to the workspace in
     SHIPCUBE_DATA_WORKSPACE. Per-workspace catalogs in Postgres are the data layer's next step."""
     dev = os.environ.get("SHIPCUBE_DEV_MODE") == "1"
-    if os.environ.get("SHIPCUBE_DATA_CATALOG_URL"):
+    try:
+        import shipcube_data.http  # noqa: F401  (the `data` extra)
+        in_process_api = not os.environ.get("SHIPCUBE_API_URL")
+    except ImportError:
+        in_process_api = False
+    if in_process_api:
         return CatalogDataBackend()
     workspace_id = os.environ.get("SHIPCUBE_DATA_WORKSPACE")
     try:

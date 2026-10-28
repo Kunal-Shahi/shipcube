@@ -52,8 +52,10 @@ x-switches: &switches
   SHIPCUBE_GATEWAY_URL: http://localhost:${SHIPCUBE_GATEWAY_PORT:-18090}
   META_API_KEY: ${META_API_KEY:-}
   META_BASE_URL: ${META_BASE_URL:-https://api.meta.ai/v1}
-  # Data layer (shipcube-data PR #7): catalog in this stack's Postgres, Olist demo warehouse in DuckDB.
-  SHIPCUBE_DATA_CATALOG_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/shipcube_data
+  # Data layer (shipcube-data PR #7): the catalog is schema `catalog` in this stack's ShipCube database,
+  # under FORCE RLS (security's design); the API and MCP reach it only through db.tx(caller) as shipcube_app.
+  # SHIPCUBE_DATA_CATALOG_URL is for the `data-seed` tool only (it writes the seeded workspace's rows).
+  SHIPCUBE_DATA_CATALOG_LAYOUT: shared
   SHIPCUBE_DATA_WAREHOUSE: ${SHIPCUBE_DATA_WAREHOUSE:-duckdb}
   SHIPCUBE_DATA_DUCKDB_PATH: /data/olist.duckdb
   SHIPCUBE_DATA_WAREHOUSE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/warehouse?sslmode=disable
@@ -78,6 +80,7 @@ services:
     profiles: [tools]
     environment:
       <<: *switches
+      SHIPCUBE_DATA_CATALOG_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/shipcube
     volumes: ["shipcube-data:/data"]
     command: ["shipcube-data", "seed"]
 

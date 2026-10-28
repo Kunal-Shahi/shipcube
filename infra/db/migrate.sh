@@ -23,5 +23,7 @@ DB="host=127.0.0.1 port=${PORT} dbname=shipcube user=sc-migrator@${PROJECT}.iam 
 "$PSQL" "$DB" -q -f "$HERE/owner_defaults.sql"
 
 cd "$API_DIR"
+# --extra data: `admin migrate` also applies shipcube-data's shared catalog (schema `catalog`, which
+# bootstrap.sql provisions) right after the API's schema. Needs uv and git on the operator's machine.
 SHIPCUBE_DATABASE_URL="postgresql://sc-migrator%40${PROJECT}.iam@127.0.0.1:${PORT}/shipcube?sslmode=disable" \
-  "${PYTHON:-python3}" -m shipcube_api.admin migrate
+  ${MIGRATE_PYTHON:-uv run --locked --no-dev --extra data python} -m shipcube_api.admin migrate
