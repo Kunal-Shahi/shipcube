@@ -211,6 +211,23 @@ async def run(r: Report) -> None:
                 m = ins.get("metrics") or {}
                 r.add("inspect_app", "PASS", f"status={ins['status']['status']}, {len(ins['logs']['entries'])} log lines, "
                       f"instances={m.get('instances')}, memory={m.get('memory_utilization')}")
+                # Request metrics come from the local IAP (every request above went through it): the
+                # console's Monitoring tab shows these, so they must not be empty once the app served.
+                lat = m.get("latency_ms") or {}
+                ok = (m.get("requests") or 0) >= 1 and (lat.get("p95") or 0) > 0
+                r.add("inspect_app request metrics (via the IAP)", "PASS" if ok else "FAIL",
+                      f"requests={m.get('requests')}, error_rate={m.get('error_rate')}, p50={lat.get('p50')}, "
+                      f"p95={lat.get('p95')} ms")
+                # The deploy used estimate_id, so the app should carry its load estimate (console Overview).
+                app_view = (ins.get("status") or {})
+                if "estimate" not in app_view:
+                    r.add("app keeps its load estimate", "SKIP",
+                          "the API's app view has no `estimate` field yet (networking + frontend)")
+                else:
+                    est_ok = bool(app_view.get("estimate")) and (not estimate_id or
+                                                                 app_view["estimate"].get("estimate_id") == estimate_id)
+                    r.add("app keeps its load estimate", "PASS" if est_ok else "FAIL",
+                          f"estimate_id={(app_view.get('estimate') or {}).get('estimate_id')}, deployed with {estimate_id}")
         apps = await step("list_apps", call("list_apps"))
         if apps is not None:
             r.add("list_apps", "PASS", f"{len(apps.get('apps', []))} apps")

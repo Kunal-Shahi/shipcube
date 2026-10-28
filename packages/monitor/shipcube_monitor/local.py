@@ -6,9 +6,9 @@ reports, and what it can't:
 - instances: running containers; cold_starts: container `start` events in the window.
 - cpu/memory utilisation: one `stats` sample per running container, against the app's requested
   CPU and memory.
-- requests, 5xx and 429 counts: parsed from access-log lines in the window ("GET /path HTTP/1.1" 200).
-  Apps that don't log requests report 0 requests.
-- latency percentiles: 0. There's no request proxy locally; Cloud Run measures them in production.
+- requests, 5xx/429 counts and p50/p95 latency: from the local IAP's per-request JSON lines
+  (`shipcube_request`, the front end every app request goes through, as Cloud Run's is in production).
+  Without those, from the app's own access-log lines ("GET /path HTTP/1.1" 200), with no latency.
 - cost: 0. Nothing is billed locally.
 """
 
@@ -30,6 +30,15 @@ from .types import WINDOWS, AppTarget, NoUsage, UsageSource, Window, severity_at
 ACCESS = re.compile(r'"(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) [^"]*" (\d{3})\b')
 LEVEL = re.compile(r"\b(CRITICAL|ERROR|WARNING|WARN|INFO|DEBUG)\b")
 MAX_LINES = 5000
+# The local IAP container (deploy/local/compose.yaml service `local-iap`).
+IAP_LABEL = os.environ.get("SHIPCUBE_LOCAL_IAP_LABEL", "com.docker.compose.service=local-iap")
+
+
+def _pct(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    v = sorted(values)
+    return v[min(len(v) - 1, int(q * len(v)))]
 
 
 def _client() -> httpx.Client:
@@ -90,6 +99,24 @@ class LocalMonitor:
             out.append((ts, stream, text))
         return out
 
+    def _iap_requests(self, t: AppTarget, since: int) -> tuple[list[int], list[float]]:
+        """Status codes and latencies (ms) of the app's requests, from the local IAP's log."""
+        codes: list[int] = []
+        latencies: list[float] = []
+        iaps = self._get("/containers/json", filters=json.dumps({"label": [IAP_LABEL]})).json()
+        for c in iaps:
+            for _, _, text in self._lines(c["Id"], since):
+                if '"shipcube_request"' not in text:
+                    continue
+                try:
+                    rec = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("service") == t.service:
+                    codes.append(int(rec["status"]))
+                    latencies.append(float(rec.get("latency_ms", 0)))
+        return codes, latencies
+
     def metrics(self, target: AppTarget, window: Window = "1h") -> dict[str, Any]:
         if window not in WINDOWS:
             raise ValueError(f"unknown window {window!r}")
@@ -98,11 +125,12 @@ class LocalMonitor:
         containers = self._containers(target)
         running = [c for c in containers if c.get("State") == "running"]
 
-        codes: list[int] = []
-        for c in containers:
-            for _, _, text in self._lines(c["Id"], int(start.timestamp())):
-                if m := ACCESS.search(text):
-                    codes.append(int(m[1]))
+        codes, latencies = self._iap_requests(target, int(start.timestamp()))
+        if not codes:  # no IAP lines: fall back to the app's own access log (no latency there)
+            for c in containers:
+                for _, _, text in self._lines(c["Id"], int(start.timestamp())):
+                    if m := ACCESS.search(text):
+                        codes.append(int(m[1]))
 
         cpu = mem = 0.0
         for c in running:
@@ -127,7 +155,7 @@ class LocalMonitor:
             "window": window,
             "requests": requests,
             "error_rate": round(sum(1 for c in codes if c >= 500) / requests, 4) if requests else 0.0,
-            "latency_ms": {"p50": 0.0, "p95": 0.0},
+            "latency_ms": {"p50": round(_pct(latencies, 0.50), 1), "p95": round(_pct(latencies, 0.95), 1)},
             "instances": {"avg": float(n), "max": float(n)},
             "cold_starts": starts,
             "cpu_utilization": round(cpu / n, 3) if n else 0.0,
