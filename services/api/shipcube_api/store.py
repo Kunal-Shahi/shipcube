@@ -18,6 +18,7 @@ from psycopg.types.json import Jsonb
 
 from . import db
 from .auth import Caller
+from .deploy import isolation
 from .deploy.base import AppRef, Deployer, Target
 from .models import OpError, Operation, Progress, Step
 from .settings import settings
@@ -394,11 +395,13 @@ def decide(caller: Caller, op_id: str, approve: bool, comment: str | None) -> Op
 
 
 def start_estimate(caller: Caller, payload: dict[str, Any], idem: str | None) -> Operation:
+    isolation.check_source(settings, caller.workspace_id, payload.get("source") or {})
     with db.tx(caller) as conn:
         return enqueue(conn, caller, caller.workspace_id, "estimate", None, settings.apps_project, payload, idem)
 
 
 def start_deploy(caller: Caller, slug: str, payload: dict[str, Any], idem: str | None) -> Operation:
+    isolation.check_source(settings, caller.workspace_id, payload.get("source") or {})
     with db.tx(caller) as conn:
         target = payload.get("target") or HOSTED
         link_id = None if target == HOSTED else target
