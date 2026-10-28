@@ -47,8 +47,9 @@ x-switches: &switches
   SHIPCUBE_PROFILER: ${SHIPCUBE_PROFILER:-local}
   SHIPCUBE_MODEL_URI: bundled
   DOCKER_HOST: unix:///var/run/docker.sock
-  # Apps reach the AI gateway on the `shipcube` network.
+  # Apps reach the AI gateway on the `shipcube` network; agents are told the host-facing URL (ai_config).
   SHIPCUBE_AI_GATEWAY_URL: http://gateway:8080
+  SHIPCUBE_GATEWAY_URL: http://localhost:${SHIPCUBE_GATEWAY_PORT:-18090}
   META_API_KEY: ${META_API_KEY:-}
   META_BASE_URL: ${META_BASE_URL:-https://api.meta.ai/v1}
   # Data layer (shipcube-data PR #7): catalog in this stack's Postgres, Olist demo warehouse in DuckDB.
