@@ -29,14 +29,27 @@ class Settings:
     apps_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_APPS_PROJECT", "shipcube-apps-ks"))
     control_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONTROL_PROJECT", "shipcube-control-ks"))
     region: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_REGION", "asia-south1"))
+    # Registry repo in linked projects, and the shared repo hosted apps used before per-workspace repos.
     repo: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_REPO", "shipcube"))
     upload_bucket: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_UPLOAD_BUCKET", "shipcube-uploads-ks"))
     # Signs upload URLs through IAM signBlob (ADC user credentials cannot sign by themselves).
     signer_sa: str = field(default_factory=lambda: os.environ.get(
         "SHIPCUBE_SIGNER_SA", "sc-api@shipcube-control-ks.iam.gserviceaccount.com"))
-    # Cloud Build runs as this account in the apps project (security's sc-builder).
-    builder_sa: str = field(default_factory=lambda: os.environ.get(
-        "SHIPCUBE_BUILDER_SA", "sc-builder@shipcube-apps-ks.iam.gserviceaccount.com"))
+    # Hosted builds run as the workspace's own builder SA, read only the workspace's upload prefix
+    # and push only to its own registry repo (deploy/isolation.py). {ws} = workspace uuid,
+    # {ws_short} = its first 20 hex digits. Names agreed with security (infra/builder-isolation).
+    builder_sa_template: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_BUILDER_SA_TEMPLATE", "sc-build-{ws_short}@{apps_project}.iam.gserviceaccount.com"))
+    ar_repo_template: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_AR_REPO_TEMPLATE", "ws-{ws_short}"))
+    upload_prefix_template: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_UPLOAD_PREFIX_TEMPLATE", "ws/{ws}/"))
+    # The worker impersonates this SA to create a workspace's builder SA, repo and upload folder.
+    provisioner_sa: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_PROVISIONER_SA", "sc-provisioner@shipcube-control-ks.iam.gserviceaccount.com"))
+    # Granted on each builder SA: the worker mints its tokens, the hosted deployer submits builds as it.
+    worker_sa: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_WORKER_SA", "sc-worker@shipcube-control-ks.iam.gserviceaccount.com"))
+    build_submitter_sa: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_BUILD_SUBMITTER_SA", "sc-hosted-deployer@shipcube-control-ks.iam.gserviceaccount.com"))
     # Optional: impersonate this deployer for hosted deploys; unset means ADC acts directly.
     hosted_deployer_sa: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_HOSTED_DEPLOYER_SA") or None)
     # The AI gateway's URL, injected into every deployed app as SHIPCUBE_AI_GATEWAY. Unset: not injected.
