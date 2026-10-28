@@ -46,8 +46,8 @@ describe("caps mapping", () => {
 
 describe("grants and health", () => {
   it("splits principal prefixes", () => {
-    expect(grantFromApi({ principal: "group:fin@acme.com", role: "viewer", granted_at: "t" })).toMatchObject({ kind: "group", principal: "fin@acme.com", role: "viewer" });
-    expect(grantFromApi({ principal: "domain:acme.com", role: "editor", granted_at: "t" })).toMatchObject({ kind: "domain", role: "editor" });
+    expect(grantFromApi({ principal: "group:fin@example.com", role: "viewer", granted_at: "t" })).toMatchObject({ kind: "group", principal: "fin@example.com", role: "viewer" });
+    expect(grantFromApi({ principal: "domain:example.com", role: "editor", granted_at: "t" })).toMatchObject({ kind: "domain", role: "editor" });
   });
 
   it("maps unknown statuses to unknown, not healthy", () => {

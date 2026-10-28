@@ -66,6 +66,10 @@ class Settings:
     ai_gateway_url: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_AI_GATEWAY_URL") or None)
     local_iap_port: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_LOCAL_IAP_PORT", "8088")))
     local_ready_timeout_s: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_LOCAL_READY_TIMEOUT_S", "90")))
+    # Where approval links point (the console) and the AI gateway apps call. Set per environment;
+    # the defaults are the local dev servers.
+    console_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000").rstrip("/"))
+    gateway_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_GATEWAY_URL", "http://localhost:8090").rstrip("/"))
     builder_image: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_BUILDER", "gcr.io/buildpacks/builder:latest"))
 
 

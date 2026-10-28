@@ -158,6 +158,22 @@ jobs:
       - name: YAML
         run: pip install --quiet pyyaml && python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" deploy/*.yaml .github/workflows/*.yml
 
+  # Repo-wide guards that run on every PR. ShipCube owns no domain: a hard-coded one that someone
+  # else registers would receive the tokens users paste next to it (red-team, PR #24).
+  guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No shipcube.dev references
+        run: |
+          if git grep -nIi 'shipcube\.dev' -- . ':!.github/workflows/ci.yml'; then
+            echo "::error::shipcube.dev isn't ours. Use config (SHIPCUBE_MCP_URL, SHIPCUBE_CONSOLE_URL) or a placeholder like <your ShipCube MCP URL>."
+            exit 1
+          fi
+
+  # The one required check. It runs even when jobs were skipped, and fails if any job failed.
+
   # The whole local stack, end to end: `make up` then `make smoke` (all 16 MCP tools, a real deploy,
   # the gateway). No secrets: without META_API_KEY the gateway's model call is skipped.
   local-stack:
@@ -225,7 +241,7 @@ jobs:
   # The one required check. It runs even when jobs were skipped, and fails if any job failed.
   ci-ok:
     if: always()
-    needs: [changes, python, gateway, web, deploy-scripts, local-stack, infra, local-db]
+    needs: [changes, python, gateway, web, deploy-scripts, local-stack, infra, local-db, guards]
     runs-on: ubuntu-latest
     steps:
       - run: |

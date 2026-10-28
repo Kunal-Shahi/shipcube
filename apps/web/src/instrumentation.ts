@@ -1,7 +1,19 @@
 // Server-side errors that escape a page or route handler end up here. They're written as
 // structured JSON so Cloud Logging and Error Reporting pick them up with the request path.
 
-export async function register() {}
+// At boot, a production server with invalid configuration (for example no SHIPCUBE_MCP_URL)
+// exits instead of serving. `next build` needs no environment, so the check skips the build.
+export async function register() {
+  if (process.env.NEXT_RUNTIME !== "nodejs" || process.env.NODE_ENV !== "production") return;
+  if (process.env.NEXT_PHASE === "phase-production-build") return;
+  const { config } = await import("./lib/server/config");
+  try {
+    config();
+  } catch (e) {
+    console.error(JSON.stringify({ severity: "CRITICAL", message: `Refusing to start: ${(e as Error).message}`, component: "console" }));
+    process.exit(1);
+  }
+}
 
 export async function onRequestError(
   error: unknown,

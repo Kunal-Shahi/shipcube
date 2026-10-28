@@ -19,7 +19,7 @@ export const warehouse: Warehouse = {
     { label: "Query byte cap", value: "10 GB per query" },
   ],
   connectedAt: "2026-10-14T09:30:00Z",
-  connectedBy: "kunal@acme-analytics.com",
+  connectedBy: "kunal@example.com",
   lastCheckedAt: ago(0.2),
   modelVersion: 5,
 };
@@ -144,8 +144,8 @@ export const cubes: Cube[] = [
   },
 ];
 
-const claude = { agent: "Claude Code", tokenName: "MacBook – Claude Code", user: "kunal@acme-analytics.com" };
-const human = { agent: "CLI", tokenName: "shipcube-data migrate", user: "kunal@acme-analytics.com" };
+const claude = { agent: "Claude Code", tokenName: "MacBook – Claude Code", user: "kunal@example.com" };
+const human = { agent: "CLI", tokenName: "shipcube-data migrate", user: "kunal@example.com" };
 
 export const migrations: Migration[] = [
   {
@@ -198,7 +198,7 @@ export const migrations: Migration[] = [
     description: "Rename purchased_at to ordered_at and drop the products join, which nothing should need now that category lives on items.",
     status: "proposed",
     kind: "breaking",
-    proposedBy: { agent: "Cursor", tokenName: "Cursor", user: "kunal@acme-analytics.com" },
+    proposedBy: { agent: "Cursor", tokenName: "Cursor", user: "kunal@example.com" },
     proposedAt: ago(6.4),
     baseVersion: 5,
     ops: [
@@ -238,6 +238,6 @@ export const migrations: Migration[] = [
     ops: [],
     diff: { added: [], changed: [], removed: [] },
     impact: { breaks: [], changes: [], warnings: [], unaffected: 0, appsBroken: [] },
-    applied: { version: 5 - i, at, by: "kunal@acme-analytics.com" },
+    applied: { version: 5 - i, at, by: "kunal@example.com" },
   })),
 ];

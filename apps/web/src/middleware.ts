@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/auth/types";
+import { emulatorPublicUrl } from "@/lib/server/config";
 
 // Runs on every page request:
 // 1. A per-request nonce and Content-Security-Policy (Next applies the nonce to its own scripts).
@@ -9,7 +10,9 @@ const PUBLIC = ["/sign-in", "/sign-up", "/api/auth/session", "/api/healthz"];
 
 export function csp(nonce: string, dev: boolean) {
   const authDomain = process.env.FIREBASE_AUTH_DOMAIN;
-  const frames = ["https://*.firebaseapp.com", "https://*.web.app", "https://accounts.google.com", authDomain && `https://${authDomain}`]
+  // Local only (config() refuses it elsewhere): the Firebase Auth emulator serves the sign-in popup and token API.
+  const emulator = process.env.AUTH_PROVIDER === "firebase-emulator" ? emulatorPublicUrl(process.env) : null;
+  const frames = ["https://*.firebaseapp.com", "https://*.web.app", "https://accounts.google.com", authDomain && `https://${authDomain}`, emulator]
     .filter(Boolean)
     .join(" ");
   return [
@@ -19,13 +22,13 @@ export function csp(nonce: string, dev: boolean) {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: https://lh3.googleusercontent.com",
     "font-src 'self'",
-    "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com" + (dev ? " ws:" : ""),
+    "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com" + (dev ? " ws:" : "") + (emulator ? ` ${emulator}` : ""),
     `frame-src ${frames}`,
     "frame-ancestors 'none'",
     "form-action 'self'",
     "base-uri 'none'",
     "object-src 'none'",
-    ...(dev ? [] : ["upgrade-insecure-requests"]),
+    ...(dev || emulator ? [] : ["upgrade-insecure-requests"]),
   ].join("; ");
 }
 

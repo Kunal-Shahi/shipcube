@@ -20,7 +20,7 @@ export interface Session {
 export type Intent = "sign-in" | "sign-up";
 
 export interface AuthProvider {
-  readonly id: "identity-platform" | "mock";
+  readonly id: "identity-platform" | "firebase-emulator" | "mock";
   getSession(): Promise<Session | null>;
   /**
    * Exchange a fresh Identity Platform ID token (from the browser's Google sign-in) for an

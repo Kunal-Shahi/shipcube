@@ -38,7 +38,7 @@ function Step({ n, title, children, done }: { n: number; title: string; children
 export function ConnectSteps({ canCreateTokens, mcpUrl }: { canCreateTokens: boolean; mcpUrl: string }) {
   const [token, setToken] = useState<string | null>(null);
   const [client, setClient] = useState<ClientId>("claude");
-  const s = snippets(undefined, mcpUrl);
+  const s = snippets(mcpUrl);
 
   return (
     <ol className="flex flex-col">
@@ -62,7 +62,7 @@ export function ConnectSteps({ canCreateTokens, mcpUrl }: { canCreateTokens: boo
           Add this to <code className="font-mono text-[12px]">~/.zshrc</code> or your secrets manager. The snippets below
           read <code className="font-mono text-[12px]">${TOKEN_ENV}</code>, so the token never lands in a config file you might commit.
         </p>
-        <CodeBlock label="Shell" code={snippets(token ?? undefined, mcpUrl).env} />
+        <CodeBlock label="Shell" code={snippets(mcpUrl, token ?? undefined).env} />
       </Step>
 
       <Step n={3} title="Add ShipCube to your agent">

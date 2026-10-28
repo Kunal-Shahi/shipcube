@@ -7,8 +7,8 @@ import type { Approval } from "./types";
 const ago = (h: number) => new Date(MOCK_NOW - h * 3600_000).toISOString();
 const ahead = (h: number) => new Date(MOCK_NOW + h * 3600_000).toISOString();
 
-const claude = { agent: "Claude Code", tokenName: "MacBook – Claude Code", user: "kunal@acme-analytics.com" };
-const cursor = { agent: "Cursor", tokenName: "Cursor", user: "kunal@acme-analytics.com" };
+const claude = { agent: "Claude Code", tokenName: "MacBook – Claude Code", user: "kunal@example.com" };
+const cursor = { agent: "Cursor", tokenName: "Cursor", user: "kunal@example.com" };
 
 export const WORKSPACE_DEFAULT_SPEND_CAP = 50;
 
@@ -73,7 +73,7 @@ export const approvals: Approval[] = [
     id: "apr_d8w1",
     kind: "domain_grant",
     status: "pending",
-    title: "Share regional-revenue-tracker with everyone at acme-analytics.com",
+    title: "Share regional-revenue-tracker with everyone at example.com",
     appId: "app_rrt01",
     appName: "regional-revenue-tracker",
     requestedBy: claude,
@@ -83,16 +83,16 @@ export const approvals: Approval[] = [
     reason:
       "A domain grant lets anyone who signs in with a Google account on that domain open the app, including people who join later. Adding named people or groups doesn't need approval.",
     effects: [
-      "Anyone signed in as …@acme-analytics.com can open the app as a viewer.",
+      "Anyone signed in as …@example.com can open the app as a viewer.",
       "Existing grants stay as they are.",
       "You can remove the domain later from the app's Access tab.",
     ],
     impact: [
-      { label: "Who can open it", before: "4 grants (you, 2 people or groups, 1 partner domain)", after: "Everyone at acme-analytics.com", tone: "warning" },
+      { label: "Who can open it", before: "4 grants (you, 2 people or groups, 1 partner domain)", after: "Everyone at example.com", tone: "warning" },
       { label: "Data shown", after: "Revenue and order share by Brazilian state" },
       { label: "Row-level rules", after: "None on these cubes, so everyone sees every state" },
     ],
-    tool: { name: "set_access", args: { app: "regional-revenue-tracker", add: ["domain:acme-analytics.com"], role: "viewer" } },
+    tool: { name: "set_access", args: { app: "regional-revenue-tracker", add: ["domain:example.com"], role: "viewer" } },
   },
   {
     id: "apr_e2n5",
@@ -133,7 +133,7 @@ export const approvals: Approval[] = [
     effects: ["Created the Cloud Run job churn-scoring-job and a Cloud Scheduler trigger at 03:00 BRT."],
     impact: [{ label: "Estimated cost", after: "$9.10 / month" }],
     tool: { name: "deploy_app", args: { name: "churn-scoring-job", tier: "T2", project: "acme-analytics-prod" } },
-    decision: { by: "kunal@acme-analytics.com", at: "2026-10-18T19:00:00Z" },
+    decision: { by: "kunal@example.com", at: "2026-10-18T19:00:00Z" },
   },
   {
     id: "apr_f6t3",
@@ -142,14 +142,14 @@ export const approvals: Approval[] = [
     title: "Raise the daily LLM token cap on support-ticket-triage",
     appId: "app_stt06",
     appName: "support-ticket-triage",
-    requestedBy: { agent: "Muse Code", tokenName: "Muse Code", user: "kunal@acme-analytics.com" },
+    requestedBy: { agent: "Muse Code", tokenName: "Muse Code", user: "kunal@example.com" },
     requestedAt: ago(4.8),
     expiresAt: ahead(19.2),
     reason: "The new cap is above the workspace default of 200,000 tokens per day.",
     effects: ["The token cap would change immediately."],
     impact: [{ label: "LLM tokens per day", before: "150,000", after: "1,000,000", tone: "warning" }],
     tool: { name: "set_caps", args: { app: "support-ticket-triage", llm_tokens_per_day: 1_000_000 } },
-    decision: { by: "kunal@acme-analytics.com", at: ago(4.5), note: "The classifier retries on every 429. Fix the retry loop first; 150k a day is plenty." },
+    decision: { by: "kunal@example.com", at: ago(4.5), note: "The classifier retries on every 429. Fix the retry loop first; 150k a day is plenty." },
   },
   {
     id: "apr_k9z0",

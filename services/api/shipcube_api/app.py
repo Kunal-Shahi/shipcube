@@ -324,4 +324,4 @@ def set_access(app: AppName, body: AccessChange, c: Annotated[Caller, Depends(sc
 @app.put("/v1/apps/{app}/ai", response_model=AiConfigResult)
 def ai_config(app: AppName, body: AiConfigRequest, c: Annotated[Caller, Depends(scope("secrets:write"))]):
     ai = store.set_ai(c, app, body.provider, body.model, body.key_secret, body.base_url)
-    return {"ai": ai, "gateway_url": f"https://ai.shipcube.dev/v1/apps/{app}"}
+    return {"ai": ai, "gateway_url": f"{settings.gateway_url}/v1/apps/{app}"}

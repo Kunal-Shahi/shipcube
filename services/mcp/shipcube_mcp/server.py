@@ -59,7 +59,7 @@ def build_server(api: Api, data: DataBackend | None = None) -> MCPServer:
         token_verifier=ApiTokenVerifier(api),
         # No authorization server yet, so no Protected Resource Metadata is published
         # (resource_server_url=None); issuer_url is required by the SDK but unused in phase 1.
-        auth=AuthSettings(issuer_url=os.environ.get("SHIPCUBE_CONSOLE_URL", "https://console.shipcube.dev"),
+        auth=AuthSettings(issuer_url=os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000"),
                           resource_server_url=None),
     )
     register_tools(server, api)

@@ -35,6 +35,10 @@ export async function requireSession(): Promise<Session> {
 export function webAuthConfig() {
   const c = config();
   if (c.auth === "mock") return null;
+  if (c.authEmulatorHost) {
+    // The emulator accepts any API key; a demo- project keeps the SDK away from Google.
+    return { apiKey: "demo-key", authDomain: `${c.identityProject}.firebaseapp.com`, projectId: c.identityProject ?? "", emulatorUrl: c.authEmulatorPublicUrl ?? undefined };
+  }
   return {
     apiKey: process.env.FIREBASE_WEB_API_KEY ?? "",
     authDomain: process.env.FIREBASE_AUTH_DOMAIN ?? `${c.identityProject}.firebaseapp.com`,
