@@ -92,6 +92,10 @@ spends reasoning tokens inside it (173 of 183 for a one-word reply).
 
 ## Deploy
 
+Until the API serves `/internal/gateway/resolve`, the registry is the `gateway-registry` secret, mounted
+as a file. `deploy/gateway_registry.py` writes it (one entry per hosted app's runtime service account,
+Muse `muse-spark-1.3`, default caps) and `deploy/deploy.sh --only gateway` refreshes it.
+
 `deploy/deploy.sh` builds this directory's `Dockerfile` on Cloud Build (distroless, non-root) and
 deploys Cloud Run service `shipcube-gateway`: service account `sc-gateway` (Secret Manager accessor on
 `meta-api-key` and `gateway-registry` only), scale to zero, at most 2 instances, 256 MiB. It is public
