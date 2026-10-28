@@ -119,7 +119,7 @@ URLS
     E2E_BASE_URL="http://localhost:${SHIPCUBE_CONSOLE_PORT:-3000}" \
     E2E_API_URL="http://127.0.0.1:${SHIPCUBE_API_PORT:-18080}" \
     E2E_MCP_URL="http://localhost:${SHIPCUBE_API_PORT:-18080}/mcp" \
-    E2E_APP="${SMOKE_APP:-hello-local}" \
+    E2E_APP="${SMOKE_APP:-$(cat "$STATE/smoke-app" 2>/dev/null || echo hello-local)}" \
       npm run test:e2e
     ;;
   logs) dc logs -f --tail 100 "${@:2}" ;;
