@@ -55,7 +55,10 @@ export interface LoadEstimate {
   memory: string;
   minInstances: number;
   maxInstances: number;
-  monthlyCost: number;
+  /** Expected monthly cost; undefined when the estimate has no usable number. */
+  monthlyCost?: number;
+  /** The estimator's range around monthlyCost, when it gives one. */
+  monthlyCostRange?: { low: number; high: number };
   reasoning: string[];
   signals: { label: string; value: string }[];
   /** The classifier that produced the numbers. */

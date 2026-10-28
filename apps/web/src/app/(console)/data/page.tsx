@@ -41,7 +41,8 @@ async function Cubes({ state }: { state: DemoState }) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-fg-muted">
         <span>
-          <Link href="/data/warehouse" className="text-fg hover:text-accent">{wh.name}</Link> ({wh.kind === "bigquery" ? "BigQuery" : wh.kind})
+          <Link href="/data/warehouse" className="text-fg hover:text-accent">{wh.name}</Link>
+          {wh.kind && <> ({wh.kind === "bigquery" ? "BigQuery" : wh.kind})</>}
         </span>
         <Pill tone="good">Connected</Pill>
         <span className="num">Model version {wh.modelVersion}</span>
