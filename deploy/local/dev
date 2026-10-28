@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ShipCube local stack: deploy/local/dev <up|down|reset|migrate|seed|smoke|logs|ps>
+# ShipCube local stack: deploy/local/dev <up|down|reset|migrate|seed|smoke|logs|logs-dump|ps>
 # (the repo-root Makefile wraps these). docs/LOCAL.md explains each component and its switch.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -36,7 +36,9 @@ migrate() {  # security's services: db, db-init (roles, bootstrap.sql), migrate 
 }
 
 seed() {
-  mkdir -p "$STATE"; chmod 700 "$STATE"
+  # 711: other users (the gateway container runs as distroless `nonroot`) can open known files such as
+  # gateway-registry.json but can't list the directory; seed.env itself is 600.
+  mkdir -p "$STATE"; chmod 711 "$STATE"
   if [ -f "$STATE/seed.env" ]; then echo "already seeded ($STATE/seed.env); 'reset' to start over"; return; fi
   local email=dev@shipcube.local out ws user pat ses app_tok app_hash
   out="$(dc run --rm --no-deps admin bootstrap --email "$email" --workspace demo --name "Local demo")"
@@ -109,6 +111,7 @@ URLS
     exit $rc
     ;;
   logs) dc logs -f --tail 100 "${@:2}" ;;
+  logs-dump) dc --profile tools logs --no-color --tail 200 "${@:2}" ;;   # non-following, for CI
   ps) dc ps ;;
   *) sed -n 2,3p "$0"; exit 2 ;;
 esac

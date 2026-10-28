@@ -176,7 +176,7 @@ jobs:
         run: make smoke
       - name: Logs on failure
         if: failure()
-        run: docker compose -f deploy/local/compose.yaml logs --no-color --tail 200
+        run: deploy/local/dev logs-dump
       - name: make down
         if: always()
         run: make down
