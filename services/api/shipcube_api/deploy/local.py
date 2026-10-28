@@ -391,6 +391,11 @@ class LocalDeployer:
         log.info("purged %s locally", app.service)
 
 
+    def verify_link(self, project_id: str, deployer_sa: str) -> list[str]:
+        raise DeployError("invalid_argument", "linking a GCP project needs SHIPCUBE_BACKEND=gcp; the local backend "
+                                              "deploys only to Docker on this machine")
+
+
 class LocalTelemetry:
     """inspect_app logs from `docker logs`; metrics aren't collected locally."""
 

@@ -28,8 +28,13 @@ def ws_short(workspace_id: str) -> str:
 
 
 def _fill(template: str, s: Settings, workspace_id: str) -> str:
-    return template.format(ws=uuid.UUID(str(workspace_id)), ws_short=ws_short(workspace_id), apps_project=s.apps_project,
-                           region=s.region)
+    return template.format(ws=uuid.UUID(str(workspace_id)), ws_short=ws_short(workspace_id),
+                           ws12=uuid.UUID(str(workspace_id)).hex[:12], apps_project=s.apps_project,
+                           control_project=s.control_project, region=s.region)
+
+
+def link_deployer_sa(s: Settings, workspace_id: str) -> str:
+    return _fill(s.link_deployer_sa_template, s, workspace_id)
 
 
 def builder_sa(s: Settings, workspace_id: str) -> str:

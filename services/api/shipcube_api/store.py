@@ -150,8 +150,14 @@ def write_app_caps(conn, workspace_id: str, app_id: str, caps: dict[str, Any], b
 # --- targets ---------------------------------------------------------------------------
 
 
+def hosted_target() -> str:
+    """What "hosted" means to the console: ShipCube's GCP project, or Docker on this machine."""
+    return "local" if settings.backend == "local" else HOSTED
+
+
 def targets(conn, workspace_id: str) -> list[dict[str, Any]]:
-    out = [{"id": HOSTED, "project": settings.apps_project, "kind": "shipcube", "default": True}]
+    out = [{"id": HOSTED, "project": "local" if settings.backend == "local" else settings.apps_project,
+            "kind": hosted_target(), "default": True}]
     for r in conn.execute("select id, project_id from gcp_links where workspace_id = %s and status = 'active'"
                           " order by created_at", (workspace_id,)).fetchall():
         out.append({"id": str(r["id"]), "project": r["project_id"], "kind": "linked", "default": False})
@@ -187,6 +193,7 @@ def me(caller: Caller) -> dict[str, Any]:
             "gcp_targets": targets(conn, caller.workspace_id),
             "limits": {"max_apps": int(caps["max_apps"]), "monthly_spend_usd": caps["spend_usd_per_month"]},
             "token": {"id": caller.token_id or "console", "scopes": sorted(caller.scopes), "expires_at": caller.expires_at},
+            "deployer_sa": isolation.link_deployer_sa(settings, caller.workspace_id),
         }
 
 
@@ -221,8 +228,9 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
                            " order by created_at desc limit 5", (app["id"],)).fetchall()
     return {
         "name": app["slug"], "url": app["url"] or "", "tier": app["tier"],
-        "target": HOSTED if app["gcp_link_id"] is None else str(app["gcp_link_id"]),
-        "region": app["region"], "status": app["status"],
+        "target": hosted_target() if app["gcp_link_id"] is None else str(app["gcp_link_id"]),
+        "region": "local" if app["gcp_link_id"] is None and settings.backend == "local" else app["region"],
+        "status": app["status"],
         "revision": (dep or {}).get("revision") or "", "image": (dep or {}).get("image_digest") or "",
         "caps": app_caps(conn, str(app["workspace_id"]), app["id"]),
         "access": [{"principal": f"{g['principal_type']}:{g['principal']}",
@@ -247,14 +255,16 @@ def app_ref_for(caller: Caller, slug: str, include_deleted: bool = True) -> tupl
         return app_ref(conn, row), row
 
 
-def list_apps(caller: Caller) -> list[dict[str, Any]]:
+def list_apps(caller: Caller, include_deleted: bool = False) -> list[dict[str, Any]]:
     with db.tx(caller) as conn:
         rows = conn.execute("select a.*, d.finished_at from apps a left join lateral (select finished_at from deployments"
                             " where app_id = a.id and status = 'succeeded' order by finished_at desc limit 1) d on true"
-                            " where a.workspace_id = %s and a.purged_at is null order by a.created_at",
-                            (caller.workspace_id,)).fetchall()
+                            " where a.workspace_id = %s and a.purged_at is null and (%s or a.deleted_at is null)"
+                            " order by a.created_at", (caller.workspace_id, include_deleted)).fetchall()
         return [{"name": r["slug"], "url": r["url"] or "", "tier": r["tier"], "status": r["status"],
-                 "updated_at": _iso(r["finished_at"] or r["created_at"])} for r in rows]
+                 "updated_at": _iso(r["finished_at"] or r["created_at"]),
+                 "target": hosted_target() if r["gcp_link_id"] is None else str(r["gcp_link_id"]),
+                 "deleted_at": _iso(r["deleted_at"]), "restorable_until": _iso(r["purge_after"])} for r in rows]
 
 
 # --- operations -------------------------------------------------------------------------
