@@ -1,4 +1,5 @@
-"""Entry point inside the GCP profiler job: profile the app at /app, print JSON.
+"""Entry point inside the profiler sandbox (Cloud Run job, or the local Docker
+container): profile the app at /app, print JSON.
 
     python -m shipcube_profiler.agent [APP_DIR]
 
@@ -25,8 +26,12 @@ def main() -> None:
     app_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "/app")
     hints = Hints.from_any(json.loads(os.environ.get("SHIPCUBE_HINTS", "{}")))
     summary = summarize(app_dir)
-    profile = LocalRunner(Limits(timeout_s=540)).run(app_dir, summary, hints)
-    profile.runner = "gcp"
+    # The sandbox (container) enforces the hard limits; these keep the agent inside them
+    # so it can measure and report instead of being killed mid-run.
+    limits = Limits(timeout_s=float(os.environ.get("SHIPCUBE_AGENT_TIMEOUT_S", "540")),
+                    memory_mb=int(os.environ.get("SHIPCUBE_AGENT_MEMORY_MB", "1800")))
+    profile = LocalRunner(limits).run(app_dir, summary, hints)
+    profile.runner = os.environ.get("SHIPCUBE_RUNNER_NAME", "gcp")
     # One line, prefixed, so the control plane can find it in the execution's logs.
     summary.excerpt = ""  # the control plane has the source; keep the log line small
     print(RESULT_PREFIX + json.dumps({"summary": summary.to_dict(), "profile": profile.to_dict()}), flush=True)

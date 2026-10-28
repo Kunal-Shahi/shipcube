@@ -1318,9 +1318,11 @@ name = "shipcube-api"
 version = "0.1.0"
 source = { editable = "../api" }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "google-auth" },
     { name = "google-cloud-storage" },
+    { name = "httpx" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pydantic" },
     { name = "requests" },
@@ -1336,9 +1338,11 @@ estimator = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=42" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "google-auth", specifier = ">=2.30" },
     { name = "google-cloud-storage", specifier = ">=2.17" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "requests", specifier = ">=2.32" },
@@ -1363,8 +1367,8 @@ source = { git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=ml%2Fwork
 
 [[package]]
 name = "shipcube-data"
-version = "0.1.0"
-source = { git = "https://github.com/Kunal-Shahi/shipcube-data?rev=5cdc6f8eb44209370e7f7da50104aa4a18ca2034#5cdc6f8eb44209370e7f7da50104aa4a18ca2034" }
+version = "0.2.0"
+source = { git = "https://github.com/Kunal-Shahi/shipcube-data?rev=21fc62d#21fc62d892d9e7f422a2645850d5f20310152ba5" }
 dependencies = [
     { name = "pydantic" },
     { name = "sqlglot" },
@@ -1373,6 +1377,9 @@ dependencies = [
 [package.optional-dependencies]
 duckdb = [
     { name = "duckdb" },
+]
+postgres = [
+    { name = "psycopg", extra = ["binary"] },
 ]
 
 [[package]]
@@ -1390,7 +1397,7 @@ dependencies = [
 
 [package.optional-dependencies]
 data = [
-    { name = "shipcube-data", extra = ["duckdb"] },
+    { name = "shipcube-data", extra = ["duckdb", "postgres"] },
 ]
 estimator = [
     { name = "shipcube-api", extra = ["estimator"] },
@@ -1409,7 +1416,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9" },
     { name = "shipcube-api", editable = "../api" },
     { name = "shipcube-api", extras = ["estimator"], marker = "extra == 'estimator'", editable = "../api" },
-    { name = "shipcube-data", extras = ["duckdb"], marker = "extra == 'data'", git = "https://github.com/Kunal-Shahi/shipcube-data?rev=5cdc6f8eb44209370e7f7da50104aa4a18ca2034" },
+    { name = "shipcube-data", extras = ["duckdb", "postgres"], marker = "extra == 'data'", git = "https://github.com/Kunal-Shahi/shipcube-data?rev=21fc62d" },
     { name = "starlette" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]

@@ -26,7 +26,8 @@ __all__ = [
 
 
 def provider_from_env(usage: UsageSource | None = None) -> MonitorProvider:
-    """The real provider, unless SHIPCUBE_MONITOR=mock in an explicit local DEV_MODE=1.
+    """Cloud Monitoring/Logging (gcp, default), Docker on the local stack (local), or, only in an
+    explicit DEV_MODE=1, canned data (mock).
 
     Production never returns mock data: asking for the mock without DEV_MODE is an error, not a
     silent fallback.
@@ -36,8 +37,12 @@ def provider_from_env(usage: UsageSource | None = None) -> MonitorProvider:
         from .gcp import GcpMonitor
 
         return GcpMonitor(usage=usage)
+    if mode == "local":  # the local stack: apps the local deployer runs as Docker containers
+        from .local import LocalMonitor
+
+        return LocalMonitor(usage=usage)
     if mode == "mock":
         if os.environ.get("DEV_MODE") != "1":
             raise RuntimeError("SHIPCUBE_MONITOR=mock is only allowed with DEV_MODE=1 (local development)")
         return MockMonitor()
-    raise ValueError(f"SHIPCUBE_MONITOR must be gcp or mock, not {mode!r}")
+    raise ValueError(f"SHIPCUBE_MONITOR must be gcp, local or mock, not {mode!r}")

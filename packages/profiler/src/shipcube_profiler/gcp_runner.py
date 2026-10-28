@@ -54,14 +54,22 @@ STORAGE_OBJ = "https://storage.googleapis.com/storage/v1/b/{bucket}/o/{name}"
 LOG_POLL_S = 5.0
 BUILD_TERMINAL = {"SUCCESS", "FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED"}
 
-DOCKERFILE = """\
+# Shared by the Cloud Run job (built by Cloud Build) and the local Docker sandbox
+# (docker_runner.py), so both profile the app in the same image. Requirements install
+# at build time (with network); the profiling run itself has none. The app runs as an
+# unprivileged user with a read-only /app; only /tmp is writable.
+SANDBOX_UID = 10001
+DOCKERFILE = f"""\
 FROM python:3.12-slim
-ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
-RUN pip install "psutil>=6.0,<8"
+ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \\
+    HOME=/tmp TMPDIR=/tmp PYTHONPATH=/opt/shipcube
+RUN pip install "psutil>=6.0,<8" \\
+ && useradd --uid {SANDBOX_UID} --no-create-home --shell /usr/sbin/nologin sandbox
 COPY app/ /app/
 RUN if [ -f /app/requirements.txt ]; then pip install -r /app/requirements.txt; fi
 COPY shipcube/ /opt/shipcube/
-ENV PYTHONPATH=/opt/shipcube
+RUN chmod -R a-w /app /opt/shipcube
+USER {SANDBOX_UID}:{SANDBOX_UID}
 WORKDIR /app
 ENTRYPOINT ["python", "-m", "shipcube_profiler.agent", "/app"]
 """
@@ -102,14 +110,22 @@ class GcpProfilerConfig:
                    build_service_account=e.get("SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT") or None)
 
 
-def _package(app_dir: Path) -> bytes:
-    """Tarball: app/ (the user's code), shipcube/ (profiler + classifier features), Dockerfile."""
+def _package(app_dir: Path, compress: bool = True) -> bytes:
+    """Tarball: app/ (the user's code), shipcube/ (profiler + classifier features), Dockerfile.
+
+    Deterministic (fixed mtimes and owners), so the uncompressed bytes hash the same
+    for the same code: the local sandbox uses that hash as its image cache key."""
     buf = io.BytesIO()
 
     def skip(rel: Path) -> bool:
         return bool({".git", ".venv", "venv", "node_modules", "__pycache__"} & set(rel.parts))
 
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+    def norm(ti: tarfile.TarInfo) -> tarfile.TarInfo:
+        ti.mtime, ti.uid, ti.gid, ti.uname, ti.gname = 0, 0, 0, "", ""
+        ti.mode = 0o644 if ti.isfile() else ti.mode
+        return ti
+
+    with tarfile.open(fileobj=buf, mode="w:gz" if compress else "w") as tar:
         data = DOCKERFILE.encode()
         ti = tarfile.TarInfo("Dockerfile")
         ti.size = len(data)
@@ -117,13 +133,13 @@ def _package(app_dir: Path) -> bytes:
         for p in sorted(app_dir.rglob("*")):
             rel = p.relative_to(app_dir)
             if p.is_file() and not p.is_symlink() and not skip(rel):
-                tar.add(p, arcname=f"app/{rel}", recursive=False)
+                tar.add(p, arcname=f"app/{rel}", recursive=False, filter=norm)
         for pkg in (shipcube_profiler, shipcube_classifier):
             root = Path(pkg.__file__).parent
             for p in sorted(root.rglob("*.py")):
                 rel = p.relative_to(root)
                 if not skip(rel):
-                    tar.add(p, arcname=f"shipcube/{root.name}/{rel}", recursive=False)
+                    tar.add(p, arcname=f"shipcube/{root.name}/{rel}", recursive=False, filter=norm)
     return buf.getvalue()
 
 
@@ -131,8 +147,16 @@ class CloudRunJobRunner:
     name = "gcp"
 
     def __init__(self, config: GcpProfilerConfig | None = None, client: GcpClient | None = None,
-                 log_wait_s: float = 150.0, poll_s: float = 3.0):
-        self.config = config or GcpProfilerConfig.from_env()
+                 log_wait_s: float = 150.0, poll_s: float = 3.0, **overrides: str):
+        """overrides (project, region, service_account, ...) replace single fields of the
+        environment config, for callers that already know e.g. the apps project."""
+        if config is None:
+            env = dict(os.environ)
+            for k, v in overrides.items():
+                if v:
+                    env[f"SHIPCUBE_PROFILER_{k.upper()}"] = v
+            config = GcpProfilerConfig.from_env(env)
+        self.config = config
         self._client = client
         self.log_wait_s, self.poll_s = log_wait_s, poll_s
 

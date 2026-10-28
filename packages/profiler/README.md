@@ -8,10 +8,11 @@ Runs an app on sample input and measures CPU, RSS, disk and network I/O, wall ti
 - `CloudRunJobRunner` (production): Cloud Build image → Cloud Run v2 job in a gen2, no-egress sandbox → result read from Cloud Logging → cleanup. Failures raise `ProfilerError(stage)`.
 - `LocalRunner`: a subprocess with psutil, rlimits, a scrubbed env and a no-egress socket/DNS hook.
   - It runs inside the job sandbox (`agent.py`).
-  - It's used directly only with `SHIPCUBE_DEV_MODE=1`.
+  - It's used directly only with `SHIPCUBE_PROFILER=inproc` plus `SHIPCUBE_DEV_MODE=1`.
   - On its own it's not a security boundary.
 - `StaticRunner`: typical numbers when code can't run (`mode: "static"`).
-- `default_runner()`: `CloudRunJobRunner.from_env()`, or `LocalRunner` in DEV_MODE.
+- `DockerRunner` (local stack): the same image as the Cloud Run job, run with `docker run --network none --read-only --user 10001 --cap-drop ALL --cpus 1 --memory 2048m --pids-limit 256` and a timeout. Build-time requirements, the same agent and metrics.
+- `runner_from_env()`: picks one by `SHIPCUBE_PROFILER`: `gcp` (Cloud Run job), `local` (Docker), or `inproc` (only in DEV_MODE).
 
 Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and `samples/nightly_batch` (a nightly job).
 
@@ -19,7 +20,9 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
 
 | Variable | Purpose |
 |---|---|
-| `SHIPCUBE_DEV_MODE` | `1` for local runs only |
+| `SHIPCUBE_PROFILER` | `gcp`, `local` (Docker sandbox) or `inproc` (DEV_MODE only) |
+| `SHIPCUBE_PROFILER_DOCKER`, `_CPUS`, `_MEMORY_MB`, `_PIDS`, `_TIMEOUT_S`, `_TMPFS_MB` | Local sandbox limits; the defaults match the Cloud Run job |
+| `SHIPCUBE_DEV_MODE` | `1` for in-process runs only |
 | `SHIPCUBE_PROFILER_PROJECT`, `_REGION`, `_BUCKET`, `_REPOSITORY`, `_NETWORK`, `_SUBNET`, `_SERVICE_ACCOUNT` | Required in production |
 | `SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT` | Optional build identity |
 
