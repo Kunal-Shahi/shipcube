@@ -84,6 +84,8 @@ infra/local/test.sh
 | Secrets | `local/localsecrets.py` generates values (prefix `sclocal_`) into `.local/`; `local/secretmanager.py` serves them at Secret Manager's REST path; compose passes them as env | Secret Manager; Cloud Run injects env | the secret names and env names |
 | Isolation checks | `local/test.sh` | `db/checks/check.sh` | `db/checks/rls_and_token.sql` via `db/checks/run.sh` |
 
+`db/checks/rls_and_token.sql` also checks that the migration ledgers are read-only to the service roles (a WARN until `db/proposed/0005_lock_migration_ledger.sql` is adopted). When shipcube-data's `catalog` schema exists, it checks that every catalog table has forced RLS, is owned by `shipcube_owner` and has only the `workspace_id = app_workspace()` policy, and that A can't read or write B there. `bootstrap.sql` creates the `catalog` schema and lets `shipcube_owner` create tables in it (no CREATE on the database); **re-run `db/bootstrap.sh` on Cloud SQL before the catalog migration goes live**.
+
 Both secret tools refuse to run on Cloud Run (`K_SERVICE`, `CLOUD_RUN_JOB`) or with `SHIPCUBE_ENV` other than `local`. Values are never rotated once created, so restarting keeps the database usable. If `.env` has `MUSE_API_KEY` (or `META_API_KEY`), it becomes the local `meta-api-key`. `local/test.sh` runs the shared RLS/PAT SQL check as sc-api, a PAT login through `auth.verify_pat`, and the deployer's build-isolation checks (workspace A can't use B's upload or image). Real IAM on build service accounts needs GCP: `tests/build-isolation.sh`. CI's `local-db` job runs the same commands.
 
 ## Build isolation (per-workspace builders)
@@ -105,7 +107,7 @@ Rollout:
 
 ```bash
 brew install cloud-sql-proxy libpq                      # once
-infra/db/bootstrap.sh                                   # once per instance, as postgres
+infra/db/bootstrap.sh                                   # per instance, and again when bootstrap.sql changes (idempotent), as postgres
 API_DIR=services/api PYTHON=python3.12 infra/db/migrate.sh   # every migration, as sc-migrator
 ```
 
@@ -114,5 +116,13 @@ API_DIR=services/api PYTHON=python3.12 infra/db/migrate.sh   # every migration, 
 ```bash
 LOGIN=sc-api infra/db/checks/check.sh
 ```
+
+### Pending live steps (Cloud SQL), in order
+
+The instance must be running. Take an on-demand backup first (`gcloud sql backups create --instance shipcube-pg --project shipcube-control-ks`), and run `check.sh` after each step. An API build refuses to start while its migrations are pending (`check_schema`), so each step must come **before** the deploy that needs it.
+
+1. **Before deploying #38 (shipcube-data catalog):** re-run `infra/db/bootstrap.sh`. `bootstrap.sql` now creates schema `catalog` (owned by postgres) and grants `shipcube_owner` CREATE in it. Without this step, the catalog migration fails with "permission denied for database shipcube".
+2. **Before deploying #35 (migration 0005, read-only migration ledger):** `migrate.sh` applies `0005_lock_migration_ledger.sql`. After that, `check.sh` reports `PASS 5` for `public.schema_migrations`.
+3. **With #38:** the same `migrate.sh` run applies the catalog (`data catalog applied: ['0001_catalog.sql']`), and `check.sh` then runs `PASS 6` on the catalog tables.
 
 The `postgres` password is only in Secret Manager (`sql-postgres-password`); rotate it by bumping `postgres_password_version`.
