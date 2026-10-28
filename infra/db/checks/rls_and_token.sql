@@ -122,10 +122,10 @@ begin
     end if;
   end loop;
 
-  -- 6. shipcube-data's catalog (schema `catalog`, if present): every tenant table has forced RLS,
+  -- 6. shipcube-data's catalog (schema `catalog`, once migrated): every tenant table has forced RLS,
   --    is owned by shipcube_owner, and has only the policy workspace_id = app_workspace() for
   --    reads and writes. Then a cross-workspace read and write on catalog.settings.
-  if to_regnamespace('catalog') is not null then
+  if to_regclass('catalog.catalog_schema_migrations') is not null then  -- bootstrap creates the empty schema
     select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace
      where s.nspname = 'catalog' and c.relkind in ('r', 'p') and c.relname <> 'catalog_schema_migrations'
        and not (c.relrowsecurity and c.relforcerowsecurity and pg_get_userbyid(c.relowner) = 'shipcube_owner');
@@ -159,7 +159,7 @@ begin
      where s.nspname = 'catalog' and c.relkind in ('r', 'p') and c.relname <> 'catalog_schema_migrations';
     raise notice 'PASS 6: catalog: forced RLS + exact workspace policy on % tables; A can''t read or write B; no context sees nothing', n;
   else
-    raise notice 'SKIP 6: no catalog schema';
+    raise notice 'SKIP 6: catalog not migrated';
   end if;
 
   raise notice 'ALL CHECKS PASSED (running as %)', current_user;
