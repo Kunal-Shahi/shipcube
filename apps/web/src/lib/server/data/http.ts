@@ -12,15 +12,18 @@ import type {
   Approval,
   ApprovalKind,
   Caps,
+  Cube,
   Health,
   LogLine,
+  Migration,
   Monitoring,
   Role,
   TierId,
+  Warehouse,
 } from "@/lib/types";
 import { api } from "../http";
 import { log } from "../log";
-import { FEATURE_ENDPOINT, type ConsoleData, type Feature, type PendingApproval } from "./source";
+import { FEATURE_ENDPOINT, type ConsoleData, type Feature, type PendingApproval, type WarehouseInput } from "./source";
 
 // --- API shapes (services/api/shipcube_api/models.py) ---------------------------------
 
@@ -229,7 +232,20 @@ async function optional<T>(what: string, p: Promise<T>): Promise<T | undefined> 
 }
 
 const notConnected = (f: Feature) => new NotConnectedError(FEATURE_ENDPOINT[f].name, FEATURE_ENDPOINT[f].endpoint);
-const AVAILABLE = new Set<Feature>([]);
+const AVAILABLE = new Set<Feature>(["data"]);
+
+// /v1/data/* is served by shipcube-data's router (shipcube_data/http.py); its bodies already are lib/types shapes.
+// Local stacks run a DuckDB warehouse, which isn't a WarehouseKind the form offers; show it as a detail instead.
+function warehouseFromApi(w: Warehouse & { kind?: string }): Warehouse {
+  if (!w.kind || ["bigquery", "postgres", "clickhouse"].includes(w.kind)) return w;
+  return { ...w, kind: undefined, details: [{ label: "Engine", value: `${w.kind} (local development)` }, ...(w.details ?? [])] };
+}
+
+function warehouseBody(input: WarehouseInput) {
+  return input.kind === "bigquery"
+    ? { kind: input.kind, project: input.project, location: input.location, serviceAccountKey: input.serviceAccountKey }
+    : { kind: input.kind, host: input.host, port: input.port, database: input.database, user: input.user, password: input.password, ssl: input.ssl };
+}
 const enc = encodeURIComponent;
 
 export const httpData: ConsoleData = {
@@ -345,24 +361,35 @@ export const httpData: ConsoleData = {
     throw notConnected("gcp_link");
   },
   async getWarehouse() {
-    throw notConnected("data");
+    return warehouseFromApi(await api<Warehouse>("/v1/data/warehouse"));
   },
-  async connectWarehouse() {
-    throw notConnected("data");
+  async connectWarehouse(input, save) {
+    // The API tests the credentials first and never echoes them; PUT also stores them in Secret Manager.
+    if (!save) return api<{ tables: number; schemas: number }>("/v1/data/warehouse:test", { method: "POST", body: warehouseBody(input) });
+    const out = await api<{ tables: number; schemas: number; warehouse: Warehouse }>("/v1/data/warehouse", {
+      method: "PUT",
+      body: warehouseBody(input),
+    });
+    return { ...out, warehouse: warehouseFromApi(out.warehouse) };
   },
   async listCubes() {
-    throw notConnected("data");
+    return api<Cube[]>("/v1/data/cubes");
   },
-  async getCube() {
-    throw notConnected("data");
+  async getCube(name) {
+    return orNull(api<Cube>(`/v1/data/cubes/${enc(name)}`));
   },
   async listMigrations() {
-    throw notConnected("data");
+    return api<Migration[]>("/v1/data/migrations");
   },
-  async getMigration() {
-    throw notConnected("data");
+  async getMigration(id) {
+    return orNull(api<Migration>(`/v1/data/migrations/${enc(id)}`));
   },
-  async decideMigration() {
-    throw notConnected("data");
+  async decideMigration(id, decision, { allowBreaking, note }) {
+    // A person's console session only; the API refuses PATs. Deciding twice answers 409.
+    return api<Migration>(`/v1/data/migrations/${enc(id)}:${decision}`, {
+      method: "POST",
+      body: decision === "apply" ? { allowBreaking } : { note },
+      idempotencyKey: `${decision}-${id}`,
+    });
   },
 };
