@@ -5,11 +5,12 @@
 #   docker compose --env-file .local/secrets.env -f infra/local/compose.yaml up -d --wait
 #   infra/local/test.sh
 #
-# db             Postgres 16 (Cloud SQL's version), 127.0.0.1:54329
+# db             Postgres 16 (Cloud SQL's version), host port ${SHIPCUBE_DB_PORT:-54329}
 # db-init        infra/db/local-init.sh: the Cloud SQL IAM user names as logins, then bootstrap.sql
 #                and owner_defaults.sql unchanged
 # migrate        the API's forward runner (python -m shipcube_api.admin migrate) as sc-migrator
 # secretmanager  Secret Manager REST emulator over .local/secrets.json, http://secretmanager:8085/v1
+#                (host port ${SHIPCUBE_SECRETMANAGER_PORT:-8085})
 #
 # Services that need the database depend on `migrate` completing, and sign in as their own login:
 # ${SHIPCUBE_API_DATABASE_URL} (sc-api) or ${SHIPCUBE_WORKER_DATABASE_URL} (sc-worker).
@@ -20,7 +21,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run python3 infra/local/localsecrets.py init and pass --env-file .local/secrets.env}
-    ports: ["127.0.0.1:54329:5432"]
+    ports: ["127.0.0.1:${SHIPCUBE_DB_PORT:-54329}:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
@@ -68,7 +69,7 @@ services:
     volumes:
       - ./:/app:ro
       - ../../.local:/local:ro
-    ports: ["127.0.0.1:8085:8085"]
+    ports: ["127.0.0.1:${SHIPCUBE_SECRETMANAGER_PORT:-8085}:8085"]
     command: ["python", "/app/secretmanager.py", "--port", "8085"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8085/v1/projects/local/secrets/token-hmac-pepper/versions/latest:access')"]

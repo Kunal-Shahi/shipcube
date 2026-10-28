@@ -2,7 +2,7 @@
 # Local tenant-isolation tests: the same checks as on Cloud SQL, against the local stack's
 # database (or CI's), signed in as the real service logins. Needs psql and uv.
 #
-#   infra/local/test.sh                 # database at 127.0.0.1:54329 (compose)
+#   infra/local/test.sh                 # database at 127.0.0.1:${SHIPCUBE_DB_PORT:-54329} (compose)
 #   LOCAL_DB=localhost:5432 infra/local/test.sh
 #
 # 1. infra/db/checks/rls_and_token.sql as sc-api: forced RLS on every tenant table, cross-workspace
@@ -14,7 +14,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 LOCAL_DIR="${SHIPCUBE_LOCAL_DIR:-$ROOT/.local}"
-export LOCAL_DB="${LOCAL_DB:-127.0.0.1:54329}"
+export LOCAL_DB="${LOCAL_DB:-127.0.0.1:${SHIPCUBE_DB_PORT:-54329}}"
 [[ -f "$LOCAL_DIR/secrets.env" ]] || {
   echo "no $LOCAL_DIR/secrets.env: run python3 infra/local/localsecrets.py init" >&2
   exit 1
