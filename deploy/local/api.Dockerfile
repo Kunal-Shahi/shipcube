@@ -11,6 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
       > /etc/apt/sources.list.d/docker.list \
  && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli \
  && rm -rf /var/lib/apt/lists/*
+# pack (Cloud Native Buildpacks) builds apps without a Dockerfile, like Cloud Build does in production.
+ARG TARGETARCH
+ARG PACK_VERSION=0.40.9
+RUN suffix=$([ "$TARGETARCH" = arm64 ] && echo linux-arm64 || echo linux) \
+ && curl -fsSL "https://github.com/buildpacks/pack/releases/download/v${PACK_VERSION}/pack-v${PACK_VERSION}-${suffix}.tgz" \
+    | tar -xz -C /usr/local/bin pack && pack --version
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never PYTHONUNBUFFERED=1
 WORKDIR /srv
 COPY services/api services/api

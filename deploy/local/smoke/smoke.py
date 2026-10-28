@@ -179,10 +179,18 @@ async def run(r: Report) -> None:
 
         if url:
             try:
+                # Local IAP: http://<service>.localhost:<port>. Connect to 127.0.0.1 with that Host header
+                # (not every resolver maps *.localhost), and authenticate like a signed-in person.
+                u = httpx.URL(url)
+                direct = u.copy_with(host="127.0.0.1")
+                headers = {"Host": u.netloc.decode(), "Authorization": f"Bearer {s['SHIPCUBE_PAT']}"}
+                anon = httpx.get(direct, headers={"Host": u.netloc.decode()}, timeout=10)
+                r.add("local IAP rejects anonymous access", "PASS" if anon.status_code in (401, 302, 303) else "FAIL",
+                      f"{anon.status_code}")
                 deadline, resp = time.monotonic() + 60, None
                 while time.monotonic() < deadline:
                     try:
-                        resp = httpx.get(url, timeout=10)
+                        resp = httpx.get(direct, headers=headers, timeout=10)
                         if resp.status_code == 200:
                             break
                     except httpx.TransportError:

@@ -3,25 +3,32 @@
 # (the repo-root Makefile wraps these). docs/LOCAL.md explains each component and its switch.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
 cd "$HERE"
 STATE="$HERE/.state"
-dc() { docker compose -f "$HERE/compose.yaml" "$@"; }
+SECRETS="$ROOT/.local/secrets.env"   # security's local secrets (infra/local/localsecrets.py)
+dc() { docker compose -f "$HERE/compose.yaml" --env-file "$SECRETS" --env-file "$HERE/.env" "$@"; }
 
 need() { command -v "$1" >/dev/null || { echo "missing $1 (see docs/LOCAL.md: Prerequisites)" >&2; exit 1; }; }
 need docker
 docker info >/dev/null 2>&1 || { echo "Docker isn't running (on macOS: colima start)" >&2; exit 1; }
 [ -f .env ] || cp .env.local.example .env
-# .env is generated from .env.local.example (port overrides and switches).
+python3 "$ROOT/infra/local/localsecrets.py" init >/dev/null   # idempotent: creates only missing values
+# .env (from .env.local.example) has port overrides and switches; secrets.env has META_API_KEY.
+set -a
 # shellcheck source=/dev/null
-set -a; . ./.env; set +a   # port overrides and switches
+. ./.env
+# shellcheck source=/dev/null
+. "$SECRETS"
+set +a
 
 services=(api worker gateway)
 ollama=0
 if grep -qE '^LOCAL_LLM=ollama' .env 2>/dev/null || [ "${LOCAL_LLM:-}" = ollama ]; then ollama=1; services+=(ollama); fi
 
-migrate() {
-  dc up -d --wait postgres
-  dc run --rm --no-deps migrate
+migrate() {  # security's services: db, db-init (roles, bootstrap.sql), migrate (as sc-migrator)
+  dc up -d --wait db secretmanager
+  dc run --rm migrate
 }
 
 seed() {
@@ -63,14 +70,15 @@ case "${1:-}" in
     migrate
     seed
     data_seed
-    dc --profile ollama up -d --wait --remove-orphans "${services[@]}"
+    dc --profile ollama up -d --wait --remove-orphans "${services[@]}" fake-gcs local-iap
     if [ "$ollama" = 1 ]; then dc exec ollama ollama pull "${LOCAL_LLM_MODEL:-qwen2.5:0.5b}" >/dev/null; fi
     dc ps
     cat <<URLS
 
 API + MCP:  http://localhost:${SHIPCUBE_API_PORT:-18080}  (MCP at /mcp; PAT in deploy/local/.state/seed.env)
 Gateway:    http://localhost:${SHIPCUBE_GATEWAY_PORT:-18090}/v1
-Postgres:   127.0.0.1:${SHIPCUBE_PG_PORT:-55432} (db shipcube)
+Apps:       http://<service>.localhost:${SHIPCUBE_IAP_PORT:-8088}  (local IAP; Bearer PAT or /_iap/login)
+Postgres:   127.0.0.1:${SHIPCUBE_DB_PORT:-54329} (db shipcube)
 Console:    cd apps/web && npm run dev   (see docs/LOCAL.md)
 URLS
     ;;
@@ -79,7 +87,7 @@ URLS
     dc --profile ollama --profile tools down --remove-orphans --volumes
     docker ps -aq --filter label=managed-by=shipcube | xargs -r docker rm -f >/dev/null
     rm -rf "$STATE"
-    echo "reset: database, seed and deployed local apps removed"
+    echo "reset: database, seed and deployed local apps removed (.local/ secrets kept)"
     ;;
   migrate) migrate ;;
   seed) seed; data_seed ;;
