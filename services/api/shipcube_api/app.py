@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
@@ -25,7 +26,7 @@ from .auth import Caller
 from .deploy.base import DeployError
 from .models import (
     AccessChange, AccessResult, AiConfigRequest, AiConfigResult, App, AppList, AppName, ApprovalDecision, Caps,
-    CapsResult, DeployRequest, EstimateRequest, Logs, Me, Metrics, Operation, RollbackRequest, Upload, UploadRequest,
+    CapsResult, DeployRequest, EstimateRequest, Logs, Me, Metrics, Operation, RollbackRequest, TokenCreate, TokenCreated, TokenList, Upload, UploadRequest,
 )
 from .settings import settings
 from .store_runtime import deployer, start_embedded_worker, stop_embedded_worker
@@ -75,7 +76,7 @@ async def request_context(request: Request, call_next):
         obs.request_id.reset(t_req)
         obs.trace_id.reset(t_trace)
     response.headers["X-Request-Id"] = rid
-    if request.url.path != "/healthz":
+    if request.url.path not in ("/healthz", "/health"):
         log.info("request", extra={"request_id": rid, "method": request.method, "path": request.url.path,
                                    "status": response.status_code, "ms": round((time.monotonic() - t0) * 1000)})
     return response
@@ -173,11 +174,48 @@ def accepted(op: Operation, response: Response) -> Operation:
 # --- routes ----------------------------------------------------------------------------
 
 
+# /health too: Cloud Run's front end reserves /healthz on run.app URLs, so external checks use /health.
 @app.get("/healthz", include_in_schema=False)
+@app.get("/health", include_in_schema=False)
 def healthz() -> dict:
     with db.tx(role=db.APP) as conn:
         conn.execute("select 1")
     return {"ok": True}
+
+
+# --- API tokens: console sessions only, so an agent can never mint or widen its own credentials ---
+
+
+def console_user(c: Annotated[Caller, Depends(caller)]) -> Caller:
+    if c.via != "console":
+        raise ApiError(403, "permission_denied", "API tokens are managed in the console")
+    return c
+
+
+@app.get("/v1/tokens", response_model=TokenList)
+def list_tokens(c: Annotated[Caller, Depends(console_user)]):
+    return {"tokens": store.list_tokens(c)}
+
+
+@app.post("/v1/tokens", response_model=TokenCreated, status_code=201)
+def create_token(body: TokenCreate, response: Response, c: Annotated[Caller, Depends(console_user)]):
+    try:
+        token, secret = store.create_token(c, body.name, body.scopes, body.days)
+    except ValueError as e:
+        raise ApiError(400, "invalid_argument", str(e)) from None
+    except PermissionError as e:
+        raise ApiError(403, "permission_denied", str(e)) from None
+    response.headers["Cache-Control"] = "no-store"
+    log.info("token created", extra={"token_id": token["id"], "scopes": token["scopes"]})
+    return {"token": token, "secret": secret}
+
+
+@app.delete("/v1/tokens/{token_id}", status_code=204)
+def revoke_token(token_id: uuid.UUID, c: Annotated[Caller, Depends(console_user)]) -> Response:
+    if not store.revoke_token(c, str(token_id)):
+        raise ApiError(404, "not_found", "no such active token")
+    log.info("token revoked", extra={"token_id": str(token_id)})
+    return Response(status_code=204)
 
 
 @app.get("/v1/me", response_model=Me)

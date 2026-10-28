@@ -1,0 +1,58 @@
+# shipcube-worker: the durable operations worker (deploy/runtime/worker_service.py). Rendered by
+# deploy/deploy.sh. One instance always on with CPU always allocated, because it polls the
+# Postgres queue; it is the only service that doesn't scale to zero. Not public: only health checks
+# (and the uptime check, with an OIDC token) call it.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: shipcube-worker
+  labels: {managed-by: shipcube-platform}
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      labels: {managed-by: shipcube-platform, release: "${TAG}"}
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "1"
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/execution-environment: gen2
+        run.googleapis.com/cloudsql-instances: ${SQL_INSTANCE}
+    spec:
+      serviceAccountName: ${SA_WORKER}
+      containerConcurrency: 10
+      timeoutSeconds: 60
+      containers:
+        - name: app
+          image: ${IMAGE_API}
+          command: ["python", "/srv/deploy/worker_service.py"]
+          ports: [{name: http1, containerPort: 8080}]
+          resources: {limits: {cpu: "1", memory: 1Gi}}
+          env:
+            - {name: SHIPCUBE_DATABASE_URL, value: "postgresql://sc-worker%40${PROJECT}.iam@/shipcube?host=/cloudsql/${SQL_INSTANCE}"}
+            - {name: SHIPCUBE_DB_IAM_AUTH, value: "1"}
+            - {name: SHIPCUBE_DB_SET_ROLE, value: "0"}
+            - {name: SHIPCUBE_DB_POOL, value: "3"}
+            - {name: SHIPCUBE_CONTROL_PROJECT, value: "${PROJECT}"}
+            - {name: SHIPCUBE_APPS_PROJECT, value: "${APPS_PROJECT}"}
+            - {name: SHIPCUBE_REGION, value: "${REGION}"}
+            - {name: SHIPCUBE_HOSTED_DEPLOYER_SA, value: "${SA_HOSTED_DEPLOYER}"}
+            - {name: SHIPCUBE_CONSOLE_URL, value: "${CONSOLE_URL}"}
+            - {name: SHIPCUBE_AI_GATEWAY_URL, value: "${GATEWAY_URL}"}
+            - {name: META_BASE_URL, value: "https://api.meta.ai/v1"}
+            - {name: SHIPCUBE_EXPLAINER_MODEL, value: "muse-spark-1.3"}
+            - {name: GOOGLE_CLOUD_PROJECT, value: "${PROJECT}"}
+            - name: META_API_KEY
+              valueFrom: {secretKeyRef: {name: meta-api-key, key: "${META_KEY_VERSION}"}}
+${PROFILER_ENV}
+          startupProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 3
+            timeoutSeconds: 3
+            failureThreshold: 40
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 60
+            timeoutSeconds: 5
+            failureThreshold: 3
