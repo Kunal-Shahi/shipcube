@@ -13,6 +13,7 @@ import type {
   ApprovalKind,
   Caps,
   Health,
+  LoadEstimate,
   LogLine,
   Monitoring,
   Role,
@@ -37,6 +38,20 @@ export interface ApiApp extends ApiAppSummary {
   deleted_at?: string | null;
   restorable_until?: string | null;
   runtime?: Record<string, unknown> | null;
+  /** The load estimate of the deploy that created the app (networking, GET /v1/apps/{app}). */
+  estimate?: ApiEstimate | null;
+}
+export interface ApiEstimate {
+  estimate_id: string;
+  workload_class: string;
+  tier: string;
+  confidence: number;
+  monthly_cost_usd: number;
+  explained_by: string;
+  created_at: string;
+  estimated_by?: string;
+  reasoning?: string[];
+  signals?: { label: string; value: string }[];
 }
 interface ApiLogs { entries: { timestamp: string; severity: string; message: string; revision?: string | null }[]; next_page_token: string | null }
 interface ApiMetrics {
@@ -91,6 +106,26 @@ export function placementOf(a: Pick<ApiApp, "target" | "region" | "runtime">): P
   const target = a.target ?? "";
   if (target === "local" || a.runtime?.backend === "local") return { runsLocally: true };
   return { billing: target.includes("linked") ? "own-gcp" : "shipcube", region: a.region };
+}
+
+/** Resources come from the app's caps, which deploy set from the estimate's sizing. */
+export function estimateFromApi(e: ApiEstimate, caps: Caps, cpu?: unknown): LoadEstimate {
+  return {
+    workloadClass: e.workload_class as LoadEstimate["workloadClass"],
+    confidence: e.confidence,
+    recommendedTier: tierOf(e.tier),
+    cpu: `${typeof cpu === "string" || typeof cpu === "number" ? cpu : 1} vCPU`,
+    memory: caps.memory,
+    minInstances: 0,
+    maxInstances: caps.maxInstances,
+    monthlyCost: e.monthly_cost_usd,
+    reasoning: e.reasoning ?? [],
+    signals: e.signals ?? [],
+    estimatedBy: e.estimated_by ?? "workload classifier",
+    explainedBy: e.explained_by,
+    estimatedAt: e.created_at,
+    overridden: false,
+  };
 }
 
 export function capsFromApi(c: Record<string, unknown>): Caps {
@@ -266,6 +301,7 @@ export const httpData: ConsoleData = {
       health,
       url: a.url,
       ...placementOf(a),
+      estimate: a.estimate ? estimateFromApi(a.estimate, caps, a.caps.cpu) : undefined,
       revision: a.revision,
       lastDeployAt: a.updated_at,
       aiProvider: a.ai.provider === "meta" ? `Muse (${a.ai.model})` : `${a.ai.provider} (${a.ai.model})`,
