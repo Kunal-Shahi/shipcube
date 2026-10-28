@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalFromOperation, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, placementOf, type ApiOperation } from "./http";
+import { approvalFromOperation, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, placementOf, providerFromApi, type ApiOperation } from "./http";
 
 const op = (over: Partial<ApiOperation>): ApiOperation => ({
   id: "op_1",
@@ -126,5 +126,18 @@ describe("monitoringFromApi", () => {
     expect(m.errorRate).toBe(1.2);
     expect(m.p95Ms).toBe(410);
     expect(m.freshness).toBe("fresh");
+  });
+});
+
+describe("providerFromApi", () => {
+  it("keeps only the key hint, and maps the rest to lib/types", () => {
+    const p = providerFromApi({
+      id: "anthropic", label: "Anthropic", description: "Your own Anthropic API key.", connected: true, default: true,
+      key_hint: "…Wxyz", base_url: null, model: "claude-haiku-5-5", added_at: "2026-10-29T03:00:00Z",
+    });
+    expect(p).toEqual({
+      id: "anthropic", label: "Anthropic", description: "Your own Anthropic API key.", connected: true,
+      keyHint: "…Wxyz", baseUrl: undefined, defaultModel: "claude-haiku-5-5", addedAt: "2026-10-29T03:00:00Z",
+    });
   });
 });
