@@ -18,6 +18,7 @@ from typing import Any
 from ..settings import Settings
 from .base import DeployError
 
+LOCAL_REGISTRY = "shipcube.local"  # the local backend's image namespace (deploy/local.py)
 UPLOAD_ID = re.compile(r"^upl_[0-9a-f]{8,32}$")
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 
@@ -66,6 +67,13 @@ def check_image(s: Settings, workspace_id: str, image: str) -> None:
     """Images in ShipCube's own projects must be digest-pinned and in the caller's workspace repo.
     Anything else (a public image, or one in the user's linked project) is the user's to choose."""
     host, _, path = image.lower().partition("/")
+    if host == LOCAL_REGISTRY:
+        prefix = f"{LOCAL_REGISTRY}/{ar_repo(s, workspace_id)}/"
+        if not image.startswith(prefix) or "/../" in image:
+            raise DeployError("permission_denied", f"image {image} is not in this workspace's namespace ({prefix.rstrip('/')})")
+        if not DIGEST.search(image):
+            raise DeployError("invalid_argument", f"image {image} must be pinned by image id (@sha256:...)")
+        return
     project = path.split("/", 1)[0]
     registry = host.split(":")[0]
     ours = registry.endswith("docker.pkg.dev") or registry == "gcr.io" or registry.endswith(".gcr.io")
