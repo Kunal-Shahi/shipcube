@@ -296,16 +296,28 @@ const tokenFromApi = (t: ApiTokenRow): ApiToken => ({
   expiresAt: t.expires_at,
   lastUsedAt: t.last_used_at,
 });
-// /v1/data/* is served by shipcube-data's router (shipcube_data/http.py); its bodies already are lib/types shapes.
+// /v1/data/* is served by shipcube-data's router (shipcube_data/http.py). Its bodies are snake_case like the rest of
+// /v1 and map one-to-one onto lib/types; `ops` are the migration's own JSON and are passed through untouched.
+const camelKey = (k: string) => k.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+
+export function camelize<T>(v: unknown): T {
+  if (Array.isArray(v)) return v.map((x) => camelize(x)) as T;
+  if (v === null || typeof v !== "object") return v as T;
+  return Object.fromEntries(
+    Object.entries(v as Record<string, unknown>).map(([k, x]) => [camelKey(k), k === "ops" ? x : camelize(x)]),
+  ) as T;
+}
+
 // Local stacks run a DuckDB warehouse, which isn't a WarehouseKind the form offers; show it as a detail instead.
-function warehouseFromApi(w: Warehouse & { kind?: string }): Warehouse {
+function warehouseFromApi(raw: unknown): Warehouse {
+  const w = camelize<Warehouse & { kind?: string }>(raw);
   if (!w.kind || ["bigquery", "postgres", "clickhouse"].includes(w.kind)) return w;
   return { ...w, kind: undefined, details: [{ label: "Engine", value: `${w.kind} (local development)` }, ...(w.details ?? [])] };
 }
 
 function warehouseBody(input: WarehouseInput) {
   return input.kind === "bigquery"
-    ? { kind: input.kind, project: input.project, location: input.location, serviceAccountKey: input.serviceAccountKey }
+    ? { kind: input.kind, project: input.project, location: input.location, service_account_key: input.serviceAccountKey }
     : { kind: input.kind, host: input.host, port: input.port, database: input.database, user: input.user, password: input.password, ssl: input.ssl };
 }
 const enc = encodeURIComponent;
@@ -426,35 +438,38 @@ export const httpData: ConsoleData = {
     throw notConnected("gcp_link");
   },
   async getWarehouse() {
-    return warehouseFromApi(await api<Warehouse>("/v1/data/warehouse"));
+    return warehouseFromApi(await api<unknown>("/v1/data/warehouse"));
   },
   async connectWarehouse(input, save) {
     // The API tests the credentials first and never echoes them; PUT also stores them in Secret Manager.
     if (!save) return api<{ tables: number; schemas: number }>("/v1/data/warehouse:test", { method: "POST", body: warehouseBody(input) });
-    const out = await api<{ tables: number; schemas: number; warehouse: Warehouse }>("/v1/data/warehouse", {
+    const out = await api<{ tables: number; schemas: number; warehouse: unknown }>("/v1/data/warehouse", {
       method: "PUT",
       body: warehouseBody(input),
     });
     return { ...out, warehouse: warehouseFromApi(out.warehouse) };
   },
   async listCubes() {
-    return api<Cube[]>("/v1/data/cubes");
+    return camelize<Cube[]>(await api<unknown>("/v1/data/cubes"));
   },
   async getCube(name) {
-    return orNull(api<Cube>(`/v1/data/cubes/${enc(name)}`));
+    const c = await orNull(api<unknown>(`/v1/data/cubes/${enc(name)}`));
+    return c === null ? null : camelize<Cube>(c);
   },
   async listMigrations() {
-    return api<Migration[]>("/v1/data/migrations");
+    return camelize<Migration[]>(await api<unknown>("/v1/data/migrations"));
   },
   async getMigration(id) {
-    return orNull(api<Migration>(`/v1/data/migrations/${enc(id)}`));
+    const m = await orNull(api<unknown>(`/v1/data/migrations/${enc(id)}`));
+    return m === null ? null : camelize<Migration>(m);
   },
   async decideMigration(id, decision, { allowBreaking, note }) {
     // A person's console session only; the API refuses PATs. Deciding twice answers 409.
-    return api<Migration>(`/v1/data/migrations/${enc(id)}:${decision}`, {
+    const m = await api<unknown>(`/v1/data/migrations/${enc(id)}:${decision}`, {
       method: "POST",
-      body: decision === "apply" ? { allowBreaking } : { note },
+      body: decision === "apply" ? { allow_breaking: allowBreaking } : { note },
       idempotencyKey: `${decision}-${id}`,
     });
+    return camelize<Migration>(m);
   },
 };
