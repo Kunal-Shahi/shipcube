@@ -7,6 +7,8 @@ info:
     Long-running work (estimates, deploys, deletes) returns 202 with an Operation,
     modelled on google.longrunning.Operation (AIP-151). Mutating POST/DELETE calls
     accept an Idempotency-Key header (draft-ietf-httpapi-idempotency-key-header).
+    The /v1/data/* routes (the console's Data page) are served by Kunal-Shahi/shipcube-data
+    (shipcube_data.http, its docs/HTTP.md) through the optional `data` extra; without it they answer 501.
 servers:
   - url: https://api.shipcube.dev
   - url: http://127.0.0.1:8080
