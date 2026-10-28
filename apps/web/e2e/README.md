@@ -11,6 +11,8 @@ Playwright drives one person's path through the console against a running local 
 7. Delete it the way an agent does (`DELETE /v1/apps/<app>` with the PAT), then approve the deletion on the console's approval page.
 8. Restore it from the console. This also leaves the stack ready for another run.
 
+`sign-in-redirect.spec.ts` covers sign-in where a popup can't work: popups blocked, and a browser that opens the sign-in window in the same tab. Both must finish through the redirect flow. These tests skip unless the console runs `AUTH_PROVIDER=firebase-emulator`.
+
 The tests start nothing themselves. The stack must already be up, and `make smoke` must have deployed the app.
 
 ## Run
