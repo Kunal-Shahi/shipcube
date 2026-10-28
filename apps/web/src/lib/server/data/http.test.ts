@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalFromOperation, capsFromApi, capsToApi, grantFromApi, healthOf, placementOf, type ApiOperation } from "./http";
+import { approvalFromOperation, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, placementOf, type ApiOperation } from "./http";
 
 const op = (over: Partial<ApiOperation>): ApiOperation => ({
   id: "op_1",
@@ -33,6 +33,29 @@ describe("approvalFromOperation", () => {
 
   it("falls back to the operation kind when approval_actions is missing", () => {
     expect(approvalFromOperation(op({ kind: "delete", approval_actions: [] })).kind).toBe("delete_app");
+  });
+});
+
+describe("estimateFromApi", () => {
+  it("maps the API's estimate, with sizing from the caps deploy set", () => {
+    const caps = capsFromApi({ monthly_spend_usd: 20, max_instances: 3, memory: "512Mi", concurrency: 80, requests_per_minute: 120 });
+    const e = estimateFromApi(
+      { estimate_id: "est_1", workload_class: "bursty-interactive", tier: "T1", confidence: 0.91, monthly_cost_usd: 6.8, explained_by: "muse-spark", created_at: "2026-10-29T10:00:00Z" },
+      caps,
+      "1",
+    );
+    expect(e).toMatchObject({
+      workloadClass: "bursty-interactive",
+      recommendedTier: "T1",
+      confidence: 0.91,
+      monthlyCost: 6.8,
+      cpu: "1 vCPU",
+      memory: "512 MiB",
+      maxInstances: 3,
+      explainedBy: "muse-spark",
+      reasoning: [],
+      signals: [],
+    });
   });
 });
 

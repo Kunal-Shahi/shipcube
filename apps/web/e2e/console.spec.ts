@@ -111,6 +111,18 @@ test("the apps list shows the app make smoke deployed", async () => {
   await expect(page.getByRole("heading", { name: APP, level: 1 })).toBeVisible();
 });
 
+test("the Overview shows the app's load estimate", async () => {
+  const app = await (await page.request.get(`${API_URL}/v1/apps/${APP}`, { headers: { Authorization: `Bearer ${pat}` } })).json();
+  // GET /v1/apps/{app} gains `estimate` with networking's change; until then there's nothing to show.
+  test.skip(!app.estimate, "the API doesn't return the app's estimate yet");
+  await page.goto(appPath);
+  await expect(page.getByText("No load estimate on record")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Load estimate" })).toBeVisible();
+  const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(app.estimate.monthly_cost_usd);
+  await expect(page.getByText(usd, { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(`${Math.round(app.estimate.confidence * 100)}% confidence`)).toBeVisible();
+});
+
 test("shares the app with a person", async () => {
   const viewer = `viewer-${Date.now()}@example.com`;
   await page.goto(`${appPath}/access`);

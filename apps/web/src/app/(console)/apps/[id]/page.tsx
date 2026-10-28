@@ -17,6 +17,8 @@ const CLASS_LABEL: Record<string, string> = {
   "compute-heavy": "Compute-heavy",
 };
 
+const explainer = (by: string) => (by === "rules" ? "Rule-based explanation (Muse Spark was unavailable)" : `Explained by ${by}`);
+
 function EstimatePanel({ e, appName }: { e?: LoadEstimate; appName: string }) {
   if (!e) {
     return (
@@ -66,26 +68,35 @@ function EstimatePanel({ e, appName }: { e?: LoadEstimate; appName: string }) {
         </div>
       </div>
       <div className="p-4">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h3 className="text-[12px] font-medium text-fg-muted">Why this tier</h3>
-          <span className="text-[12px] text-fg-muted">
-            {e.explainedBy === "rules" ? "Rule-based explanation (Muse Spark was unavailable)" : `Explained by ${e.explainedBy}`}
-          </span>
-        </div>
-        <ol className="mt-2 flex max-w-[78ch] list-decimal flex-col gap-1.5 pl-5 marker:text-fg-subtle">
-          {e.reasoning.map((r, i) => (
-            <li key={i}>{r}</li>
-          ))}
-        </ol>
-        <h3 className="mt-5 text-[12px] font-medium text-fg-muted">Measured in the sandbox run</h3>
-        <dl className={cn("mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border", e.signals.length % 3 === 0 && "sm:grid-cols-3")}>
-          {e.signals.map((s) => (
-            <div key={s.label} className="bg-surface px-3 py-2">
-              <dt className="text-[12px] text-fg-muted">{s.label}</dt>
-              <dd className="num font-mono text-[12.5px]">{s.value}</dd>
+        {e.reasoning.length > 0 ? (
+          <>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="text-[12px] font-medium text-fg-muted">Why this tier</h3>
+              <span className="text-[12px] text-fg-muted">{explainer(e.explainedBy)}</span>
             </div>
-          ))}
-        </dl>
+            <ol className="mt-2 flex max-w-[78ch] list-decimal flex-col gap-1.5 pl-5 marker:text-fg-subtle">
+              {e.reasoning.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ol>
+          </>
+        ) : (
+          // The API's estimate carries the decision, not yet the reasoning or the sandbox signals.
+          <p className="text-[12px] text-fg-muted">{explainer(e.explainedBy)}</p>
+        )}
+        {e.signals.length > 0 && (
+          <>
+            <h3 className="mt-5 text-[12px] font-medium text-fg-muted">Measured in the sandbox run</h3>
+            <dl className={cn("mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md border border-border bg-border", e.signals.length % 3 === 0 && "sm:grid-cols-3")}>
+              {e.signals.map((s) => (
+                <div key={s.label} className="bg-surface px-3 py-2">
+                  <dt className="text-[12px] text-fg-muted">{s.label}</dt>
+                  <dd className="num font-mono text-[12.5px]">{s.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </>
+        )}
       </div>
     </Panel>
   );
