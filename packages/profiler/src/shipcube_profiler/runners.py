@@ -412,12 +412,38 @@ class LocalRunner:
         return prof
 
 
-def default_runner() -> Runner:
-    """CloudRunJobRunner from the environment; LocalRunner only when SHIPCUBE_DEV_MODE=1."""
-    if os.environ.get("SHIPCUBE_DEV_MODE") == "1":
+def runner_from_env(env: dict | None = None) -> Runner:
+    """The profiler selected by SHIPCUBE_PROFILER:
+
+    - "gcp":    CloudRunJobRunner (production): Cloud Run job, gen2, no-egress VPC
+    - "local":  DockerRunner: the same image in a local container (--network none, ...)
+    - "inproc": LocalRunner in this process; allowed only with SHIPCUBE_DEV_MODE=1
+    - unset:    "inproc" in DEV_MODE, otherwise "gcp"
+    """
+    e = os.environ if env is None else env
+    choice = e.get("SHIPCUBE_PROFILER", "").strip().lower()
+    dev = e.get("SHIPCUBE_DEV_MODE") == "1"
+    if not choice:
+        choice = "inproc" if dev else "gcp"
+    if choice == "local":
+        from .docker_runner import DockerRunner, DockerSandboxConfig
+        return DockerRunner(DockerSandboxConfig.from_env(e))
+    if choice == "gcp":
+        from .gcp_runner import CloudRunJobRunner, GcpProfilerConfig
+        return CloudRunJobRunner(GcpProfilerConfig.from_env(e))
+    if choice == "inproc":
+        if not dev:
+            from .gcp_runner import ProfilerError
+            raise ProfilerError("config", "SHIPCUBE_PROFILER=inproc runs user code in this process; "
+                                          "it needs SHIPCUBE_DEV_MODE=1 (use 'local' for the Docker sandbox)")
         return LocalRunner()
-    from .gcp_runner import CloudRunJobRunner
-    return CloudRunJobRunner()
+    from .gcp_runner import ProfilerError
+    raise ProfilerError("config", f"SHIPCUBE_PROFILER must be local, gcp or inproc (got {choice!r})")
+
+
+def default_runner() -> Runner:
+    """Kept for callers of PR #7's API; same as runner_from_env()."""
+    return runner_from_env()
 
 
 class StaticRunner:
