@@ -7,7 +7,9 @@ test_local_deployer.py."""
 
 import io
 import os
+import secrets
 import shutil
+import socket
 import subprocess
 import tarfile
 import time
@@ -28,8 +30,19 @@ if not shutil.which("docker") or subprocess.run(["docker", "info"], capture_outp
     pytest.skip("Docker is not available on this machine", allow_module_level=True)
 
 GCS_IMAGE = "fsouza/fake-gcs-server:1.55.1"
-GCS_PORT = 4443
-NETWORK = "shipcube-local-test"
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+# Unique per run, so the tests can run alongside the local stack (`make up`) or another run.
+RUN = secrets.token_hex(3)
+GCS_PORT = int(os.environ.get("SHIPCUBE_TEST_GCS_PORT") or _free_port())
+GCS_NAME = f"sc-test-gcs-{RUN}"
+NETWORK = f"shipcube-test-{RUN}"
 WS_A = "3c1d5e2a-7b4f-4e8a-9c6d-2f1e0a9b8c7d"
 WS_B = "9f0e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c"
 APP_PY = """
@@ -50,9 +63,9 @@ def sh(*args, check=True):
 
 @pytest.fixture(scope="module")
 def deployer(tmp_path_factory):
-    sh("docker", "rm", "-f", "sc-test-gcs", check=False)
+    sh("docker", "rm", "-f", GCS_NAME, check=False)
     sh("docker", "network", "create", NETWORK, check=False)
-    sh("docker", "run", "-d", "--name", "sc-test-gcs", "-p", f"127.0.0.1:{GCS_PORT}:{GCS_PORT}", GCS_IMAGE,
+    sh("docker", "run", "-d", "--name", GCS_NAME, "-p", f"127.0.0.1:{GCS_PORT}:{GCS_PORT}", GCS_IMAGE,
        "-scheme", "http", "-port", str(GCS_PORT), "-public-host", f"localhost:{GCS_PORT}")
     for _ in range(60):
         try:
@@ -65,9 +78,11 @@ def deployer(tmp_path_factory):
     d = LocalDeployer(replace(Settings(), local_state_dir=str(tmp_path_factory.mktemp("state")), local_gcs_url=url,
                               local_gcs_public_url=url, local_network=NETWORK))
     yield d
-    sh("docker", "rm", "-f", "sc-test-gcs", check=False)
-    for c in sh("docker", "ps", "-aq", "--filter", "label=managed-by=shipcube", check=False).split():
-        sh("docker", "rm", "-f", c, check=False)
+    sh("docker", "rm", "-f", GCS_NAME, check=False)
+    for ws in (WS_A, WS_B):  # only this run's apps, never the stack's
+        for c in sh("docker", "ps", "-aq", "--filter", f"label=shipcube.workspace={ws}", "--filter",
+                    f"network={NETWORK}", check=False).split():
+            sh("docker", "rm", "-f", c, check=False)
     sh("docker", "network", "rm", NETWORK, check=False)
 
 
