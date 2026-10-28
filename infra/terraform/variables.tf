@@ -81,3 +81,12 @@ variable "postgres_password_version" {
   type        = number
   default     = 1
 }
+
+variable "legacy_shared_builder" {
+  description = <<-EOT
+    Keep sc-builder's bucket-wide uploads read and project-wide Artifact Registry write
+    (red-team C-1). Set to false once deploys use the per-workspace sc-build-* accounts.
+  EOT
+  type        = bool
+  default     = true
+}

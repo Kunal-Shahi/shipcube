@@ -23,6 +23,7 @@ jobs:
       gateway: ${{ steps.diff.outputs.gateway }}
       web: ${{ steps.diff.outputs.web }}
       deploy: ${{ steps.diff.outputs.deploy }}
+      infra: ${{ steps.diff.outputs.infra }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +48,7 @@ jobs:
           echo "gateway=$(or "$(has '^services/gateway/')")" >> "$GITHUB_OUTPUT"
           echo "web=$(or "$(has '^apps/web/')")" >> "$GITHUB_OUTPUT"
           echo "deploy=$(or "$(has '^deploy/')")" >> "$GITHUB_OUTPUT"
+          echo "infra=$(or "$(has '^infra/')")" >> "$GITHUB_OUTPUT"
           projects=$(find packages services ml deploy -name pyproject.toml -not -path '*/node_modules/*' \
             -not -path '*/.venv/*' -exec dirname {} \; 2>/dev/null | sort | jq -R . | jq -cs .)
           echo "python_projects=$projects" >> "$GITHUB_OUTPUT"
@@ -152,10 +154,27 @@ jobs:
       - name: YAML
         run: pip install --quiet pyyaml && python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" deploy/*.yaml .github/workflows/*.yml
 
+  infra:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: terraform fmt
+        run: terraform -chdir=infra/terraform fmt -check -recursive
+      - name: terraform validate
+        run: terraform -chdir=infra/terraform init -backend=false -input=false && terraform -chdir=infra/terraform validate
+      - name: shellcheck
+        run: shellcheck -x infra/scripts/*.sh infra/tests/*.sh infra/db/*.sh infra/db/checks/*.sh infra/budget-killswitch/*.sh
+
   # The one required check. It runs even when jobs were skipped, and fails if any job failed.
   ci-ok:
     if: always()
-    needs: [changes, python, gateway, web, deploy-scripts]
+    needs: [changes, python, gateway, web, deploy-scripts, infra]
     runs-on: ubuntu-latest
     steps:
       - run: |
