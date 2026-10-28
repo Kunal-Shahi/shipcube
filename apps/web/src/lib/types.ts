@@ -159,6 +159,8 @@ export interface ProviderConfig {
   label: string;
   description: string;
   connected: boolean;
+  /** The workspace's default provider: apps without an override use it. Saving a key makes that provider the default. */
+  isDefault?: boolean;
   keyHint?: string;
   baseUrl?: string;
   defaultModel?: string;

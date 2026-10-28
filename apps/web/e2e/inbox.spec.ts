@@ -77,10 +77,15 @@ test("adds a BYOK Anthropic key; the key itself never comes back", async () => {
   await anthropic.getByRole("button", { name: "Test and save" }).click();
   await expect(anthropic.getByText("Connected")).toBeVisible();
   await expect(anthropic.getByText("…Wxyz")).toBeVisible();
+  // Saving a key makes Anthropic the workspace default; the console says so, not Muse.
+  const muse = page.locator("li").filter({ has: page.getByText("Meta Muse", { exact: true }) });
+  await expect(anthropic.getByText("Default", { exact: true })).toBeVisible();
+  await expect(muse.getByText("Default", { exact: true })).toHaveCount(0);
 
   // Not in the page after a reload, nor in the API's answer: only the last 4 characters.
   await page.reload();
   await expect(anthropic.getByText("…Wxyz")).toBeVisible();
+  await expect(anthropic.getByText("Default", { exact: true })).toBeVisible();
   expect(await page.content()).not.toContain(key);
   const body = await (await page.request.get(`${API_URL}/v1/ai/providers`, { headers: agent() })).text();
   expect(body).not.toContain(key);
@@ -90,6 +95,7 @@ test("adds a BYOK Anthropic key; the key itself never comes back", async () => {
   // Remove it: the workspace falls back to Muse.
   await anthropic.getByRole("button", { name: "Remove" }).click();
   await expect(anthropic.getByText("Not connected")).toBeVisible();
+  await expect(muse.getByText("Default", { exact: true })).toBeVisible();
   const after = await (await page.request.get(`${API_URL}/v1/ai/providers`, { headers: agent() })).json();
   expect(after.providers.find((x: { id: string }) => x.id === "anthropic").connected).toBe(false);
   expect(after.providers.find((x: { id: string }) => x.id === "meta").default).toBe(true);

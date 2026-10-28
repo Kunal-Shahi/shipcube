@@ -298,6 +298,7 @@ export const providerFromApi = (p: ApiProvider): ProviderConfig => ({
   label: p.label,
   description: p.description,
   connected: p.connected,
+  isDefault: p.default,
   keyHint: p.key_hint ?? undefined,
   baseUrl: p.base_url ?? undefined,
   defaultModel: p.model ?? undefined,
