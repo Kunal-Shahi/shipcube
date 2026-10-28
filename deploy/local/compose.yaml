@@ -87,9 +87,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - local-state:/state
       - shipcube-data:/data:ro
+      - ../../.local:/local                         # BYOK keys -> secrets.json, served by `secretmanager`
     environment:
       <<: *switches
       SHIPCUBE_DATABASE_URL: ${SHIPCUBE_API_DATABASE_URL:?}
+      SHIPCUBE_LOCAL_SECRETS_FILE: /local/secrets.json   # DEV_MODE: where PUT /v1/ai/providers writes keys (PR #35)
       ALLOWED_HOSTS: localhost:*,127.0.0.1:*,api:*
       SHIPCUBE_CONSOLE_URL: http://localhost:3000
     ports: ["127.0.0.1:${SHIPCUBE_API_PORT:-18080}:8080"]

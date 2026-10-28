@@ -21,13 +21,16 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import auth, db, obs, store
+from . import auth, db, obs, store, workspace
 from .auth import Caller
 from .deploy.base import DeployError
 from .models import (
-    AccessChange, AccessResult, AiConfigRequest, AiConfigResult, App, AppList, AppName, ApprovalDecision, Caps,
-    CapsResult, DeployRequest, EstimateRequest, Logs, Me, Metrics, Operation, RollbackRequest, TokenCreate, TokenCreated, TokenList, Upload, UploadRequest,
+    AccessChange, AccessResult, AiConfigRequest, AiConfigResult, App, AppList, AppName, ApprovalDecision, Billing,
+    Caps, CapsResult, DeployRequest, EstimateRequest, GcpLink, GcpTargets, LinkRequest, Logs, Me, Metrics, Operation,
+    OperationList, OpStatus, Provider, ProviderId, ProviderKeyRequest, ProviderList, RollbackRequest, TokenCreate,
+    TokenCreated, TokenList, Upload, UploadRequest,
 )
+from .secret_store import SecretStoreError
 from .settings import settings
 from .store_runtime import deployer, start_embedded_worker, stop_embedded_worker
 from .telemetry import TelemetryUnavailable, telemetry
@@ -123,6 +126,12 @@ async def _telemetry(_: Request, exc: TelemetryUnavailable) -> JSONResponse:
     return _err(501, "telemetry_unavailable", str(exc))
 
 
+@app.exception_handler(SecretStoreError)
+async def _secret_store(_: Request, exc: SecretStoreError) -> JSONResponse:
+    log.error("secret store error", extra={"error": str(exc)[:500]})
+    return _err(502, "secret_store_unavailable", "the key could not be stored; nothing was changed")
+
+
 @app.exception_handler(DeployError)
 async def _deploy_error(_: Request, exc: DeployError) -> JSONResponse:
     status = {"not_found": 404, "invalid_argument": 400, "permission_denied": 403, "rate_limited": 503,
@@ -155,9 +164,9 @@ def scope(required: str):
 
 def console_session(c: Annotated[Caller, Depends(caller)]) -> Caller:
     if c.via != "console":
-        raise ApiError(403, "permission_denied", "only a human console session can do this; approve at the approval_url")
+        raise ApiError(403, "permission_denied", "only a human console session can do this (approvals, restore, AI keys, linking projects); use the console")
     if c.role not in ("owner", "admin"):
-        raise ApiError(403, "permission_denied", "approvals need the admin role in this workspace")
+        raise ApiError(403, "permission_denied", "this needs the admin role in this workspace")
     return c
 
 
@@ -268,9 +277,16 @@ def reject(op_id: str, body: ApprovalDecision, c: Annotated[Caller, Depends(cons
     return store.decide(c, op_id, False, body.comment)
 
 
+@app.get("/v1/operations", response_model=OperationList)
+def list_operations(c: Annotated[Caller, Depends(scope("apps:read"))], status: OpStatus | None = None,
+                    limit: Annotated[int, Query(ge=1, le=200)] = 50):
+    # The approvals inbox is status=awaiting_approval; newest first.
+    return {"operations": workspace.list_operations(c, status, limit)}
+
+
 @app.get("/v1/apps", response_model=AppList)
-def list_apps(c: Annotated[Caller, Depends(scope("apps:read"))]):
-    return {"apps": store.list_apps(c)}
+def list_apps(c: Annotated[Caller, Depends(scope("apps:read"))], include_deleted: bool = False):
+    return {"apps": store.list_apps(c, include_deleted)}
 
 
 @app.get("/v1/apps/{app}", response_model=App)
@@ -325,6 +341,41 @@ def set_access(app: AppName, body: AccessChange, c: Annotated[Caller, Depends(sc
 def ai_config(app: AppName, body: AiConfigRequest, c: Annotated[Caller, Depends(scope("secrets:write"))]):
     ai = store.set_ai(c, app, body.provider, body.model, body.key_secret, body.base_url)
     return {"ai": ai, "gateway_url": f"{settings.gateway_url}/v1/apps/{app}"}
+
+
+# --- console: AI providers, billing, linked GCP projects -----------------------------------
+
+
+@app.get("/v1/ai/providers", response_model=ProviderList)
+def list_providers(c: Annotated[Caller, Depends(scope("apps:read"))]):
+    return {"providers": workspace.list_providers(c)}
+
+
+@app.put("/v1/ai/providers/{provider}", response_model=Provider)
+def save_provider(provider: ProviderId, body: ProviderKeyRequest, c: Annotated[Caller, Depends(console_session)]):
+    # Keys are typed into the console by a person; they never pass through MCP.
+    return workspace.save_provider(c, provider, body.key, body.base_url, body.model)
+
+
+@app.delete("/v1/ai/providers/{provider}", status_code=204)
+def remove_provider(provider: ProviderId, c: Annotated[Caller, Depends(console_session)]):
+    workspace.remove_provider(c, provider)
+    return Response(status_code=204)
+
+
+@app.get("/v1/billing", response_model=Billing)
+def get_billing(c: Annotated[Caller, Depends(scope("apps:read"))]):
+    return workspace.billing(c)
+
+
+@app.get("/v1/gcp-targets", response_model=GcpTargets)
+def list_gcp_targets(c: Annotated[Caller, Depends(scope("apps:read"))]):
+    return workspace.gcp_targets(c)
+
+
+@app.post("/v1/gcp-targets", response_model=GcpLink, status_code=201)
+def link_gcp_project(body: LinkRequest, c: Annotated[Caller, Depends(console_session)]):
+    return workspace.link_project(deployer(), c, body.project_id, body.region)
 
 
 # --- data layer (Kunal-Shahi/shipcube-data): the console's Data page --------------------------------------------
