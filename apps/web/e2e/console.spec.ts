@@ -70,9 +70,26 @@ test("the Overview shows the app's load estimate", async () => {
   await page.goto(appPath);
   await expect(page.getByText("No load estimate on record")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Load estimate" })).toBeVisible();
-  const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(app.estimate.monthly_cost_usd);
+  // The cost is a number or the estimator's {low, high, expected}; the console shows the expected value.
+  const cost = app.estimate.monthly_cost_usd;
+  const expected = typeof cost === "number" ? cost : cost.expected;
+  const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(expected);
   await expect(page.getByText(usd, { exact: true }).first()).toBeVisible();
   await expect(page.getByText(`${Math.round(app.estimate.confidence * 100)}% confidence`)).toBeVisible();
+  // The workload class is named, and nothing on the page renders as NaN.
+  const workload = page.getByText("Workload", { exact: true }).locator("xpath=following-sibling::div[1]");
+  await expect(workload).not.toHaveText(/^\s*(—)?\s*$/);
+  await expect(page.locator("main")).not.toContainText("NaN");
+});
+
+test("the Data page names the warehouse without empty parentheses", async () => {
+  await page.goto("/data");
+  // Deployments whose API doesn't serve /v1/data show the "isn't available yet" state instead.
+  test.skip(await page.getByText(/isn.t available yet/).isVisible(), "the API doesn't serve the data layer");
+  const warehouse = page.locator('main a[href="/data/warehouse"]').first();
+  await expect(warehouse).toHaveText(/\S/);
+  await expect(page.locator("main")).not.toContainText("()");
+  await expect(page.locator("main")).not.toContainText("NaN");
 });
 
 test("shares the app with a person", async () => {

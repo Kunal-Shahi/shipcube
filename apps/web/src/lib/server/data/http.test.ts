@@ -59,6 +59,25 @@ describe("estimateFromApi", () => {
   });
 });
 
+describe("estimateFromApi with the estimator's own shapes", () => {
+  it("reads a {low, high, expected} cost and an underscored class", () => {
+    const caps = capsFromApi({ max_instances: 2, memory: "512Mi" });
+    const e = estimateFromApi(
+      { estimate_id: "e", workload_class: "bursty_interactive", tier: "T1", confidence: 0.62, monthly_cost_usd: { low: 0.07, high: 0.51, expected: 0.19 }, explained_by: "rules", created_at: "2026-10-29T00:00:00Z" },
+      caps,
+    );
+    expect(e).toMatchObject({ workloadClass: "bursty-interactive", monthlyCost: 0.19, monthlyCostRange: { low: 0.07, high: 0.51 } });
+  });
+  it("leaves the cost undefined, never NaN, when there's no number", () => {
+    const e = estimateFromApi(
+      { estimate_id: "e", workload_class: "", tier: "T1", confidence: NaN, monthly_cost_usd: {}, explained_by: "rules", created_at: "2026-10-29T00:00:00Z" },
+      capsFromApi({}),
+    );
+    expect(e.monthlyCost).toBeUndefined();
+    expect(e.confidence).toBe(0);
+  });
+});
+
 describe("placementOf", () => {
   it("shows local apps as local, with no GCP region or billing", () => {
     expect(placementOf({ target: "local", region: "asia-south1" })).toEqual({ runsLocally: true });

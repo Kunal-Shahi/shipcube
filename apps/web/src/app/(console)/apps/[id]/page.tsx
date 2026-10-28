@@ -17,6 +17,9 @@ const CLASS_LABEL: Record<string, string> = {
   "compute-heavy": "Compute-heavy",
 };
 
+/** A known class's label, else the API's own words; never blank. */
+const classLabel = (c: string) => CLASS_LABEL[c] ?? (c ? c.replaceAll("-", " ").replace(/^./, (x) => x.toUpperCase()) : "—");
+
 const explainer = (by: string) => (by === "rules" ? "Rule-based explanation (Muse Spark was unavailable)" : `Explained by ${by}`);
 
 function EstimatePanel({ e, appName }: { e?: LoadEstimate; appName: string }) {
@@ -48,7 +51,7 @@ function EstimatePanel({ e, appName }: { e?: LoadEstimate; appName: string }) {
       <div className="grid grid-cols-2 border-b border-border sm:grid-cols-4 [&>div]:px-4 [&>div]:py-3 [&>div:not(:first-child)]:border-l [&>div]:border-border max-sm:[&>div:nth-child(3)]:border-l-0 max-sm:[&>div:nth-child(n+3)]:border-t">
         <div>
           <div className="text-[12px] font-medium text-fg-muted">Workload</div>
-          <div className="mt-1 font-medium">{CLASS_LABEL[e.workloadClass]}</div>
+          <div className="mt-1 font-medium">{classLabel(e.workloadClass)}</div>
           <div className="num text-[12px] text-fg-muted">{pct(e.confidence * 100, 0)} confidence</div>
         </div>
         <div>
@@ -63,8 +66,10 @@ function EstimatePanel({ e, appName }: { e?: LoadEstimate; appName: string }) {
         </div>
         <div>
           <div className="text-[12px] font-medium text-fg-muted">Estimated cost</div>
-          <div className="num mt-1 text-[18px] font-semibold leading-6">{money(e.monthlyCost)}</div>
-          <div className="text-[12px] text-fg-muted">per month</div>
+          <div className="num mt-1 text-[18px] font-semibold leading-6">{e.monthlyCost === undefined ? "—" : money(e.monthlyCost)}</div>
+          <div className="num text-[12px] text-fg-muted">
+            per month{e.monthlyCostRange && `, ${money(e.monthlyCostRange.low)}–${money(e.monthlyCostRange.high)}`}
+          </div>
         </div>
       </div>
       <div className="p-4">

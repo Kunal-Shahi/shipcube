@@ -46,7 +46,8 @@ export interface ApiEstimate {
   workload_class: string;
   tier: string;
   confidence: number;
-  monthly_cost_usd: number;
+  /** A number, or the estimator's {low, high, expected} range. */
+  monthly_cost_usd: number | { low?: number; high?: number; expected?: number };
   explained_by: string;
   created_at: string;
   estimated_by?: string;
@@ -110,15 +111,20 @@ export function placementOf(a: Pick<ApiApp, "target" | "region" | "runtime">): P
 
 /** Resources come from the app's caps, which deploy set from the estimate's sizing. */
 export function estimateFromApi(e: ApiEstimate, caps: Caps, cpu?: unknown): LoadEstimate {
+  const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+  const cost = e.monthly_cost_usd;
+  const range = typeof cost === "object" && cost && finite(cost.low) && finite(cost.high) ? { low: cost.low, high: cost.high } : undefined;
   return {
-    workloadClass: e.workload_class as LoadEstimate["workloadClass"],
-    confidence: e.confidence,
+    // The estimator writes classes with underscores (bursty_interactive); the console uses hyphens.
+    workloadClass: String(e.workload_class ?? "").replaceAll("_", "-") as LoadEstimate["workloadClass"],
+    confidence: finite(e.confidence) ? e.confidence : 0,
     recommendedTier: tierOf(e.tier),
     cpu: `${typeof cpu === "string" || typeof cpu === "number" ? cpu : 1} vCPU`,
     memory: caps.memory,
     minInstances: 0,
     maxInstances: caps.maxInstances,
-    monthlyCost: e.monthly_cost_usd,
+    monthlyCost: finite(cost) ? cost : typeof cost === "object" && cost && finite(cost.expected) ? cost.expected : undefined,
+    monthlyCostRange: range,
     reasoning: e.reasoning ?? [],
     signals: e.signals ?? [],
     estimatedBy: e.estimated_by ?? "workload classifier",
