@@ -84,6 +84,8 @@ infra/local/test.sh
 | Secrets | `local/localsecrets.py` generates values (prefix `sclocal_`) into `.local/`; `local/secretmanager.py` serves them at Secret Manager's REST path; compose passes them as env | Secret Manager; Cloud Run injects env | the secret names and env names |
 | Isolation checks | `local/test.sh` | `db/checks/check.sh` | `db/checks/rls_and_token.sql` via `db/checks/run.sh` |
 
+`db/checks/rls_and_token.sql` also checks that the migration ledgers are read-only to the service roles (a WARN until `db/proposed/0005_lock_migration_ledger.sql` is adopted). When shipcube-data's `catalog` schema exists, it checks that every catalog table has forced RLS, is owned by `shipcube_owner` and has only the `workspace_id = app_workspace()` policy, and that A can't read or write B there. `bootstrap.sql` grants `shipcube_owner` CREATE on the database so migrations can add that schema; **re-run `db/bootstrap.sh` on Cloud SQL before the catalog migration goes live**.
+
 Both secret tools refuse to run on Cloud Run (`K_SERVICE`, `CLOUD_RUN_JOB`) or with `SHIPCUBE_ENV` other than `local`. Values are never rotated once created, so restarting keeps the database usable. If `.env` has `MUSE_API_KEY` (or `META_API_KEY`), it becomes the local `meta-api-key`. `local/test.sh` runs the shared RLS/PAT SQL check as sc-api, a PAT login through `auth.verify_pat`, and the deployer's build-isolation checks (workspace A can't use B's upload or image). Real IAM on build service accounts needs GCP: `tests/build-isolation.sh`. CI's `local-db` job runs the same commands.
 
 ## Build isolation (per-workspace builders)

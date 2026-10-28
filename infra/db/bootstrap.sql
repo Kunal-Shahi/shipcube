@@ -19,6 +19,10 @@ end $$;
 grant usage, create on schema public to shipcube_owner;
 grant usage on schema public to shipcube_app, shipcube_worker, shipcube_readonly;
 revoke create on schema public from public;
+-- Migrations may add schemas of their own (shipcube-data's `catalog`), owned by shipcube_owner.
+do $$ begin
+  execute format('grant create on database %I to shipcube_owner', current_database());
+end $$;
 
 -- Each service's IAM database user can act only as its own role.
 grant shipcube_owner  to "sc-migrator@shipcube-control-ks.iam";

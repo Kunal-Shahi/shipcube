@@ -107,5 +107,60 @@ begin
   if n <> 0 then raise exception 'FAIL: no context sees % token rows', n; end if;
   raise notice 'PASS 4: wrong or missing HMAC sees 0 tokens';
 
+  -- 5. Migration ledgers are written only by the migration role. WARN until proposed/0005 (and the
+  --    catalog's equivalent) are applied; then this becomes a FAIL.
+  foreach t in array array['public.schema_migrations', 'catalog.catalog_schema_migrations'] loop
+    if to_regclass(t) is not null then
+      select count(*) into n from unnest(array['shipcube_app', 'shipcube_worker']) r,
+             unnest(array['INSERT', 'UPDATE', 'DELETE']) p
+       where has_table_privilege(r, t, p);
+      if n > 0 then
+        raise notice 'WARN 5: service roles can write the migration ledger % (apply proposed/0005)', t;
+      else
+        raise notice 'PASS 5: % is read-only to the service roles', t;
+      end if;
+    end if;
+  end loop;
+
+  -- 6. shipcube-data's catalog (schema `catalog`, if present): every tenant table has forced RLS,
+  --    is owned by shipcube_owner, and has only the policy workspace_id = app_workspace() for
+  --    reads and writes. Then a cross-workspace read and write on catalog.settings.
+  if to_regnamespace('catalog') is not null then
+    select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace
+     where s.nspname = 'catalog' and c.relkind in ('r', 'p') and c.relname <> 'catalog_schema_migrations'
+       and not (c.relrowsecurity and c.relforcerowsecurity and pg_get_userbyid(c.relowner) = 'shipcube_owner');
+    if n <> 0 then raise exception 'FAIL: % catalog tables lack forced RLS or are not owned by shipcube_owner', n; end if;
+    select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace
+     where s.nspname = 'catalog' and c.relkind in ('r', 'p') and c.relname <> 'catalog_schema_migrations'
+       and not exists (select from pg_policies p where p.schemaname = 'catalog' and p.tablename = c.relname);
+    if n <> 0 then raise exception 'FAIL: % catalog tables have no policy', n; end if;
+    -- Permissive policies are OR-ed: one loose policy would undo the rest, so check them all.
+    select count(*) into n from pg_policies p
+     where p.schemaname = 'catalog'
+       and not (p.permissive = 'PERMISSIVE' and p.cmd = 'ALL'
+                and regexp_replace(replace(coalesce(p.qual, ''), 'public.', ''), '[\s()]', '', 'g') = 'workspace_id=app_workspace'
+                and regexp_replace(replace(coalesce(p.with_check, ''), 'public.', ''), '[\s()]', '', 'g') = 'workspace_id=app_workspace');
+    if n <> 0 then raise exception 'FAIL: % catalog policies are not exactly workspace_id = app_workspace()', n; end if;
+
+    perform set_config('app.workspace_id', wb::text, true);
+    insert into catalog.settings (key, value) values ('rls-check', 'b');
+    perform set_config('app.workspace_id', wa::text, true);
+    select count(*) into n from catalog.settings where workspace_id = wb;
+    if n <> 0 then raise exception 'FAIL: workspace A reads % of B''s catalog rows', n; end if;
+    begin
+      insert into catalog.settings (workspace_id, key, value) values (wb, 'rls-check-a', 'a');
+      raise exception 'FAIL: workspace A wrote a catalog row into B';
+    exception when insufficient_privilege then null;
+    end;
+    perform set_config('app.workspace_id', '', true);
+    select count(*) into n from catalog.settings;
+    if n <> 0 then raise exception 'FAIL: no workspace context sees % catalog rows', n; end if;
+    select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace
+     where s.nspname = 'catalog' and c.relkind in ('r', 'p') and c.relname <> 'catalog_schema_migrations';
+    raise notice 'PASS 6: catalog: forced RLS + exact workspace policy on % tables; A can''t read or write B; no context sees nothing', n;
+  else
+    raise notice 'SKIP 6: no catalog schema';
+  end if;
+
   raise notice 'ALL CHECKS PASSED (running as %)', current_user;
 end $$;
