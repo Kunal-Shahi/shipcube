@@ -107,15 +107,16 @@ begin
   if n <> 0 then raise exception 'FAIL: no context sees % token rows', n; end if;
   raise notice 'PASS 4: wrong or missing HMAC sees 0 tokens';
 
-  -- 5. Migration ledgers are written only by the migration role. WARN until proposed/0005 (and the
-  --    catalog's equivalent) are applied; then this becomes a FAIL.
+  -- 5. Migration ledgers are written only by the migration role. WARN until API migration 0005 (#35)
+  --    and shipcube-data 0002 (#38) are merged everywhere; then this becomes a FAIL.
   foreach t in array array['public.schema_migrations', 'catalog.catalog_schema_migrations'] loop
     if to_regclass(t) is not null then
       select count(*) into n from unnest(array['shipcube_app', 'shipcube_worker']) r,
              unnest(array['INSERT', 'UPDATE', 'DELETE']) p
        where has_table_privilege(r, t, p);
       if n > 0 then
-        raise notice 'WARN 5: service roles can write the migration ledger % (apply proposed/0005)', t;
+        raise notice 'WARN 5: service roles can write the migration ledger % (fixed by %)', t,
+          case when t like 'catalog.%' then 'shipcube-data 0002_ledger_read_only' else 'API migration 0005_lock_migration_ledger' end;
       else
         raise notice 'PASS 5: % is read-only to the service roles', t;
       end if;
