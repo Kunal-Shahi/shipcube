@@ -60,6 +60,10 @@ SHIPCUBE_DEV_CONSOLE_TOKEN=$ses
 SHIPCUBE_PAT=$pat
 SHIPCUBE_GATEWAY_APP_TOKEN=$app_tok
 SEED
+  # Local development deploys many throwaway apps (each smoke run deploys one), so lift the workspace's
+  # default app and deploy caps, as services/api's test fixtures do. Local database only.
+  dc exec -T db psql -q -U postgres -d shipcube -c "update caps set limit_value = 500 where workspace_id = '$ws' \
+    and app_id is null and kind in ('max_apps', 'deploys_per_day')"
   python3 "$HERE/gateway_registry.py" "$app_hash" "$ws" > "$STATE/gateway-registry.json"
   chmod 644 "$STATE/gateway-registry.json"   # read by the gateway container (holds only a hash)
   echo "seeded: user $email, workspace demo ($ws); PAT and console token in $STATE/seed.env"
