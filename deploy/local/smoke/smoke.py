@@ -269,9 +269,15 @@ async def run(r: Report) -> None:
                     else:
                         op2 = await step("operation (restore)", finish(rs.json(), "restore"))
                         if op2 and op2.get("status") == "succeeded":
-                            back = httpx.get(direct, headers=headers, timeout=30)
-                            r.add("restore (console)", "PASS" if back.status_code == 200 else "FAIL",
-                                  f"app answers again: {back.status_code}")
+                            # The restored container may still be starting when the operation reports done.
+                            deadline, back = time.monotonic() + 60, None
+                            while time.monotonic() < deadline:
+                                back = httpx.get(direct, headers=headers, timeout=30)
+                                if back.status_code == 200:
+                                    break
+                                time.sleep(2)
+                            r.add("restore (console)", "PASS" if back is not None and back.status_code == 200 else "FAIL",
+                                  f"app answers again: {back.status_code if back is not None else 'no response'}")
                         elif op2:
                             r.add("restore (console)", "FAIL", f"{op2['status']}: {op2.get('error')}")
                 elif op:
