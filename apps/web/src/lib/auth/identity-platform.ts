@@ -11,13 +11,19 @@ import { AuthError, type AuthProvider } from "./types";
 // posts the ID token to /api/auth/session, which turns it into an httpOnly session cookie
 // with the Admin SDK. The Admin SDK uses Application Default Credentials: on Cloud Run,
 // the service's own account (it needs roles/firebaseauth.admin on the Identity Platform project).
+//
+// Locally, the same adapter runs against the Firebase Auth emulator (AUTH_PROVIDER=firebase-emulator):
+// the same popup, ID token and session cookie flow, with the emulator in place of Google.
 
 /** Sign-ins older than this can't mint a session, so a stolen ID token has a short life. */
 const MAX_SIGN_IN_AGE_S = 5 * 60;
 
 let app: App | null = null;
 function admin() {
-  app ??= getApps()[0] ?? initializeApp({ projectId: config().identityProject ?? undefined });
+  const c = config();
+  // The Admin SDK switches to the emulator when this is set. config() refuses it outside DEV_MODE.
+  if (c.authEmulatorHost) process.env.FIREBASE_AUTH_EMULATOR_HOST = c.authEmulatorHost;
+  app ??= getApps()[0] ?? initializeApp({ projectId: c.identityProject ?? undefined });
   return getAuth(app);
 }
 
@@ -34,7 +40,9 @@ async function verified() {
 }
 
 export const identityPlatformAuth: AuthProvider = {
-  id: "identity-platform",
+  get id() {
+    return config().auth === "firebase-emulator" ? "firebase-emulator" : "identity-platform";
+  },
 
   async getSession() {
     const v = await verified();
@@ -93,8 +101,13 @@ export const identityPlatformAuth: AuthProvider = {
   },
 
   async apiCredential() {
-    // The API verifies this Identity Platform session cookie (a Google-signed JWT) with the
-    // Admin SDK's verify_session_cookie. See "Needs from other workstreams" in the PR.
-    return (await verified())?.cookie ?? null;
+    const v = await verified();
+    if (!v) return null;
+    // The API can't verify the emulator's unsigned tokens, so locally the signed-in user calls it
+    // with the dev console session (SHIPCUBE_DEV_API_SESSION) when one is configured.
+    const c = config();
+    if (c.auth === "firebase-emulator" && c.devApiSession) return c.devApiSession;
+    // The API verifies this Identity Platform session cookie (a Google-signed JWT).
+    return v.cookie;
   },
 };

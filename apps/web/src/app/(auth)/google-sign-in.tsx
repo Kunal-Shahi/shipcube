@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { Intent } from "@/lib/auth/types";
 
-export type WebAuthConfig = { apiKey: string; authDomain: string; projectId: string; tenantId?: string } | null;
+export type WebAuthConfig = { apiKey: string; authDomain: string; projectId: string; tenantId?: string; emulatorUrl?: string } | null;
 
 function GoogleG() {
   return (
@@ -55,6 +55,8 @@ export function GoogleSignIn({
         const [{ initializeApp, getApps }, fa] = await Promise.all([import("firebase/app"), import("firebase/auth")]);
         const app = getApps()[0] ?? initializeApp(webConfig);
         const a = fa.getAuth(app);
+        // Local development: the Firebase Auth emulator stands in for Google (AUTH_PROVIDER=firebase-emulator).
+        if (webConfig.emulatorUrl && !a.emulatorConfig) fa.connectAuthEmulator(a, webConfig.emulatorUrl, { disableWarnings: true });
         if (webConfig.tenantId) a.tenantId = webConfig.tenantId;
         // The server session is the source of truth; don't keep a second session in the browser.
         await fa.setPersistence(a, fa.inMemoryPersistence);
