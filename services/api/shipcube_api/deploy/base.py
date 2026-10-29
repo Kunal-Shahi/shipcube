@@ -107,6 +107,9 @@ class Deployer(Protocol):
     def purge(self, app: AppRef) -> None:
         """Delete the service, its runtime SA and its images."""
 
+    def verify_link(self, project_id: str, deployer_sa: str) -> list[str]:
+        """Check a linked project as its deployer SA; returns what's missing (empty = ready)."""
+
 
 def normalize_caps(caps: dict[str, Any]) -> dict[str, Any]:
     """Apply Cloud Run's combination rules to ShipCube caps."""

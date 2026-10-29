@@ -1,13 +1,18 @@
-# Upload only what the three images need.
-.git
-**/node_modules
-**/.next
-**/.venv
-**/__pycache__
+# Allowlist: upload only what the three images are built from. infra/ (Terraform state settings,
+# tfvars), .env files and local build output never leave the machine.
+/*
+!/apps/
+!/services/
+!/packages/
+!/ml/
+!/deploy/
+**/node_modules/
+**/.next/
+**/.venv/
+**/__pycache__/
 **/*.pyc
-.env
-.claude
-ml
-evals
-docs
-examples
+**/.env
+**/.env.*
+**/*.tfvars
+**/.terraform/
+/services/gateway/gateway

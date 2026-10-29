@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
@@ -20,13 +21,16 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import auth, db, obs, store
+from . import auth, db, obs, store, workspace
 from .auth import Caller
 from .deploy.base import DeployError
 from .models import (
-    AccessChange, AccessResult, AiConfigRequest, AiConfigResult, App, AppList, AppName, ApprovalDecision, Caps,
-    CapsResult, DeployRequest, EstimateRequest, Logs, Me, Metrics, Operation, RollbackRequest, Upload, UploadRequest,
+    AccessChange, AccessResult, AiConfigRequest, AiConfigResult, App, AppList, AppName, ApprovalDecision, Billing, Caps,
+    CapsResult, DeployRequest, EstimateRequest, GcpLink, GcpTargets, LinkRequest, Logs, Me, Metrics, Operation,
+    OperationList, OpStatus, Provider, ProviderId, ProviderKeyRequest, ProviderList, RollbackRequest, TokenCreate,
+    TokenCreated, TokenList, Upload, UploadRequest,
 )
+from .secret_store import SecretStoreError
 from .settings import settings
 from .store_runtime import deployer, start_embedded_worker, stop_embedded_worker
 from .telemetry import TelemetryUnavailable, telemetry
@@ -75,7 +79,7 @@ async def request_context(request: Request, call_next):
         obs.request_id.reset(t_req)
         obs.trace_id.reset(t_trace)
     response.headers["X-Request-Id"] = rid
-    if request.url.path != "/healthz":
+    if request.url.path not in ("/healthz", "/health"):
         log.info("request", extra={"request_id": rid, "method": request.method, "path": request.url.path,
                                    "status": response.status_code, "ms": round((time.monotonic() - t0) * 1000)})
     return response
@@ -122,9 +126,16 @@ async def _telemetry(_: Request, exc: TelemetryUnavailable) -> JSONResponse:
     return _err(501, "telemetry_unavailable", str(exc))
 
 
+@app.exception_handler(SecretStoreError)
+async def _secret_store(_: Request, exc: SecretStoreError) -> JSONResponse:
+    log.error("secret store error", extra={"error": str(exc)[:500]})
+    return _err(502, "secret_store_unavailable", "the key could not be stored; nothing was changed")
+
+
 @app.exception_handler(DeployError)
 async def _deploy_error(_: Request, exc: DeployError) -> JSONResponse:
-    status = {"not_found": 404, "invalid_argument": 400, "rate_limited": 503, "unavailable": 503}.get(exc.code, 502)
+    status = {"not_found": 404, "invalid_argument": 400, "permission_denied": 403, "rate_limited": 503,
+              "unavailable": 503}.get(exc.code, 502)
     log.warning("cloud error on request path", extra={"code": exc.code, "error": str(exc)[:500]})
     return _err(status, exc.code, str(exc))
 
@@ -153,9 +164,9 @@ def scope(required: str):
 
 def console_session(c: Annotated[Caller, Depends(caller)]) -> Caller:
     if c.via != "console":
-        raise ApiError(403, "permission_denied", "only a human console session can do this; approve at the approval_url")
+        raise ApiError(403, "permission_denied", "only a human console session can do this (approvals, restore, AI keys, linking projects); use the console")
     if c.role not in ("owner", "admin"):
-        raise ApiError(403, "permission_denied", "approvals need the admin role in this workspace")
+        raise ApiError(403, "permission_denied", "this needs the admin role in this workspace")
     return c
 
 
@@ -172,11 +183,48 @@ def accepted(op: Operation, response: Response) -> Operation:
 # --- routes ----------------------------------------------------------------------------
 
 
+# /health too: Cloud Run's front end reserves /healthz on run.app URLs, so external checks use /health.
 @app.get("/healthz", include_in_schema=False)
+@app.get("/health", include_in_schema=False)
 def healthz() -> dict:
     with db.tx(role=db.APP) as conn:
         conn.execute("select 1")
     return {"ok": True}
+
+
+# --- API tokens: console sessions only, so an agent can never mint or widen its own credentials ---
+
+
+def console_user(c: Annotated[Caller, Depends(caller)]) -> Caller:
+    if c.via != "console":
+        raise ApiError(403, "permission_denied", "API tokens are managed in the console")
+    return c
+
+
+@app.get("/v1/tokens", response_model=TokenList)
+def list_tokens(c: Annotated[Caller, Depends(console_user)]):
+    return {"tokens": store.list_tokens(c)}
+
+
+@app.post("/v1/tokens", response_model=TokenCreated, status_code=201)
+def create_token(body: TokenCreate, response: Response, c: Annotated[Caller, Depends(console_user)]):
+    try:
+        token, secret = store.create_token(c, body.name, body.scopes, body.days)
+    except ValueError as e:
+        raise ApiError(400, "invalid_argument", str(e)) from None
+    except PermissionError as e:
+        raise ApiError(403, "permission_denied", str(e)) from None
+    response.headers["Cache-Control"] = "no-store"
+    log.info("token created", extra={"token_id": token["id"], "scopes": token["scopes"]})
+    return {"token": token, "secret": secret}
+
+
+@app.delete("/v1/tokens/{token_id}", status_code=204)
+def revoke_token(token_id: uuid.UUID, c: Annotated[Caller, Depends(console_user)]) -> Response:
+    if not store.revoke_token(c, str(token_id)):
+        raise ApiError(404, "not_found", "no such active token")
+    log.info("token revoked", extra={"token_id": str(token_id)})
+    return Response(status_code=204)
 
 
 @app.get("/v1/me", response_model=Me)
@@ -229,9 +277,16 @@ def reject(op_id: str, body: ApprovalDecision, c: Annotated[Caller, Depends(cons
     return store.decide(c, op_id, False, body.comment)
 
 
+@app.get("/v1/operations", response_model=OperationList)
+def list_operations(c: Annotated[Caller, Depends(scope("apps:read"))], status: OpStatus | None = None,
+                    limit: Annotated[int, Query(ge=1, le=200)] = 50):
+    # The approvals inbox is status=awaiting_approval; newest first.
+    return {"operations": workspace.list_operations(c, status, limit)}
+
+
 @app.get("/v1/apps", response_model=AppList)
-def list_apps(c: Annotated[Caller, Depends(scope("apps:read"))]):
-    return {"apps": store.list_apps(c)}
+def list_apps(c: Annotated[Caller, Depends(scope("apps:read"))], include_deleted: bool = False):
+    return {"apps": store.list_apps(c, include_deleted)}
 
 
 @app.get("/v1/apps/{app}", response_model=App)
@@ -260,13 +315,13 @@ def restore(app: AppName, response: Response, c: Annotated[Caller, Depends(conso
 def logs(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))],
          severity: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = None,
          limit: Annotated[int, Query(ge=1, le=500)] = 50, page_token: str | None = None):
-    return telemetry().logs(store.get_app(c, app), limit, severity, page_token)
+    return telemetry().logs(store.get_app_for_telemetry(c, app), limit, severity, page_token)
 
 
 @app.get("/v1/apps/{app}/metrics", response_model=Metrics)
 def metrics(app: AppName, c: Annotated[Caller, Depends(scope("apps:read"))],
             window: Literal["15m", "1h", "24h", "7d", "30d"] = "1h"):
-    return telemetry().metrics(store.get_app(c, app), window)
+    return telemetry().metrics(store.get_app_for_telemetry(c, app), window)
 
 
 @app.patch("/v1/apps/{app}/caps", response_model=CapsResult)
@@ -285,4 +340,39 @@ def set_access(app: AppName, body: AccessChange, c: Annotated[Caller, Depends(sc
 @app.put("/v1/apps/{app}/ai", response_model=AiConfigResult)
 def ai_config(app: AppName, body: AiConfigRequest, c: Annotated[Caller, Depends(scope("secrets:write"))]):
     ai = store.set_ai(c, app, body.provider, body.model, body.key_secret, body.base_url)
-    return {"ai": ai, "gateway_url": f"{settings.gateway_url}/v1/apps/{app}"}
+    return {"ai": ai, "gateway_url": f"{(settings.ai_gateway_url or 'http://localhost:8090').rstrip('/')}/v1/apps/{app}"}
+
+
+# --- console: AI providers, billing, linked GCP projects -----------------------------------
+
+
+@app.get("/v1/ai/providers", response_model=ProviderList)
+def list_providers(c: Annotated[Caller, Depends(scope("apps:read"))]):
+    return {"providers": workspace.list_providers(c)}
+
+
+@app.put("/v1/ai/providers/{provider}", response_model=Provider)
+def save_provider(provider: ProviderId, body: ProviderKeyRequest, c: Annotated[Caller, Depends(console_session)]):
+    # Keys are typed into the console by a person; they never pass through MCP.
+    return workspace.save_provider(c, provider, body.key, body.base_url, body.model)
+
+
+@app.delete("/v1/ai/providers/{provider}", status_code=204)
+def remove_provider(provider: ProviderId, c: Annotated[Caller, Depends(console_session)]):
+    workspace.remove_provider(c, provider)
+    return Response(status_code=204)
+
+
+@app.get("/v1/billing", response_model=Billing)
+def get_billing(c: Annotated[Caller, Depends(scope("apps:read"))]):
+    return workspace.billing(c)
+
+
+@app.get("/v1/gcp-targets", response_model=GcpTargets)
+def list_gcp_targets(c: Annotated[Caller, Depends(scope("apps:read"))]):
+    return workspace.gcp_targets(c)
+
+
+@app.post("/v1/gcp-targets", response_model=GcpLink, status_code=201)
+def link_gcp_project(body: LinkRequest, c: Annotated[Caller, Depends(console_session)]):
+    return workspace.link_project(deployer(), c, body.project_id, body.region)

@@ -29,20 +29,56 @@ class Settings:
     apps_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_APPS_PROJECT", "shipcube-apps-ks"))
     control_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONTROL_PROJECT", "shipcube-control-ks"))
     region: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_REGION", "asia-south1"))
+    # Registry repo in linked projects, and the shared repo hosted apps used before per-workspace repos.
     repo: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_REPO", "shipcube"))
     upload_bucket: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_UPLOAD_BUCKET", "shipcube-uploads-ks"))
     # Signs upload URLs through IAM signBlob (ADC user credentials cannot sign by themselves).
     signer_sa: str = field(default_factory=lambda: os.environ.get(
         "SHIPCUBE_SIGNER_SA", "sc-api@shipcube-control-ks.iam.gserviceaccount.com"))
-    # Cloud Build runs as this account in the apps project (security's sc-builder).
-    builder_sa: str = field(default_factory=lambda: os.environ.get(
-        "SHIPCUBE_BUILDER_SA", "sc-builder@shipcube-apps-ks.iam.gserviceaccount.com"))
+    # Hosted builds run as the workspace's own builder SA, read only the workspace's upload prefix
+    # and push only to its own registry repo (deploy/isolation.py). {ws} = workspace uuid,
+    # {ws_short} = its first 20 hex digits. Names agreed with security (infra/builder-isolation).
+    builder_sa_template: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_BUILDER_SA_TEMPLATE", "sc-build-{ws_short}@{apps_project}.iam.gserviceaccount.com"))
+    ar_repo_template: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_AR_REPO_TEMPLATE", "ws-{ws_short}"))
+    upload_prefix_template: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_UPLOAD_PREFIX_TEMPLATE", "ws/{ws}/"))
+    # The worker impersonates this SA to create a workspace's builder SA, repo and upload folder.
+    provisioner_sa: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_PROVISIONER_SA", "sc-provisioner@shipcube-control-ks.iam.gserviceaccount.com"))
+    # Granted on each builder SA: the worker mints its tokens, the hosted deployer submits builds as it.
+    worker_sa: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_WORKER_SA", "sc-worker@shipcube-control-ks.iam.gserviceaccount.com"))
+    build_submitter_sa: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_BUILD_SUBMITTER_SA", "sc-hosted-deployer@shipcube-control-ks.iam.gserviceaccount.com"))
     # Optional: impersonate this deployer for hosted deploys; unset means ADC acts directly.
     hosted_deployer_sa: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_HOSTED_DEPLOYER_SA") or None)
-    # Where approval links point (the console) and the AI gateway apps call. Set per environment;
-    # the defaults are the local dev servers.
+    # Where approval links point (the console). Set per environment; the default is the local console.
     console_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000").rstrip("/"))
-    gateway_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_GATEWAY_URL", "http://localhost:8090").rstrip("/"))
+    # The AI gateway's URL, injected into every deployed app as SHIPCUBE_AI_GATEWAY. Unset: not injected.
+    ai_gateway_url: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_AI_GATEWAY_URL") or None)
+    # SHIPCUBE_BACKEND=local (deploy/local.py, local_iap.py): Docker + pack + fake-gcs-server.
+    local_state_dir: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_STATE", ".shipcube-local"))
+    local_gcs_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_GCS_URL", "http://localhost:4443"))
+    # What a client PUTs to (the signed URL's host); differs from local_gcs_url inside compose.
+    local_gcs_public_url: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_LOCAL_GCS_PUBLIC_URL", os.environ.get("SHIPCUBE_LOCAL_GCS_URL", "http://localhost:4443")))
+    local_network: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_NETWORK", "shipcube-local"))
+    # How the worker and local_iap reach app containers: "network" (by alias, when they run on that
+    # Docker network, as in compose) or "published" (the 127.0.0.1 port, when they run on the host).
+    local_upstream: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_UPSTREAM", "published"))
+    local_iap_port: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_LOCAL_IAP_PORT", "8088")))
+    local_ready_timeout_s: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_LOCAL_READY_TIMEOUT_S", "90")))
+    # BYOK keys: Secret Manager in the control project, or a local JSON file (DEV_MODE; the format
+    # infra/local/secretmanager.py serves).
+    secret_store: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_SECRET_STORE", "local" if _dev_mode() else "gcp"))
+    local_secrets_file: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_SECRETS_FILE",
+                                                                           ".shipcube-local/secrets.json"))
+    # Linked projects: the per-workspace deployer the user grants roles to (infra/scripts/link-project.sh).
+    link_deployer_sa_template: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_LINK_DEPLOYER_SA_TEMPLATE", "ws-{ws12}-deployer@{control_project}.iam.gserviceaccount.com"))
+    # Billing page: the credit grant on ShipCube's billing account (GCP credits), shown against usage.
+    credit_grant_usd: float = field(default_factory=lambda: float(os.environ.get("SHIPCUBE_CREDIT_GRANT_USD", "0")))
+    credit_expires_at: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_CREDIT_EXPIRES_AT") or None)
     builder_image: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_BUILDER", "gcr.io/buildpacks/builder:latest"))
 
 
