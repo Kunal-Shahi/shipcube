@@ -30,12 +30,12 @@ export function TokenList({ initial }: { initial: ApiToken[] }) {
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[760px] text-left">
+            <table className="w-full min-w-[880px] text-left">
               <thead className="text-[12px] text-fg-muted">
                 <tr className="border-b border-border">
-                  <th className="px-4 py-2 font-medium">Name</th>
+                  <th className="min-w-[180px] px-4 py-2 font-medium">Name</th>
                   <th className="px-4 py-2 font-medium">Token</th>
-                  <th className="px-4 py-2 font-medium">Permissions</th>
+                  <th className="w-[320px] px-4 py-2 font-medium">Permissions</th>
                   <th className="px-4 py-2 font-medium">Last used</th>
                   <th className="px-4 py-2 font-medium">Expires</th>
                   <th className="px-4 py-2" />
@@ -44,11 +44,11 @@ export function TokenList({ initial }: { initial: ApiToken[] }) {
               <tbody>
                 {tokens.map((t) => (
                   <tr key={t.id} className="border-b border-border last:border-0">
-                    <td className="px-4 py-2">
-                      <div className="font-medium">{t.name}</div>
+                    <td className="min-w-[180px] px-4 py-2">
+                      <div className="font-medium break-words">{t.name}</div>
                       <div className="text-[12px] text-fg-muted">Created {date(t.createdAt)}</div>
                     </td>
-                    <td className="px-4 py-2 font-mono text-[12px] text-fg-muted">{t.prefix}…</td>
+                    <td className="px-4 py-2 font-mono text-[12px] whitespace-nowrap text-fg-muted">{t.prefix}…</td>
                     <td className="px-4 py-2">
                       <div className="flex flex-wrap gap-1">
                         {t.scopes.map((s) => (
@@ -56,8 +56,8 @@ export function TokenList({ initial }: { initial: ApiToken[] }) {
                         ))}
                       </div>
                     </td>
-                    <td className="px-4 py-2 text-fg-muted">{t.lastUsedAt ? ago(t.lastUsedAt) : "Never"}</td>
-                    <td className="px-4 py-2 text-fg-muted">{date(t.expiresAt)}</td>
+                    <td className="px-4 py-2 whitespace-nowrap text-fg-muted">{t.lastUsedAt ? ago(t.lastUsedAt) : "Never"}</td>
+                    <td className="px-4 py-2 whitespace-nowrap text-fg-muted">{date(t.expiresAt)}</td>
                     <td className="px-4 py-2 text-right whitespace-nowrap">
                       {confirm === t.id ? (
                         <span className="inline-flex items-center gap-2">

@@ -15,9 +15,9 @@ import { changeAccessAction } from "../../../actions";
 const principalOf = (g: { kind: GrantKind; principal: string }) => `${g.kind}:${g.principal}`;
 
 const KIND: Record<GrantKind, { label: string; icon: typeof User; placeholder: string; noun: string }> = {
-  user: { label: "Person", icon: User, placeholder: "name@company.com", noun: "person" },
-  group: { label: "Google group", icon: Users, placeholder: "team@company.com", noun: "group" },
-  domain: { label: "Domain", icon: Globe, placeholder: "company.com", noun: "domain" },
+  user: { label: "Person", icon: User, placeholder: "name@example.com", noun: "person" },
+  group: { label: "Google group", icon: Users, placeholder: "team@example.com", noun: "group" },
+  domain: { label: "Domain", icon: Globe, placeholder: "example.com", noun: "domain" },
 };
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -27,12 +27,12 @@ function validate(kind: GrantKind, value: string, existing: AccessGrant[]): stri
   const v = value.trim().toLowerCase();
   if (!v) return null;
   if (kind === "domain") {
-    if (v.includes("@")) return "Enter just the domain, for example acme.com. To add one person, choose Person.";
-    if (!DOMAIN.test(v)) return "That doesn't look like a domain. Use the part after the @, for example acme.com.";
+    if (v.includes("@")) return "Enter just the domain, such as example.com. To add one person, choose Person.";
+    if (!DOMAIN.test(v)) return "That doesn't look like a domain. Use the part after the @, such as example.com.";
     if (["gmail.com", "googlemail.com", "outlook.com", "yahoo.com"].includes(v))
       return `Sharing with everyone on ${v} would make the app public to millions of accounts. Add people one by one instead.`;
   } else if (!EMAIL.test(v)) {
-    return kind === "group" ? "Enter the group's email address, for example team@acme.com." : "Enter an email address, for example maria@acme.com.";
+    return kind === "group" ? "Enter the group's email address, for example team@example.com." : "Enter an email address, for example maria@example.com.";
   }
   if (existing.some((g) => g.principal.toLowerCase() === v)) return `${v} already has access.`;
   return null;

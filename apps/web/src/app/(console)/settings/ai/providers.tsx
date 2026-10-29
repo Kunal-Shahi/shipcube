@@ -20,7 +20,8 @@ const MODEL_PLACEHOLDER: Partial<Record<ProviderId, string>> = {
 
 export function Providers({ initial, apps }: { initial: ProviderConfig[]; apps: { id: string; name: string; aiProvider?: string }[] }) {
   const [providers, setProviders] = useState(initial);
-  const defaultId: ProviderId = "meta";
+  // The API marks the workspace default; Muse when nothing else is.
+  const defaultProvider = providers.find((p) => p.isDefault) ?? providers.find((p) => p.id === "meta");
   const [editing, setEditing] = useState<ProviderId | null>(null);
   const remove = useAction(removeProviderKeyAction);
 
@@ -29,7 +30,7 @@ export function Providers({ initial, apps }: { initial: ProviderConfig[]; apps: 
       <Panel>
         <PanelHeader
           title="Providers"
-          description="Muse is the default for every app. Keys are stored in Secret Manager, scoped to this workspace, and never sent back to the browser."
+          description={`${defaultProvider?.label ?? "Muse"} is the default for apps without an override. Keys are stored in Secret Manager, scoped to this workspace, and never sent back to the browser.`}
         />
         {remove.error && (
           <div className="border-b border-border px-4 py-2">
@@ -43,7 +44,7 @@ export function Providers({ initial, apps }: { initial: ProviderConfig[]; apps: 
                 <div className="min-w-0 max-w-[70ch]">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{p.label}</span>
-                    {p.id === defaultId && <Pill tone="accent">Default</Pill>}
+                    {p.id === defaultProvider?.id && <Pill tone="accent">Default</Pill>}
                     {p.connected ? (
                       <Pill tone="good" icon={<CheckCircle2 className="size-3.5" aria-hidden />}>Connected</Pill>
                     ) : (
@@ -75,7 +76,11 @@ export function Providers({ initial, apps }: { initial: ProviderConfig[]; apps: 
                         pending={remove.pending}
                         onClick={async () => {
                           if ((await remove.run(p.id)) === null) {
-                            setProviders((all) => all.map((x) => (x.id === p.id ? { ...x, connected: false, keyHint: undefined } : x)));
+                            setProviders((all) => {
+                              const next = all.map((x) => (x.id === p.id ? { ...x, connected: false, keyHint: undefined, isDefault: false } : x));
+                              // Without the removed key's provider, the workspace falls back to Muse.
+                              return next.some((x) => x.isDefault) ? next : next.map((x) => ({ ...x, isDefault: x.id === "meta" }));
+                            });
                           }
                         }}
                       >
@@ -90,7 +95,7 @@ export function Providers({ initial, apps }: { initial: ProviderConfig[]; apps: 
                   provider={p}
                   onCancel={() => setEditing(null)}
                   onSaved={(saved) => {
-                    setProviders((all) => all.map((x) => (x.id === p.id ? saved : x)));
+                    setProviders((all) => all.map((x) => (x.id === p.id ? saved : saved.isDefault ? { ...x, isDefault: false } : x)));
                     setEditing(null);
                   }}
                 />
@@ -122,7 +127,7 @@ export function Providers({ initial, apps }: { initial: ProviderConfig[]; apps: 
                 <tr key={a.id} className="border-b border-border last:border-0">
                   <td className="px-4 py-2 font-mono text-[12.5px]">{a.name}</td>
                   <td className={cn("px-4 py-2", (!a.aiProvider || a.aiProvider === "None") && "text-fg-subtle")}>
-                    {!a.aiProvider ? "Default (Muse)" : a.aiProvider === "None" ? "Doesn't call a model" : a.aiProvider}
+                    {!a.aiProvider ? `Default (${defaultProvider?.label ?? "Muse"})` : a.aiProvider === "None" ? "Doesn't call a model" : a.aiProvider}
                   </td>
                 </tr>
               ))}

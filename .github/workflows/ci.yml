@@ -23,6 +23,8 @@ jobs:
       gateway: ${{ steps.diff.outputs.gateway }}
       web: ${{ steps.diff.outputs.web }}
       deploy: ${{ steps.diff.outputs.deploy }}
+      infra: ${{ steps.diff.outputs.infra }}
+      local_db: ${{ steps.diff.outputs.local_db }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +49,8 @@ jobs:
           echo "gateway=$(or "$(has '^services/gateway/')")" >> "$GITHUB_OUTPUT"
           echo "web=$(or "$(has '^apps/web/')")" >> "$GITHUB_OUTPUT"
           echo "deploy=$(or "$(has '^deploy/')")" >> "$GITHUB_OUTPUT"
+          echo "infra=$(or "$(has '^infra/')")" >> "$GITHUB_OUTPUT"
+          echo "local_db=$(or "$(has '^(infra/(db|local)/|services/api/)')")" >> "$GITHUB_OUTPUT"
           projects=$(find packages services ml deploy -name pyproject.toml -not -path '*/node_modules/*' \
             -not -path '*/.venv/*' -exec dirname {} \; 2>/dev/null | sort | jq -R . | jq -cs .)
           echo "python_projects=$projects" >> "$GITHUB_OUTPUT"
@@ -152,10 +156,66 @@ jobs:
       - name: YAML
         run: pip install --quiet pyyaml && python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" deploy/*.yaml .github/workflows/*.yml
 
+  # Repo-wide guards that run on every PR. ShipCube owns no domain: a hard-coded one that someone
+  # else registers would receive the tokens users paste next to it (red-team, PR #24).
+  guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No shipcube.dev references
+        run: |
+          if git grep -nIi 'shipcube\.dev' -- . ':!.github/workflows/ci.yml'; then
+            echo "::error::shipcube.dev isn't ours. Use config (SHIPCUBE_MCP_URL, SHIPCUBE_CONSOLE_URL) or a placeholder like <your ShipCube MCP URL>."
+            exit 1
+          fi
+
+  infra:
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: terraform fmt
+        run: terraform -chdir=infra/terraform fmt -check -recursive
+      - name: terraform validate
+        run: terraform -chdir=infra/terraform init -backend=false -input=false && terraform -chdir=infra/terraform validate
+      - name: shellcheck
+        run: shellcheck -x infra/scripts/*.sh infra/tests/*.sh infra/db/*.sh infra/db/checks/*.sh infra/budget-killswitch/*.sh infra/local/*.sh
+
+  # The local stack's database and secrets, exactly as a developer runs them (infra/local/compose.yaml),
+  # then the tenant-isolation tests as the real service logins (infra/local/test.sh).
+  local-db:
+    needs: changes
+    if: needs.changes.outputs.local_db == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Local secrets
+        run: python3 infra/local/localsecrets.py init
+      - name: Database, bootstrap and migrations (compose)
+        run: |
+          c="docker compose --env-file .local/secrets.env -f infra/local/compose.yaml"
+          $c up -d --wait db secretmanager
+          $c run --rm db-init
+          $c run --rm migrate
+          $c run --rm migrate | grep -q "applied: nothing"
+      - name: Isolation tests
+        run: infra/local/test.sh
+      - name: Logs on failure
+        if: failure()
+        run: docker compose --env-file .local/secrets.env -f infra/local/compose.yaml logs
+
   # The one required check. It runs even when jobs were skipped, and fails if any job failed.
   ci-ok:
     if: always()
-    needs: [changes, python, gateway, web, deploy-scripts]
+    needs: [changes, guards, python, gateway, web, deploy-scripts, infra, local-db]
     runs-on: ubuntu-latest
     steps:
       - run: |

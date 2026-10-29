@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -18,11 +19,12 @@ from psycopg.types.json import Jsonb
 
 from . import db
 from .auth import Caller
+from .deploy import isolation
 from .deploy.base import AppRef, Deployer, Target
 from .models import OpError, Operation, Progress, Step
 from .settings import settings
 
-CONSOLE_URL = "https://console.shipcube.dev"
+CONSOLE_URL = settings.console_url
 HOSTED = "shipcube"
 RESTORE_WINDOW = timedelta(days=7)
 APPROVAL_TTL = timedelta(hours=72)
@@ -149,8 +151,14 @@ def write_app_caps(conn, workspace_id: str, app_id: str, caps: dict[str, Any], b
 # --- targets ---------------------------------------------------------------------------
 
 
+def hosted_target() -> str:
+    """What "hosted" means to the console: ShipCube's GCP project, or Docker on this machine."""
+    return "local" if settings.backend == "local" else HOSTED
+
+
 def targets(conn, workspace_id: str) -> list[dict[str, Any]]:
-    out = [{"id": HOSTED, "project": settings.apps_project, "kind": "shipcube", "default": True}]
+    out = [{"id": HOSTED, "project": "local" if settings.backend == "local" else settings.apps_project,
+            "kind": hosted_target(), "default": True}]
     for r in conn.execute("select id, project_id from gcp_links where workspace_id = %s and status = 'active'"
                           " order by created_at", (workspace_id,)).fetchall():
         out.append({"id": str(r["id"]), "project": r["project_id"], "kind": "linked", "default": False})
@@ -186,6 +194,7 @@ def me(caller: Caller) -> dict[str, Any]:
             "gcp_targets": targets(conn, caller.workspace_id),
             "limits": {"max_apps": int(caps["max_apps"]), "monthly_spend_usd": caps["spend_usd_per_month"]},
             "token": {"id": caller.token_id or "console", "scopes": sorted(caller.scopes), "expires_at": caller.expires_at},
+            "deployer_sa": isolation.link_deployer_sa(settings, caller.workspace_id),
         }
 
 
@@ -216,12 +225,15 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
                       " left join secret_refs s on s.id = p.secret_ref_id where p.workspace_id = %s and"
                       " (p.app_id = %s or p.app_id is null) order by p.app_id nulls last limit 1",
                       (app["workspace_id"], app["id"])).fetchone()
+    est = conn.execute("select * from load_estimates where app_id = %s order by created_at desc limit 1",
+                       (app["id"],)).fetchone()
     history = conn.execute("select revision, status, created_at from deployments where app_id = %s and revision is not null"
                            " order by created_at desc limit 5", (app["id"],)).fetchall()
     return {
         "name": app["slug"], "url": app["url"] or "", "tier": app["tier"],
-        "target": HOSTED if app["gcp_link_id"] is None else str(app["gcp_link_id"]),
-        "region": app["region"], "status": app["status"],
+        "target": hosted_target() if app["gcp_link_id"] is None else str(app["gcp_link_id"]),
+        "region": "local" if app["gcp_link_id"] is None and settings.backend == "local" else app["region"],
+        "status": app["status"],
         "revision": (dep or {}).get("revision") or "", "image": (dep or {}).get("image_digest") or "",
         "caps": app_caps(conn, str(app["workspace_id"]), app["id"]),
         "access": [{"principal": f"{g['principal_type']}:{g['principal']}",
@@ -231,6 +243,10 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
         else {"provider": "meta", "model": "muse-spark", "key_secret": None},
         "updated_at": _iso(dep["finished_at"] if dep and dep["finished_at"] else app["created_at"]),
         "deleted_at": _iso(app["deleted_at"]), "restorable_until": _iso(app["purge_after"]),
+        "estimate": {"estimate_id": est["reasoning"].get("estimate_id"), "workload_class": est["workload_class"],
+                     "tier": est["recommended_tier"], "confidence": float(est["confidence"]) if est["confidence"] is not None else None,
+                     "monthly_cost_usd": est["reasoning"].get("monthly_cost_usd") or {"expected": float(est["monthly_cost_usd"] or 0)},
+                     "explained_by": est["reasoning"].get("explained_by"), "created_at": _iso(est["created_at"])} if est else None,
         "revisions": [{"revision": h["revision"], "status": h["status"], "created_at": _iso(h["created_at"])} for h in history],
     }
 
@@ -240,20 +256,31 @@ def get_app(caller: Caller, slug: str, include_deleted: bool = False) -> dict[st
         return _app_view(conn, _app_row(conn, caller.workspace_id, slug, include_deleted))
 
 
+def get_app_for_telemetry(caller: Caller, slug: str) -> dict[str, Any]:
+    """The app view plus where it runs (project, Cloud Run service, id), for the monitoring provider."""
+    with db.tx(caller) as conn:
+        row = _app_row(conn, caller.workspace_id, slug)
+        ref = app_ref(conn, row)
+        return {**_app_view(conn, row), "gcp_project": ref.target.project,
+                "service_name": row["service_name"] or ref.service, "app_id": str(row["id"])}
+
+
 def app_ref_for(caller: Caller, slug: str, include_deleted: bool = True) -> tuple[AppRef, dict[str, Any]]:
     with db.tx(caller) as conn:
         row = _app_row(conn, caller.workspace_id, slug, include_deleted)
         return app_ref(conn, row), row
 
 
-def list_apps(caller: Caller) -> list[dict[str, Any]]:
+def list_apps(caller: Caller, include_deleted: bool = False) -> list[dict[str, Any]]:
     with db.tx(caller) as conn:
         rows = conn.execute("select a.*, d.finished_at from apps a left join lateral (select finished_at from deployments"
                             " where app_id = a.id and status = 'succeeded' order by finished_at desc limit 1) d on true"
-                            " where a.workspace_id = %s and a.purged_at is null order by a.created_at",
-                            (caller.workspace_id,)).fetchall()
+                            " where a.workspace_id = %s and a.purged_at is null and (%s or a.deleted_at is null)"
+                            " order by a.created_at", (caller.workspace_id, include_deleted)).fetchall()
         return [{"name": r["slug"], "url": r["url"] or "", "tier": r["tier"], "status": r["status"],
-                 "updated_at": _iso(r["finished_at"] or r["created_at"])} for r in rows]
+                 "updated_at": _iso(r["finished_at"] or r["created_at"]),
+                 "target": hosted_target() if r["gcp_link_id"] is None else str(r["gcp_link_id"]),
+                 "deleted_at": _iso(r["deleted_at"]), "restorable_until": _iso(r["purge_after"])} for r in rows]
 
 
 # --- operations -------------------------------------------------------------------------
@@ -385,11 +412,13 @@ def decide(caller: Caller, op_id: str, approve: bool, comment: str | None) -> Op
 
 
 def start_estimate(caller: Caller, payload: dict[str, Any], idem: str | None) -> Operation:
+    isolation.check_source(settings, caller.workspace_id, payload.get("source") or {})
     with db.tx(caller) as conn:
         return enqueue(conn, caller, caller.workspace_id, "estimate", None, settings.apps_project, payload, idem)
 
 
 def start_deploy(caller: Caller, slug: str, payload: dict[str, Any], idem: str | None) -> Operation:
+    isolation.check_source(settings, caller.workspace_id, payload.get("source") or {})
     with db.tx(caller) as conn:
         target = payload.get("target") or HOSTED
         link_id = None if target == HOSTED else target
@@ -399,6 +428,8 @@ def start_deploy(caller: Caller, slug: str, payload: dict[str, Any], idem: str |
             except ValueError:
                 raise Conflict(f"unknown target {target}; see whoami") from None
         tgt = target_for(conn, link_id)
+        est = _finished_estimate(conn, caller, slug, payload.get("estimate_id"))
+        tier = payload.get("tier") or (est["result"].get("tier") if est else None)
         caps_ws = workspace_caps(conn, caller.workspace_id)
         app = conn.execute("select * from apps where workspace_id = %s and slug = %s and deleted_at is null",
                            (caller.workspace_id, slug)).fetchone()
@@ -411,7 +442,7 @@ def start_deploy(caller: Caller, slug: str, payload: dict[str, Any], idem: str |
             app = conn.execute(
                 "insert into apps (id, workspace_id, gcp_link_id, slug, name, tier, kind, service_name, region, runtime_sa,"
                 " status, created_by) values (%s,%s,%s,%s,%s,%s,'service',%s,%s,%s,'draft',%s) returning *",
-                (uuid.uuid4(), caller.workspace_id, link_id, slug, slug, payload.get("tier") or "T1", ref.service,
+                (uuid.uuid4(), caller.workspace_id, link_id, slug, slug, tier or "T1", ref.service,
                  settings.region, ref.runtime_sa, caller.user_id)).fetchone()
             conn.execute("insert into access_grants (id, workspace_id, app_id, principal_type, principal, granted_by)"
                          " values (%s,%s,%s,'user',%s,%s)", (uuid.uuid4(), caller.workspace_id, app["id"], caller.email,
@@ -432,14 +463,52 @@ def start_deploy(caller: Caller, slug: str, payload: dict[str, Any], idem: str |
             # A retry: enqueue() returns the original operation (or a conflict if the body changed).
             return enqueue(conn, caller, caller.workspace_id, "deploy", app["id"], tgt.project, payload, idem, reasons)
         dep_id = uuid.uuid4()
+        estimate_row = _record_estimate(conn, caller, app["id"], est) if est else None
         config = {"caps": payload.get("caps") or {}, "env_names": sorted((payload.get("env") or {}).keys()),
                   "secret_names": sorted((payload.get("secrets") or {}).keys()), "source_kind": payload["source"]["kind"]}
-        conn.execute("insert into deployments (id, workspace_id, app_id, config, status, requested_by, requested_via, token_id)"
-                     " values (%s,%s,%s,%s,'queued',%s,%s,%s)",
+        conn.execute("insert into deployments (id, workspace_id, app_id, config, status, requested_by, requested_via, token_id,"
+                     " load_estimate_id) values (%s,%s,%s,%s,'queued',%s,%s,%s,%s)",
                      (dep_id, caller.workspace_id, app["id"], Jsonb(config), caller.user_id,
-                      "mcp" if caller.via == "mcp" else "console", caller.token_id))
+                      "mcp" if caller.via == "mcp" else "console", caller.token_id, estimate_row))
+        # The estimate's tier goes in the unhashed part of the input, so a retry stays idempotent.
         return enqueue(conn, caller, caller.workspace_id, "deploy", app["id"], tgt.project, payload, idem, reasons,
-                       extra={"deployment_id": str(dep_id)})
+                       extra={"deployment_id": str(dep_id), **({"tier": tier} if tier and not payload.get("tier") else {})})
+
+
+def _finished_estimate(conn, caller: Caller, slug: str, estimate_id: str | None) -> dict[str, Any] | None:
+    """The estimate a deploy names, or else the latest finished estimate for that app name."""
+    if estimate_id:
+        row = conn.execute("select id, result, created_at from operations where workspace_id = %s and kind = 'estimate'"
+                           " and status = 'succeeded' and result->>'estimate_id' = %s", (caller.workspace_id, estimate_id)).fetchone()
+        if row is None:
+            raise Conflict(f"estimate {estimate_id} not found or not finished; poll it with operation first")
+        return row
+    return conn.execute("select id, result, created_at from operations where workspace_id = %s and kind = 'estimate'"
+                        " and status = 'succeeded' and input->>'app' = %s order by created_at desc limit 1",
+                        (caller.workspace_id, slug)).fetchone()
+
+
+def _record_estimate(conn, caller: Caller, app_id: Any, est: dict[str, Any]) -> Any:
+    """Store it against the app once (load_estimates); returns its id for deployments.load_estimate_id."""
+    r = est["result"]
+    prior = conn.execute("select id from load_estimates where app_id = %s and reasoning->>'estimate_id' = %s",
+                         (app_id, r["estimate_id"])).fetchone()
+    if prior:
+        return prior["id"]
+    res = r.get("resources") or {}
+    mem = str(res.get("memory", ""))
+    cost = r.get("monthly_cost_usd") or {}
+    return conn.execute(
+        "insert into load_estimates (id, workspace_id, app_id, workload_class, confidence, recommended_tier, cpu, memory_mib,"
+        " monthly_cost_usd, profile, reasoning, created_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id",
+        (uuid.uuid4(), caller.workspace_id, app_id, r.get("workload_class", "unknown"), r.get("confidence"), r.get("tier", "T1"),
+         float(res["cpu"]) if res.get("cpu") else None,
+         int(mem[:-2]) * (1024 if mem.endswith("Gi") else 1) if mem[-2:] in ("Mi", "Gi") else None,
+         cost.get("expected"), Jsonb(r.get("profile") or {}),
+         Jsonb({"estimate_id": r["estimate_id"], "operation_id": str(est["id"]), "monthly_cost_usd": cost,
+                "explained_by": r.get("explained_by"), "reasoning": r.get("reasoning"),
+                "recommended_caps": r.get("recommended_caps")}),
+         est["created_at"])).fetchone()["id"]
 
 
 def start_rollback(caller: Caller, slug: str, to: str, idem: str | None) -> Operation:
@@ -559,3 +628,41 @@ def live_status(deployer: Deployer, caller: Caller, slug: str) -> dict[str, Any]
     if row["status"] in ("draft",) and not row["url"]:
         return None
     return deployer.status(ref)
+
+
+# --- API tokens (console only; row-level security limits them to the caller's own) ---------------
+
+
+def _token_view(r: dict[str, Any]) -> dict[str, Any]:
+    return {"id": str(r["id"]), "name": r["name"], "prefix": r["prefix"], "scopes": list(r["scopes"]),
+            "created_at": _iso(r["created_at"]), "expires_at": _iso(r["expires_at"]),
+            "last_used_at": _iso(r["last_used_at"])}
+
+
+def list_tokens(caller: Caller) -> list[dict[str, Any]]:
+    with db.tx(caller) as conn:
+        rows = conn.execute("select id, name, prefix, scopes, created_at, expires_at, last_used_at from api_tokens"
+                            " where user_id = %s and kind = 'pat' and revoked_at is null and expires_at > now()"
+                            " order by created_at desc", (caller.user_id,)).fetchall()
+    return [_token_view(r) for r in rows]
+
+
+def create_token(caller: Caller, name: str, scopes: list[str], days: int) -> tuple[dict[str, Any], str]:
+    from . import auth
+
+    if unknown := set(scopes) - set(auth.SCOPES):
+        raise ValueError(f"unknown scopes: {', '.join(sorted(unknown))}")
+    if "data:raw" in scopes and caller.role not in ("owner", "admin"):
+        raise PermissionError("data:raw needs the admin role")
+    secret = f"sc_pat_{secrets.token_hex(4)}_{secrets.token_urlsafe(32)}"
+    with db.tx(caller) as conn:
+        row = auth.insert_pat(conn, secret, caller.user_id, caller.workspace_id, sorted(set(scopes)), name, days)
+    return _token_view(row), secret
+
+
+def revoke_token(caller: Caller, token_id: str) -> bool:
+    with db.tx(caller) as conn:
+        r = conn.execute("update api_tokens set revoked_at = now() where id = %s and revoked_at is null"
+                         " and (user_id = %s or %s) returning id",
+                         (token_id, caller.user_id, caller.role in ("owner", "admin"))).fetchone()
+    return r is not None

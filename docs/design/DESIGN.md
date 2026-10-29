@@ -108,7 +108,7 @@ Approvals (`/approvals/<id>`) and data model changes (`/data/migrations/<id>`) a
 ShipCube talks like a careful infrastructure engineer: specific, calm and brief.
 
 - **Name things by what people manage.** "Who can open this app", not "IAM bindings". "Spending limit", not "budget policy".
-- **Say what happens.** Buttons are verbs that describe the result: "Deploy", "Grant access", "Revoke", "Create token". The toast confirms in the past tense: "Access granted to finance@acme.com".
+- **Say what happens.** Buttons are verbs that describe the result: "Deploy", "Grant access", "Revoke", "Create token". The toast confirms in the past tense: "Access granted to finance@example.com".
 - **Show the reasoning, then the number.** "Traffic arrives in short bursts during work hours and idles overnight, so scale-to-zero Cloud Run fits. Estimated $6.80/month."
 - **Errors say what went wrong and what to do.** "Couldn't reach your GCP project. The ShipCube service account lost the Cloud Run Admin role. Re-link the project or grant the role again." No apologies, no "Oops".
 - **Plain words.** No "seamless", "effortless", "magic", "supercharge" or "AI-powered".
