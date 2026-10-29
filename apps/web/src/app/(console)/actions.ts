@@ -139,7 +139,12 @@ export async function linkGcpProjectAction(input: { projectId: string; region: s
       throw new Invalid("That isn't a valid project ID. It's 6–30 lowercase letters, digits or hyphens, like acme-analytics-prod.");
     }
     if (!/^[a-z]+-[a-z]+\d$/.test(input.region)) throw new Invalid("Pick a region.");
-    return (await data()).linkGcpProject(input);
+    const link = await (await data()).linkGcpProject(input);
+    if (link.status === "broken") {
+      const missing = link.missingPermissions?.length ? ` Still missing: ${link.missingPermissions.join(", ")}.` : "";
+      throw new Invalid(`ShipCube can't deploy to ${input.projectId} yet.${missing} Run the script as a project owner, then check again.`);
+    }
+    return link;
   }, "/settings/gcp");
 }
 

@@ -95,3 +95,6 @@ class MockDeployer:
 
     def verify_link(self, project_id: str, deployer_sa: str) -> list[str]:
         return [] if not project_id.startswith("broken-") else ["run.services.create"]
+
+    def ensure_link_deployer(self, workspace_id: str, deployer_sa: str) -> None:
+        pass

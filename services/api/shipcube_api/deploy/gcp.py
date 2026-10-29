@@ -90,6 +90,7 @@ class GcpDeployer:
         self._project_numbers: dict[str, str] = {}
         self._iap_agents: dict[str, str] = {}
         self._provisioned: set[str] = set()
+        self._link_deployers: set[str] = set()
 
     # --- credentials ------------------------------------------------------------------
 
@@ -509,6 +510,29 @@ class GcpDeployer:
                     raise
         log.info("purged %s in %s", app.service, app.target.project)
 
+
+    def ensure_link_deployer(self, workspace_id: str, deployer_sa: str) -> None:
+        """Create ws-<id>-deployer in the control project before the user runs link-project.sh (which
+        fails on an unknown member), and let the API (verify) and worker (deploy) impersonate it. It
+        holds no roles of its own; the user's grants in their project are all it can use. Runs as the
+        API's ADC, which has iam.serviceAccountAdmin on the control project (infra/terraform/iam.tf)."""
+        if deployer_sa in self._link_deployers:
+            return
+        sess = self._session(None)
+        project = deployer_sa.split("@")[1].removesuffix(".iam.gserviceaccount.com")
+        self._call(sess, "POST", f"{IAM}/projects/{project}/serviceAccounts", ok=(200, 409),
+                   json={"accountId": deployer_sa.split("@")[0],
+                         "serviceAccount": {"displayName": f"ShipCube deployer for workspace {workspace_id}"[:100],
+                                            "description": "Granted roles in the workspace's linked GCP projects"}})
+        sa_url = f"{IAM}/projects/{project}/serviceAccounts/{deployer_sa}"
+        policy = self._retry_new(lambda: self._call(sess, "POST", f"{sa_url}:getIamPolicy", json={}))
+        changed = False
+        for sa in (self.s.api_sa, self.s.worker_sa):
+            changed |= _add_binding(policy, "roles/iam.serviceAccountTokenCreator", f"serviceAccount:{sa}")
+        if changed:
+            self._retry_new(lambda: self._call(sess, "POST", f"{sa_url}:setIamPolicy", json={"policy": policy}))
+        self._link_deployers.add(deployer_sa)
+        log.info("link deployer ready", extra={"workspace_id": workspace_id, "deployer_sa": deployer_sa})
 
     def verify_link(self, project_id: str, deployer_sa: str) -> list[str]:
         """testIamPermissions on the project, as the workspace's deployer (impersonated)."""

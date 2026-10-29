@@ -179,11 +179,15 @@ def _link_view(r: dict[str, Any]) -> dict[str, Any]:
             "linked_at": _iso(r["created_at"]), "verified_at": _iso(r["verified_at"])}
 
 
-def gcp_targets(caller: Caller) -> dict[str, Any]:
+def gcp_targets(deployer: Deployer, caller: Caller) -> dict[str, Any]:
+    """The workspace's links, and the deployer SA link-project.sh grants roles to. The SA is created
+    here, so it exists by the time the console shows the script."""
+    deployer_sa = isolation.link_deployer_sa(settings, caller.workspace_id)
+    deployer.ensure_link_deployer(caller.workspace_id, deployer_sa)
     with db.tx(caller) as conn:
         rows = conn.execute("select * from gcp_links where workspace_id = %s and status <> 'revoked' order by created_at",
                             (caller.workspace_id,)).fetchall()
-    return {"deployer_sa": isolation.link_deployer_sa(settings, caller.workspace_id), "targets": [_link_view(r) for r in rows]}
+    return {"deployer_sa": deployer_sa, "targets": [_link_view(r) for r in rows]}
 
 
 def verified_projects(caller: Caller) -> list[str]:
@@ -199,6 +203,7 @@ def link_project(deployer: Deployer, caller: Caller, project_id: str, region: st
     """Record the link and check it as the workspace's deployer. Missing permissions leave it
     'broken' with the list, so the console can show what link-project.sh still has to grant."""
     deployer_sa = isolation.link_deployer_sa(settings, caller.workspace_id)
+    deployer.ensure_link_deployer(caller.workspace_id, deployer_sa)
     missing = deployer.verify_link(project_id, deployer_sa)
     status = "active" if not missing else "broken"
     with db.tx(caller) as conn:

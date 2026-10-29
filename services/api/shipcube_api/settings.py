@@ -76,6 +76,9 @@ class Settings:
     # Linked projects: the per-workspace deployer the user grants roles to (infra/scripts/link-project.sh).
     link_deployer_sa_template: str = field(default_factory=lambda: os.environ.get(
         "SHIPCUBE_LINK_DEPLOYER_SA_TEMPLATE", "ws-{ws12}-deployer@{control_project}.iam.gserviceaccount.com"))
+    # The API's own SA: it creates each workspace's deployer SA and checks links by impersonating it.
+    api_sa: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_API_SA", "sc-api@shipcube-control-ks.iam.gserviceaccount.com"))
     # Billing page: the credit grant on ShipCube's billing account (GCP credits), shown against usage.
     credit_grant_usd: float = field(default_factory=lambda: float(os.environ.get("SHIPCUBE_CREDIT_GRANT_USD", "0")))
     credit_expires_at: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_CREDIT_EXPIRES_AT") or None)

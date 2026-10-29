@@ -110,6 +110,10 @@ class Deployer(Protocol):
     def verify_link(self, project_id: str, deployer_sa: str) -> list[str]:
         """Check a linked project as its deployer SA; returns what's missing (empty = ready)."""
 
+    def ensure_link_deployer(self, workspace_id: str, deployer_sa: str) -> None:
+        """Create the workspace's deployer SA (the one link-project.sh grants roles to) if it's missing,
+        and let the API and worker impersonate it. Idempotent."""
+
 
 def normalize_caps(caps: dict[str, Any]) -> dict[str, Any]:
     """Apply Cloud Run's combination rules to ShipCube caps."""
