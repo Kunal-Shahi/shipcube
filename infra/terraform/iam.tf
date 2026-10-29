@@ -103,7 +103,10 @@ resource "google_project_iam_member" "hosted_deployer" {
   depends_on = [google_project_iam_custom_role.run_iam]
 }
 
+# Legacy shared builder: pushes to every repo in the apps project (C-1). Removed by
+# legacy_shared_builder=false; per-workspace builders get writer on their own repo only.
 resource "google_project_iam_member" "builder_ar_writer" {
+  count   = var.legacy_shared_builder ? 1 : 0
   project = var.apps_project_id
   role    = "roles/artifactregistry.writer"
   member  = google_service_account.builder.member
@@ -144,4 +147,12 @@ resource "google_service_account_iam_member" "migrator_operators" {
   service_account_id = google_service_account.migrator.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = each.value
+}
+
+# Deploys pin the digest: the hosted deployer reads the pushed tag back from the workspace's
+# repo (ws-<ws_short>). Read-only; builds push as the per-workspace build SA.
+resource "google_project_iam_member" "hosted_deployer_ar_reader" {
+  project = var.apps_project_id
+  role    = "roles/artifactregistry.reader"
+  member  = google_service_account.hosted_deployer.member
 }

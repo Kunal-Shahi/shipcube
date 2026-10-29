@@ -129,7 +129,15 @@ Billing: resources live in the user's project, so **everything is billed to the 
 **Running untrusted code.** All Cloud Run instances are sandboxed: gen1 uses gVisor (system-call emulation), and gen2 runs each instance in a microVM; jobs always use gen2 [S17]. We pin `--execution-environment=gen2` everywhere for consistency. On top of that:
 
 - **Profiler sandbox** (`estimate_load`): a Cloud Run job in `shipcube-apps`, run as a service account with zero roles, no secrets mounted, and Direct VPC egress with `all-traffic` into a VPC whose only firewall rule denies all egress. It gets sample data mounted read-only, a hard task timeout (10 minutes), 1 vCPU / 2 GiB, and `max-retries=0`.
-- **Builds** run in Cloud Build in the project that pays for them, with a dedicated build service account that can only push to that project's `shipcube` repo.
+- **Builds** run in Cloud Build in the project that pays for them. Build steps run the tenant's code (buildpack hooks, `postinstall`, `setup.py`) and can read the build service account's token from the metadata server, so **the build identity is a tenant boundary**. Hosted builds therefore run as a per-workspace account that can reach only that workspace's sources and images:
+
+  | | Name (derived from the workspace uuid, no DB column) | Access |
+  |---|---|---|
+  | Build SA | `sc-build-<ws_short>@shipcube-apps`, where `ws_short` is the first 20 hex digits of the uuid | none at project level except `logging.logWriter` (granted once to all SAs in the project) |
+  | Uploads | managed folder `gs://<uploads>/ws/<ws_uuid>/` (`uploads/<upload_id>.tgz`, `inline/<op_id>.tgz`) | `storage.objectViewer` on its own folder only |
+  | Images | Artifact Registry repo `ws-<ws_short>` in `shipcube-apps` | `artifactregistry.writer` on its own repo only |
+
+  The worker creates these at workspace creation, idempotently, impersonating `sc-provisioner` (only `sc-worker` may impersonate it). Only `sc-worker` gets `serviceAccountTokenCreator` on a build SA, and only `sc-worker` and `sc-hosted-deployer` get `serviceAccountUser` (to start builds as it; never `sc-api`). Deploys pin the image **digest** from the build result, never a tag, so a tag pushed later can't change what runs. Managed folders and per-repo IAM were chosen over IAM conditions: Artifact Registry doesn't support resource-name conditions [S20], and managed folders keep the bucket policy from growing a conditional binding per workspace. Linked projects build in the user's own project as `shipcube-builder@`, which already isolates tenants. Reference provisioning: [`infra/scripts/provision-workspace-builder.sh`](../../infra/scripts/provision-workspace-builder.sh); live test: [`infra/tests/build-isolation.sh`](../../infra/tests/build-isolation.sh).
 - **No privileged features:** no GPUs (free-trial accounts can't attach them anyway [S14]), no VPC, no Cloud SQL attachments on user apps unless the owner explicitly connects their own database.
 
 ## 5. Secrets
@@ -191,7 +199,7 @@ Credit pool math: Cloud Run's free tier is 180,000 vCPU-seconds and 360,000 GiB-
 
 | Limit | Today | Trigger | Plan |
 |---|---|---|---|
-| Service accounts per project | 100 (free trial can't raise) | 80 used in `shipcube-control` or `shipcube-apps` | Paid account + quota increase; then shared deployer + label challenge (§3), per-workspace app accounts (§4) |
+| Service accounts per project | 100 (free trial can't raise); per-workspace build SAs and per-app runtime SAs share it in `shipcube-apps` | 80 used in `shipcube-control` or `shipcube-apps` | Paid account + quota increase; then shared deployer + label challenge (§3), per-workspace app accounts (§4) |
 | No ShipCube organization | Domain-restricted orgs can't link | First customer on a Workspace domain with the default org policy | Create Cloud Identity org, move projects, publish customer ID (§3) |
 | Two shared projects | Hosted apps share `shipcube-apps` | First customer requiring a dedicated boundary, or an org + paid account | Linked project now; project-per-tenant later (§4) |
 | Free-trial credits | ₹24,000 hard cap, invite-only signup | Trial ends Jan 25, 2027, or 80% of credit used | Upgrade to paid with budgets per project; open signup with payment check (§6) |
@@ -228,3 +236,4 @@ Credit pool math: Cloud Run's free tier is 180,000 vCPU-seconds and 360,000 GiB-
 - [S17] Cloud Run execution environments: https://docs.cloud.google.com/run/docs/about-execution-environments
 - [S18] Secret Manager pricing and rotation: https://cloud.google.com/secret-manager/pricing, https://docs.cloud.google.com/secret-manager/docs/secret-rotation
 - [S19] Early anomalies and spend caps on Google Cloud budgets: https://cloud.google.com/blog/topics/cost-management/new-early-anomalies-and-spend-caps-on-google-cloud-budgets
+- [S20] Resource attributes for IAM Conditions (supported resource names; Cloud Storage managed folders are listed, Artifact Registry is not): https://cloud.google.com/iam/docs/conditions-resource-attributes

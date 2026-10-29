@@ -20,6 +20,7 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from . import db
 from .settings import settings
@@ -68,12 +69,21 @@ def mint_pat(user_id: str, workspace_id: str, scopes: list[str], name: str = "mc
     m = TOKEN_RE.match(token)
     if not m or m[1] != "pat":
         raise ValueError("token must look like sc_pat_<8 alphanumerics>_<32+ url-safe chars>")
-    with db.worker_tx() as conn:  # operator tooling (admin CLI); the console will mint through its own session
-        conn.execute(
-            "insert into api_tokens (id, workspace_id, user_id, kind, name, prefix, token_hmac, scopes, expires_at)"
-            " values (%s, %s, %s, 'pat', %s, %s, %s, %s, now() + make_interval(days => %s))",
-            (uuid.uuid4(), workspace_id, user_id, name, f"sc_pat_{m[2]}", digest(m[3]), list(scopes), ttl_days))
+    with db.worker_tx() as conn:  # operator tooling (admin CLI); the console mints through mint_pat_in
+        insert_pat(conn, token, user_id, workspace_id, scopes, name, ttl_days)
     return token
+
+
+def insert_pat(conn, token: str, user_id: str, workspace_id: str, scopes: list[str], name: str,
+               ttl_days: int) -> dict:
+    """Store a PAT (HMAC only) on the given connection and return its row (without the secret)."""
+    m = TOKEN_RE.match(token)
+    assert m and m[1] == "pat"
+    return conn.execute(
+        "insert into api_tokens (id, workspace_id, user_id, kind, name, prefix, token_hmac, scopes, expires_at)"
+        " values (%s, %s, %s, 'pat', %s, %s, %s, %s, now() + make_interval(days => %s))"
+        " returning id, name, prefix, scopes, created_at, expires_at, last_used_at",
+        (uuid.uuid4(), workspace_id, user_id, name, f"sc_pat_{m[2]}", digest(m[3]), list(scopes), ttl_days)).fetchone()
 
 
 def _membership(conn, user_id: str, workspace_id: str | None) -> dict | None:
@@ -121,6 +131,25 @@ def register_dev_session(token: str, user_id: str, workspace_id: str) -> None:
     _dev_sessions[token] = (user_id, workspace_id)
 
 
+# The console sends its Identity Platform *session cookie* (apps/web identity-platform.ts
+# apiCredential). Session cookies are signed with a different key set and carry a different issuer
+# than ID tokens, so both are accepted here; each is checked against its own keys and issuer.
+SESSION_COOKIE_CERTS = "https://www.googleapis.com/identitytoolkit/v3/relyingparty/publicKeys"
+
+
+def _verify_console_jwt(token: str, project: str, id_token: Any, request: Any) -> dict[str, Any]:
+    try:
+        return id_token.verify_firebase_token(token, request, audience=project)
+    except ValueError as id_err:
+        try:
+            claims = id_token.verify_token(token, request, audience=project, certs_url=SESSION_COOKIE_CERTS)
+        except ValueError:
+            raise id_err from None
+        if claims.get("iss") != f"https://session.firebase.google.com/{project}":
+            raise ValueError(f"unexpected session cookie issuer {claims.get('iss')!r}") from None
+        return claims
+
+
 def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
     user_id = None
     workspace_id = workspace_hint
@@ -131,7 +160,7 @@ def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
         from google.oauth2 import id_token
 
         try:
-            claims = id_token.verify_firebase_token(token, Request(), audience=settings.idp_project)
+            claims = _verify_console_jwt(token, settings.idp_project, id_token, Request())
         except ValueError as e:
             log.info("console token rejected", extra={"reason": str(e)[:200]})
             return None
