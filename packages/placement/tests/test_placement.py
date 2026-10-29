@@ -324,3 +324,25 @@ def test_production_without_profiler_config_fails_loudly(monkeypatch):
             monkeypatch.delenv(k)
     with pytest.raises(ProfilerError):
         estimate(inline(SAMPLES / "nightly_batch"), {}, explainer=RuleExplainer())
+
+
+def _docker_up() -> bool:
+    import shutil
+    import subprocess
+    return bool(shutil.which("docker")) and subprocess.run(["docker", "version"], capture_output=True,
+                                                            timeout=20).returncode == 0
+
+
+@pytest.mark.skipif(not _docker_up(), reason="needs a Docker daemon")
+def test_estimate_through_the_local_docker_sandbox(monkeypatch):
+    """SHIPCUBE_PROFILER=local: estimate() picks the Docker sandbox by itself (no runner
+    passed), measures in the container, and feeds the same classifier and explainer."""
+    monkeypatch.setenv("SHIPCUBE_PROFILER", "local")
+    monkeypatch.delenv("SHIPCUBE_DEV_MODE")
+    monkeypatch.delenv("META_API_KEY", raising=False)
+    r = estimate(inline(SAMPLES / "nightly_batch"), {"schedule": "0 2 * * *"}, explainer=FallbackExplainer())
+    m = r.profile["measurements"]
+    assert m["runner"] == "docker" and m["mode"] == "measured" and m["exit_code"] == 0
+    assert m["net_blocked"] >= 1
+    assert r.workload_class == "batch_cron" and r.tier == "T2"
+    assert r.explained_by == "rules" and r.profile["explainer_fallback_reason"].startswith("not_configured")
