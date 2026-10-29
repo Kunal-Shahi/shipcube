@@ -5,6 +5,7 @@
 #
 #   SA      sc-build-<ws_short>@<apps project>.iam.gserviceaccount.com
 #   uploads gs://<uploads bucket>/ws/<ws_uuid>/      (managed folder, objectViewer)
+#   logs    gs://<uploads bucket>/ws/<ws_uuid>/build-logs/   (managed folder, objectUser)
 #   images  <region>-docker.pkg.dev/<apps project>/ws-<ws_short>/   (repo, artifactregistry.writer)
 #
 # ws_uuid is the canonical workspace uuid; ws_short is its first 20 hex digits. Those
@@ -76,10 +77,7 @@ resource "google_storage_bucket_iam_member" "provisioner_folders" {
   member = google_service_account.provisioner.member
 }
 
-# Cloud Build with a user-specified SA needs logging.logWriter. One static binding for every
-# SA in the apps project, so provisioning never has to edit the project's IAM policy.
-resource "google_project_iam_member" "all_sas_log_writer" {
-  project = var.apps_project_id
-  role    = "roles/logging.logWriter"
-  member  = "principalSet://cloudresourcemanager.googleapis.com/projects/${var.apps_project_number}/type/ServiceAccount"
-}
+# No logging.logWriter for builders (red-team #28: granting it to every SA in the apps project
+# let tenant apps forge other tenants' log entries). Hosted builds use GCS_ONLY logging into
+# gs://<uploads bucket>/ws/<ws_uuid>/build-logs/, a managed folder only that workspace's builder
+# can write (objectUser), created with the upload folder by the provisioner.

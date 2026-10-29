@@ -221,12 +221,15 @@ class GcpDeployer:
             self._wait_op(sess, AR, op)
         self._grant(sess, f"{repo_url}:getIamPolicy", f"{repo_url}:setIamPolicy", "roles/artifactregistry.writer", member,
                     get="GET")
-        # c. its upload folder (a managed folder), readable by the builder only
-        self._call(sess, "POST", f"{GCS}/b/{bucket}/managedFolders", ok=(200, 409), json={"name": folder})
-        folder_iam = f"{GCS}/b/{bucket}/managedFolders/{requests.utils.quote(folder, safe='')}/iam"
-        policy = self._retry_new(lambda: self._call(sess, "GET", folder_iam))
-        if _add_binding(policy, "roles/storage.objectViewer", member):
-            self._call(sess, "PUT", folder_iam, json=policy)
+        # c. its upload folder (a managed folder), readable by the builder only, and inside it the
+        #    folder its build logs go to, which only the builder can write (no logWriter: #28)
+        for name, role in ((folder, "roles/storage.objectViewer"),
+                           (isolation.build_logs_folder(self.s, workspace_id), "roles/storage.objectUser")):
+            self._call(sess, "POST", f"{GCS}/b/{bucket}/managedFolders", ok=(200, 409), json={"name": name})
+            folder_iam = f"{GCS}/b/{bucket}/managedFolders/{requests.utils.quote(name, safe='')}/iam"
+            policy = self._retry_new(lambda u=folder_iam: self._call(sess, "GET", u))
+            if _add_binding(policy, role, member):
+                self._call(sess, "PUT", folder_iam, json=policy)
         # d. who may use the builder: the worker mints its tokens, the hosted deployer submits builds as it
         sa_url = f"{IAM}/projects/{project}/serviceAccounts/{sa}"
         policy = self._retry_new(lambda: self._call(sess, "POST", f"{sa_url}:getIamPolicy", json={}))
@@ -282,8 +285,13 @@ class GcpDeployer:
         if app.target.kind == "shipcube":
             self.ensure_builder(app.workspace_id)
             builder_sa = isolation.builder_sa(self.s, app.workspace_id)
+            # Hosted builders hold no logging.logWriter (#28): logs go to the workspace's own folder.
+            logging_opts = {"options": {"logging": "GCS_ONLY"},
+                            "logsBucket": f"gs://{self.s.upload_bucket}/{isolation.build_logs_folder(self.s, app.workspace_id).rstrip('/')}"}
         elif app.target.builder_sa:
             builder_sa = app.target.builder_sa
+            # Linked projects: link-project.sh grants the builder logWriter in the user's own project.
+            logging_opts = {"options": {"logging": "CLOUD_LOGGING_ONLY"}}
         else:
             raise DeployError("invalid_argument", f"linked target {app.target.id} has no builder service account")
         if "storageSource" in staged:
@@ -296,7 +304,7 @@ class GcpDeployer:
                 "args": ["build", image, "--builder", self.s.builder_image, "--network", "cloudbuild", "--publish"],
             }],
             "serviceAccount": f"projects/{project}/serviceAccounts/{builder_sa}",
-            "options": {"logging": "CLOUD_LOGGING_ONLY"},
+            **logging_opts,
             "timeout": "900s",
             "tags": ["shipcube", app.service],
         }

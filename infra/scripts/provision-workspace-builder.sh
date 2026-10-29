@@ -33,6 +33,7 @@ SA_ID="sc-build-${WS_SHORT}"
 SA="${SA_ID}@${APPS_PROJECT}.iam.gserviceaccount.com"
 REPO="ws-${WS_SHORT}"
 FOLDER="gs://${UPLOADS_BUCKET}/ws/${WS_UUID}/"
+LOGS="${FOLDER}build-logs/"   # hosted build logs (GCS_ONLY); the builder never gets logging.logWriter
 WORKER="serviceAccount:sc-worker@${CONTROL_PROJECT}.iam.gserviceaccount.com"
 DEPLOYER="serviceAccount:sc-hosted-deployer@${CONTROL_PROJECT}.iam.gserviceaccount.com"
 
@@ -56,6 +57,7 @@ if [[ "$ACTION" == --delete ]]; then
   "${G[@]}" artifacts repositories delete "$REPO" --project "$APPS_PROJECT" --location "$REGION" 2>/dev/null ||
     echo "  repo ${REPO}: absent"
   # Objects under the folder expire with the bucket's 1-day lifecycle rule.
+  "${G[@]}" storage managed-folders delete "$LOGS" 2>/dev/null || echo "  folder ${LOGS}: absent or not yet empty"
   "${G[@]}" storage managed-folders delete "$FOLDER" 2>/dev/null ||
     echo "  folder ${FOLDER}: absent or not yet empty"
   "${G[@]}" iam service-accounts delete "$SA" --project "$APPS_PROJECT" 2>/dev/null ||
@@ -87,11 +89,15 @@ EOF
 
 "${G[@]}" storage managed-folders describe "$FOLDER" >/dev/null 2>&1 ||
   "${G[@]}" storage managed-folders create "$FOLDER"
+"${G[@]}" storage managed-folders describe "$LOGS" >/dev/null 2>&1 ||
+  "${G[@]}" storage managed-folders create "$LOGS"
 
 retry "${G[@]}" artifacts repositories add-iam-policy-binding "$REPO" --project "$APPS_PROJECT" \
   --location "$REGION" --member "serviceAccount:${SA}" --role roles/artifactregistry.writer
 retry "${G[@]}" storage managed-folders add-iam-policy-binding "$FOLDER" \
   --member "serviceAccount:${SA}" --role roles/storage.objectViewer
+retry "${G[@]}" storage managed-folders add-iam-policy-binding "$LOGS" \
+  --member "serviceAccount:${SA}" --role roles/storage.objectUser
 
 # Only the worker may mint tokens for the build SA. The worker and the hosted deployer (whichever
 # submits the build) may run builds as it. Never sc-api.

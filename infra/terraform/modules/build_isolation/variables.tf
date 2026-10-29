@@ -7,10 +7,6 @@ variable "apps_project_id" {
   type        = string
 }
 
-variable "apps_project_number" {
-  type = string
-}
-
 variable "uploads_bucket" {
   description = "Source uploads bucket; per-workspace managed folders live under ws/."
   type        = string
