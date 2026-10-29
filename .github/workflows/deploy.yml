@@ -31,3 +31,7 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
       - name: Deploy
         run: deploy/deploy.sh ${{ inputs.build && '' || '--no-build' }}
+        env:
+          DATA_WORKSPACE: ${{ vars.SHIPCUBE_DATA_WORKSPACE }}
+          # `terraform output -json profiler`; not secret, stored as a repository variable.
+          PROFILER_ENV_JSON: ${{ vars.SHIPCUBE_PROFILER_ENV_JSON }}

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { CodeBlock } from "@/components/copy-button";
 import { TokenCreator } from "@/components/token-creator";
 import { cn } from "@/lib/cn";
-import { MCP_URL, TOKEN_ENV, snippets } from "@/lib/mcp";
+import { TOKEN_ENV, snippets } from "@/lib/mcp";
 
 const CLIENTS = [
   { id: "claude", label: "Claude Code" },
@@ -35,10 +35,10 @@ function Step({ n, title, children, done }: { n: number; title: string; children
   );
 }
 
-export function ConnectSteps({ canCreateTokens }: { canCreateTokens: boolean }) {
+export function ConnectSteps({ canCreateTokens, mcpUrl }: { canCreateTokens: boolean; mcpUrl: string }) {
   const [token, setToken] = useState<string | null>(null);
   const [client, setClient] = useState<ClientId>("claude");
-  const s = snippets();
+  const s = snippets(undefined, mcpUrl);
 
   return (
     <ol className="flex flex-col">
@@ -62,7 +62,7 @@ export function ConnectSteps({ canCreateTokens }: { canCreateTokens: boolean }) 
           Add this to <code className="font-mono text-[12px]">~/.zshrc</code> or your secrets manager. The snippets below
           read <code className="font-mono text-[12px]">${TOKEN_ENV}</code>, so the token never lands in a config file you might commit.
         </p>
-        <CodeBlock label="Shell" code={snippets(token ?? undefined).env} />
+        <CodeBlock label="Shell" code={snippets(token ?? undefined, mcpUrl).env} />
       </Step>
 
       <Step n={3} title="Add ShipCube to your agent">
@@ -121,7 +121,7 @@ export function ConnectSteps({ canCreateTokens }: { canCreateTokens: boolean }) 
           {client === "other" && (
             <>
               <p className="max-w-[72ch] text-fg-muted">
-                ShipCube speaks MCP over Streamable HTTP at <code className="font-mono text-[12px]">{MCP_URL}</code> with a
+                ShipCube speaks MCP over Streamable HTTP at <code className="font-mono text-[12px]">{mcpUrl}</code> with a
                 bearer token. For Muse Code and any client that accepts a remote server, add:
               </p>
               <CodeBlock label="MCP config (JSON)" code={s.generic} />

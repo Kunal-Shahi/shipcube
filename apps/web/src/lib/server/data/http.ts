@@ -7,6 +7,7 @@ import "server-only";
 import { ApiError, NotConnectedError } from "@/lib/errors";
 import type {
   AccessGrant,
+  ApiToken,
   AppDetail,
   AppSummary,
   Approval,
@@ -229,7 +230,27 @@ async function optional<T>(what: string, p: Promise<T>): Promise<T | undefined> 
 }
 
 const notConnected = (f: Feature) => new NotConnectedError(FEATURE_ENDPOINT[f].name, FEATURE_ENDPOINT[f].endpoint);
-const AVAILABLE = new Set<Feature>([]);
+const AVAILABLE = new Set<Feature>(["tokens"]);
+
+interface ApiTokenRow {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+}
+
+const tokenFromApi = (t: ApiTokenRow): ApiToken => ({
+  id: t.id,
+  name: t.name,
+  prefix: t.prefix,
+  scopes: t.scopes,
+  createdAt: t.created_at,
+  expiresAt: t.expires_at,
+  lastUsedAt: t.last_used_at,
+});
 const enc = encodeURIComponent;
 
 export const httpData: ConsoleData = {
@@ -321,13 +342,16 @@ export const httpData: ConsoleData = {
   },
 
   async listTokens() {
-    throw notConnected("tokens");
+    const { tokens } = await api<{ tokens: ApiTokenRow[] }>("/v1/tokens");
+    return tokens.map(tokenFromApi);
   },
-  async createToken() {
-    throw notConnected("tokens");
+  async createToken(input) {
+    // Not retried: a repeated POST would mint a second token. The secret is returned once.
+    const r = await api<{ token: ApiTokenRow; secret: string }>("/v1/tokens", { method: "POST", body: input });
+    return { token: tokenFromApi(r.token), secret: r.secret };
   },
-  async revokeToken() {
-    throw notConnected("tokens");
+  async revokeToken(id) {
+    await api<void>(`/v1/tokens/${enc(id)}`, { method: "DELETE" });
   },
   async listProviders() {
     throw notConnected("providers");

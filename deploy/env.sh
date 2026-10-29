@@ -1,16 +1,26 @@
 # shellcheck shell=bash disable=SC2034  # sourced by the other scripts, which use these variables
 # Shared settings for deploy/*.sh. Override any of them in the environment.
 : "${PROJECT:=shipcube-control-ks}"
+: "${APPS_PROJECT:=shipcube-apps-ks}"
 : "${REGION:=asia-south1}"
 : "${REPO:=platform}"                     # Artifact Registry repo (infra/terraform/registry.tf)
-: "${TAG:=$(git rev-parse --short HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
+: "${TAG:=$(git rev-parse --short=12 HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"
+: "${META_KEY_VERSION:=1}"               # pinned Secret Manager versions
+: "${PEPPER_VERSION:=1}"
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 IMAGES="$REGION-docker.pkg.dev/$PROJECT/$REPO"
+SQL_INSTANCE="$PROJECT:$REGION:shipcube-pg"
+BUILD_BUCKET="$PROJECT-platform-builds"
 # Cloud Run URLs are deterministic: https://<service>-<project number>.<region>.run.app
 run_url() { echo "https://$1-$PROJECT_NUMBER.$REGION.run.app"; }
-# Service accounts, named as in infra/terraform/iam.tf so Terraform can import them later.
+CONSOLE_URL="$(run_url shipcube-console)"
+MCP_URL="$(run_url shipcube-mcp)"
+GATEWAY_URL="$(run_url shipcube-gateway)"
+WORKER_URL="$(run_url shipcube-worker)"
+# Service accounts from infra/terraform (iam.tf, platform.tf).
 SA_API="sc-api@$PROJECT.iam.gserviceaccount.com"
+SA_WORKER="sc-worker@$PROJECT.iam.gserviceaccount.com"
 SA_GATEWAY="sc-gateway@$PROJECT.iam.gserviceaccount.com"
 SA_WEB="sc-web@$PROJECT.iam.gserviceaccount.com"
 SA_BUILD="sc-platform-build@$PROJECT.iam.gserviceaccount.com"
-SA_MIGRATOR="sc-migrator@$PROJECT.iam.gserviceaccount.com"
+SA_HOSTED_DEPLOYER="sc-hosted-deployer@$PROJECT.iam.gserviceaccount.com"

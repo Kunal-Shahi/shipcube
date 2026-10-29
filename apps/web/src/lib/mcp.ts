@@ -2,6 +2,8 @@
 // (docs/WORKSTREAMS.md, "Decided") and docs/research/networking.md from the networking
 // workstream. Change them here if those documents change.
 
+// The hosted endpoint comes from SHIPCUBE_MCP_URL at request time (read in the setup page, a server
+// component), so one console image works in every environment. This is only the fallback.
 export const MCP_URL = "https://mcp.shipcube.dev/mcp";
 export const TOKEN_ENV = "SHIPCUBE_TOKEN";
 
@@ -35,24 +37,24 @@ export const TOOLS: { name: string; group: ToolGroup; purpose: string; prompt: s
   { name: "data_propose_migration", group: "Data", purpose: "Proposes a change to the data model. Muse Spark can draft it. A person reviews the diff and applies it here; agents can't apply.", prompt: "Add a late-delivery rate measure" },
 ];
 
-export function snippets(token?: string) {
+export function snippets(token?: string, mcpUrl: string = MCP_URL) {
   const header = `Authorization: Bearer ${token ?? "$" + TOKEN_ENV}`;
   return {
     env: `export ${TOKEN_ENV}=${token ?? "sc_pat_…"}`,
-    claudeCode: `claude mcp add --transport http shipcube ${MCP_URL} \\\n  --scope user \\\n  --header "${header}"`,
+    claudeCode: `claude mcp add --transport http shipcube ${mcpUrl} \\\n  --scope user \\\n  --header "${header}"`,
     claudeProject: JSON.stringify(
-      { mcpServers: { shipcube: { type: "http", url: MCP_URL, headers: { Authorization: "Bearer ${" + TOKEN_ENV + "}" } } } },
+      { mcpServers: { shipcube: { type: "http", url: mcpUrl, headers: { Authorization: "Bearer ${" + TOKEN_ENV + "}" } } } },
       null,
       2,
     ),
     claudeVerify: "claude mcp list",
     cursor: JSON.stringify(
-      { mcpServers: { shipcube: { url: MCP_URL, headers: { Authorization: "Bearer ${env:" + TOKEN_ENV + "}" } } } },
+      { mcpServers: { shipcube: { url: mcpUrl, headers: { Authorization: "Bearer ${env:" + TOKEN_ENV + "}" } } } },
       null,
       2,
     ),
     generic: JSON.stringify(
-      { mcpServers: { shipcube: { type: "http", url: MCP_URL, headers: { Authorization: "Bearer <your token>" } } } },
+      { mcpServers: { shipcube: { type: "http", url: mcpUrl, headers: { Authorization: "Bearer <your token>" } } } },
       null,
       2,
     ),
@@ -61,7 +63,7 @@ export function snippets(token?: string) {
         mcpServers: {
           shipcube: {
             command: "npx",
-            args: ["-y", "mcp-remote", MCP_URL, "--header", "Authorization:${AUTH_HEADER}"],
+            args: ["-y", "mcp-remote", mcpUrl, "--header", "Authorization:${AUTH_HEADER}"],
             env: { AUTH_HEADER: "Bearer <your token>" },
           },
         },

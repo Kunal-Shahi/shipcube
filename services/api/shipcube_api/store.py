@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -239,6 +240,15 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
 def get_app(caller: Caller, slug: str, include_deleted: bool = False) -> dict[str, Any]:
     with db.tx(caller) as conn:
         return _app_view(conn, _app_row(conn, caller.workspace_id, slug, include_deleted))
+
+
+def get_app_for_telemetry(caller: Caller, slug: str) -> dict[str, Any]:
+    """The app view plus where it runs (project, Cloud Run service, id), for the monitoring provider."""
+    with db.tx(caller) as conn:
+        row = _app_row(conn, caller.workspace_id, slug)
+        ref = app_ref(conn, row)
+        return {**_app_view(conn, row), "gcp_project": ref.target.project,
+                "service_name": row["service_name"] or ref.service, "app_id": str(row["id"])}
 
 
 def app_ref_for(caller: Caller, slug: str, include_deleted: bool = True) -> tuple[AppRef, dict[str, Any]]:
@@ -562,3 +572,41 @@ def live_status(deployer: Deployer, caller: Caller, slug: str) -> dict[str, Any]
     if row["status"] in ("draft",) and not row["url"]:
         return None
     return deployer.status(ref)
+
+
+# --- API tokens (console only; row-level security limits them to the caller's own) ---------------
+
+
+def _token_view(r: dict[str, Any]) -> dict[str, Any]:
+    return {"id": str(r["id"]), "name": r["name"], "prefix": r["prefix"], "scopes": list(r["scopes"]),
+            "created_at": _iso(r["created_at"]), "expires_at": _iso(r["expires_at"]),
+            "last_used_at": _iso(r["last_used_at"])}
+
+
+def list_tokens(caller: Caller) -> list[dict[str, Any]]:
+    with db.tx(caller) as conn:
+        rows = conn.execute("select id, name, prefix, scopes, created_at, expires_at, last_used_at from api_tokens"
+                            " where user_id = %s and kind = 'pat' and revoked_at is null and expires_at > now()"
+                            " order by created_at desc", (caller.user_id,)).fetchall()
+    return [_token_view(r) for r in rows]
+
+
+def create_token(caller: Caller, name: str, scopes: list[str], days: int) -> tuple[dict[str, Any], str]:
+    from . import auth
+
+    if unknown := set(scopes) - set(auth.SCOPES):
+        raise ValueError(f"unknown scopes: {', '.join(sorted(unknown))}")
+    if "data:raw" in scopes and caller.role not in ("owner", "admin"):
+        raise PermissionError("data:raw needs the admin role")
+    secret = f"sc_pat_{secrets.token_hex(4)}_{secrets.token_urlsafe(32)}"
+    with db.tx(caller) as conn:
+        row = auth.insert_pat(conn, secret, caller.user_id, caller.workspace_id, sorted(set(scopes)), name, days)
+    return _token_view(row), secret
+
+
+def revoke_token(caller: Caller, token_id: str) -> bool:
+    with db.tx(caller) as conn:
+        r = conn.execute("update api_tokens set revoked_at = now() where id = %s and revoked_at is null"
+                         " and (user_id = %s or %s) returning id",
+                         (token_id, caller.user_id, caller.role in ("owner", "admin"))).fetchone()
+    return r is not None
