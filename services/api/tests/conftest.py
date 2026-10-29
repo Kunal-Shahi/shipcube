@@ -45,6 +45,9 @@ if not _url:
         raise RuntimeError("tests need Postgres: set SHIPCUBE_TEST_DATABASE_URL or install postgresql (initdb on PATH)")
     _url, _stop = _start_local_cluster()
 os.environ["SHIPCUBE_DATABASE_URL"] = _url
+# shipcube-data's catalog (one schema per workspace) lives in the same test database; /v1/data/* is mounted
+# when the package is installed (tests/test_data_routes.py), and skipped otherwise.
+os.environ.setdefault("SHIPCUBE_DATA_CATALOG_URL", _url)
 
 
 def pytest_sessionfinish(session, exitstatus):

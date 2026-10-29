@@ -1,0 +1,208 @@
+# ShipCube local stack. Run it with `make up` (repo root), which also creates local secrets, migrates
+# and seeds; see docs/LOCAL.md. Every component is the real implementation; the switches in .env choose
+# local or GCP. Compose runs with `--env-file .local/secrets.env --env-file deploy/local/.env`.
+name: shipcube-local
+
+# Security (PR #31): db (Postgres 16 with the Cloud SQL IAM logins, bootstrap.sql and owner_defaults.sql
+# unchanged), db-init, migrate (the API's runner as sc-migrator) and secretmanager (Secret Manager
+# emulator over .local/secrets.json).
+include:
+  - ../../infra/local/compose.yaml
+
+x-control-plane: &control-plane
+  build: {context: ../.., dockerfile: deploy/local/api.Dockerfile}
+  image: shipcube-local/api:dev
+  networks: [default, shipcube]
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock   # local deployer, profiler sandbox, local monitor
+    - local-state:/state                           # local deployer state (shared with local-iap)
+  env_file:
+    - path: .env
+      required: false
+    - path: .state/seed.env                       # written by `make seed`
+      required: false
+  depends_on:
+    migrate: {condition: service_completed_successfully}
+
+x-switches: &switches
+  SHIPCUBE_DEV_MODE: "1"                  # dev console sign-in only; components below are real
+  SHIPCUBE_DB_SET_ROLE: "0"               # each login starts in its role, as on Cloud SQL
+  SHIPCUBE_EMBEDDED_WORKER: "0"           # the worker runs separately, as shipcube_worker
+  SHIPCUBE_TOKEN_PEPPER: ${SHIPCUBE_TOKEN_PEPPER:?run python3 infra/local/localsecrets.py init}
+  # Deployer and uploads (networking, PR #33): apps as containers on network `shipcube`, behind local-iap.
+  SHIPCUBE_BACKEND: ${SHIPCUBE_BACKEND:-local}
+  SHIPCUBE_LOCAL_GCS_URL: http://fake-gcs:4443
+  SHIPCUBE_LOCAL_GCS_PUBLIC_URL: http://localhost:${SHIPCUBE_GCS_PORT:-4443}
+  SHIPCUBE_LOCAL_STATE: /state
+  SHIPCUBE_LOCAL_NETWORK: shipcube
+  SHIPCUBE_LOCAL_IAP_PORT: ${SHIPCUBE_IAP_PORT:-8088}
+  SHIPCUBE_LOCAL_UPSTREAM: network        # readiness and the IAP reach apps at http://<revision>:8080
+  # Buildpacks builder. Production's gcr.io/buildpacks/builder is amd64-only; on arm64 hosts
+  # (Apple Silicon) `make up` picks heroku/builder:24, which is multi-arch. CI (amd64) uses production's.
+  SHIPCUBE_BUILDER: ${SHIPCUBE_BUILDER:-gcr.io/buildpacks/builder:latest}
+  # Monitoring (platform): Docker stats + container logs.
+  SHIPCUBE_MONITOR: ${SHIPCUBE_MONITOR:-local}
+  # Load estimator + profiler sandbox (load-estimator, PR #30): docker run --network none.
+  SHIPCUBE_ESTIMATOR: ${SHIPCUBE_ESTIMATOR:-placement}
+  SHIPCUBE_PROFILER: ${SHIPCUBE_PROFILER:-local}
+  SHIPCUBE_MODEL_URI: bundled
+  DOCKER_HOST: unix:///var/run/docker.sock
+  # Apps reach the AI gateway on the `shipcube` network; agents are told the host-facing URL (ai_config).
+  SHIPCUBE_AI_GATEWAY_URL: http://gateway:8080
+  SHIPCUBE_GATEWAY_URL: http://localhost:${SHIPCUBE_GATEWAY_PORT:-18090}
+  META_API_KEY: ${META_API_KEY:-}
+  META_BASE_URL: ${META_BASE_URL:-https://api.meta.ai/v1}
+  # Data layer (shipcube-data PR #7): the catalog is schema `catalog` in this stack's ShipCube database,
+  # under FORCE RLS (security's design); the API and MCP reach it only through db.tx(caller) as shipcube_app.
+  # SHIPCUBE_DATA_CATALOG_URL is for the `data-seed` tool only (it writes the seeded workspace's rows).
+  SHIPCUBE_DATA_CATALOG_LAYOUT: shared
+  SHIPCUBE_DATA_WAREHOUSE: ${SHIPCUBE_DATA_WAREHOUSE:-duckdb}
+  SHIPCUBE_DATA_DUCKDB_PATH: /data/olist.duckdb
+  SHIPCUBE_DATA_WAREHOUSE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/warehouse?sslmode=disable
+  SHIPCUBE_DATA_ALLOWED_DB_HOSTS: db
+  SHIPCUBE_DATA_DEMO_TENANTS: shipcube.local=acme,example.com=acme,globex.test=globex   # seeded user's domain -> demo tenant
+  SHIPCUBE_DATA_QUERY_TIMEOUT_S: "30"
+  SHIPCUBE_DATA_MAX_ROWS: "10000"
+
+services:
+  # One-off: the operator CLI as sc-worker (shipcube_worker), e.g. bootstrap for `make seed`.
+  admin:
+    <<: *control-plane
+    profiles: [tools]
+    environment:
+      <<: *switches
+      SHIPCUBE_DATABASE_URL: ${SHIPCUBE_WORKER_DATABASE_URL:?}
+    entrypoint: ["python", "-m", "shipcube_api.admin"]
+
+  # One-off: shipcube-data's catalog + demo warehouse for the seeded workspace (idempotent).
+  data-seed:
+    <<: *control-plane
+    profiles: [tools]
+    environment:
+      <<: *switches
+      SHIPCUBE_DATA_CATALOG_URL: postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/shipcube
+    volumes: ["shipcube-data:/data"]
+    command: ["shipcube-data", "seed"]
+
+  api:
+    <<: *control-plane
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - local-state:/state
+      - shipcube-data:/data:ro
+      - ../../.local:/local                         # BYOK keys -> secrets.json, served by `secretmanager`
+    environment:
+      <<: *switches
+      SHIPCUBE_DATABASE_URL: ${SHIPCUBE_API_DATABASE_URL:?}
+      SHIPCUBE_LOCAL_SECRETS_FILE: /local/secrets.json   # DEV_MODE: where PUT /v1/ai/providers writes keys (PR #35)
+      ALLOWED_HOSTS: localhost:*,127.0.0.1:*,api:*
+      SHIPCUBE_CONSOLE_URL: http://localhost:3000
+    ports: ["127.0.0.1:${SHIPCUBE_API_PORT:-18080}:8080"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  worker:
+    <<: *control-plane
+    environment:
+      <<: *switches
+      SHIPCUBE_DATABASE_URL: ${SHIPCUBE_WORKER_DATABASE_URL:?}
+    command: ["python", "-m", "shipcube_api.worker"]
+
+  # Uploads: GCS's JSON/XML API, so create_upload's signed PUT and the worker's reads are unchanged code paths.
+  fake-gcs:
+    image: fsouza/fake-gcs-server:1.55.1
+    command: ["-scheme", "http", "-port", "4443", "-public-host", "localhost:${SHIPCUBE_GCS_PORT:-4443}"]
+    ports: ["127.0.0.1:${SHIPCUBE_GCS_PORT:-4443}:4443"]
+    networks: [default]
+
+  # IAP for local apps: http://<service>.localhost:<port>, only principals on the app's access list.
+  local-iap:
+    image: shipcube-local/api:dev
+    networks: [default, shipcube]
+    command: ["python", "-m", "shipcube_api.local_iap"]
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8088"
+      SHIPCUBE_LOCAL_UPSTREAM: network
+      SHIPCUBE_LOCAL_IAP_API_URL: http://api:8080
+      SHIPCUBE_LOCAL_STATE: /state
+    volumes: ["local-state:/state:ro"]
+    ports: ["127.0.0.1:${SHIPCUBE_IAP_PORT:-8088}:8088"]
+    depends_on:
+      api: {condition: service_healthy}
+
+  gateway:
+    build: {context: ../../services/gateway}
+    image: shipcube-local/gateway:dev
+    networks: [default, shipcube]
+    environment:
+      DEV_MODE: "1"                       # allows the emulator endpoint and private upstreams (Ollama)
+      GATEWAY_ALLOW_APP_TOKENS: "1"       # local apps have no Google ID token; per-app scg_ tokens
+      GATEWAY_ALLOW_PRIVATE_UPSTREAM: "1"
+      GATEWAY_REGISTRY_FILE: /state/gateway-registry.json
+      SECRET_MANAGER_ENDPOINT: http://secretmanager:8085/v1   # security's emulator (DEV_MODE only)
+      META_SECRET_REF: ${META_API_KEY:+projects/local/secrets/meta-api-key/versions/latest}
+      META_BASE_URL: ${META_BASE_URL:-https://api.meta.ai/v1}
+      OLLAMA_API_KEY: ollama              # Ollama ignores it; the gateway needs a key reference
+    volumes: ["./.state:/state:ro"]
+    ports: ["127.0.0.1:${SHIPCUBE_GATEWAY_PORT:-18090}:8080"]
+    depends_on:
+      secretmanager: {condition: service_healthy}
+
+  # Console + Firebase Auth emulator (frontend, PR #34; needs #13's /v1/tokens): `make e2e`.
+  auth-emulator:
+    image: node:22-slim
+    profiles: [console]
+    working_dir: /emu
+    command: ["npx", "-y", "firebase-tools@13", "emulators:start", "--only", "auth", "--project", "demo-shipcube"]
+    volumes: ["./firebase.json:/emu/firebase.json:ro"]
+    ports: ["127.0.0.1:${SHIPCUBE_AUTH_EMULATOR_PORT:-9099}:9099"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9099/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      retries: 40
+
+  console:
+    build: {context: ../.., dockerfile: deploy/web.Dockerfile}
+    image: shipcube-local/console:dev
+    profiles: [console]
+    environment:
+      PORT: "3000"
+      DEV_MODE: "1"
+      AUTH_PROVIDER: ${SHIPCUBE_CONSOLE_AUTH:-firebase-emulator}   # mock = fallback without the emulator
+      FIREBASE_AUTH_EMULATOR_HOST: auth-emulator:9099
+      FIREBASE_AUTH_EMULATOR_PUBLIC_URL: http://localhost:${SHIPCUBE_AUTH_EMULATOR_PORT:-9099}
+      SHIPCUBE_API_URL: http://api:8080
+      SHIPCUBE_API_TIMEOUT_MS: "30000"
+      SHIPCUBE_MCP_URL: http://localhost:${SHIPCUBE_API_PORT:-18080}/mcp
+      SHIPCUBE_DEV_API_SESSION: ${SHIPCUBE_DEV_CONSOLE_TOKEN:-}   # the API can't verify emulator tokens
+    env_file:
+      - path: .state/seed.env
+        required: false
+    ports: ["127.0.0.1:${SHIPCUBE_CONSOLE_PORT:-3000}:3000"]
+    depends_on:
+      api: {condition: service_healthy}
+      auth-emulator: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      retries: 40
+
+  # Optional local model for the gateway's OpenAI-compatible upstream: LOCAL_LLM=ollama in .env.
+  ollama:
+    image: ollama/ollama:0.12.6
+    profiles: [ollama]
+    volumes: [ollama:/root/.ollama]
+    networks: [shipcube]
+
+networks:
+  shipcube:
+    name: shipcube        # literal name: the local deployer attaches app containers to it
+
+volumes:
+  local-state:
+  shipcube-data:
+  ollama:

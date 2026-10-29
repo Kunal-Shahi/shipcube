@@ -7,6 +7,7 @@ MockTelemetry's canned data is used only in DEV_MODE.
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -74,14 +75,15 @@ def telemetry() -> Telemetry:
 
     if _telemetry is not None:
         return _telemetry
-    if settings.backend == "local":
-        from .deploy.local import LocalTelemetry
-        from .store_runtime import deployer
+    if not os.environ.get("SHIPCUBE_MONITOR"):
+        if settings.backend == "local":  # networking's logs-only view of local containers
+            from .deploy.local import LocalTelemetry
+            from .store_runtime import deployer
 
-        return LocalTelemetry(deployer())  # type: ignore[arg-type]
-    if settings.dev_mode:
-        return MockTelemetry()
-    try:  # the platform workstream's Cloud Monitoring / Cloud Logging provider
+            return LocalTelemetry(deployer())  # type: ignore[arg-type]
+        if settings.dev_mode:
+            return MockTelemetry()
+    try:  # the platform workstream's monitoring provider: gcp, or local (Docker stats and logs)
         from shipcube_monitor import provider_from_env
         from shipcube_monitor.api import MonitorTelemetry
     except ImportError:

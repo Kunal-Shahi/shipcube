@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalFromOperation, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, placementOf, providerFromApi, type ApiOperation } from "./http";
+import { approvalFromOperation, camelize, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, placementOf, providerFromApi, type ApiOperation } from "./http";
 
 const op = (over: Partial<ApiOperation>): ApiOperation => ({
   id: "op_1",
@@ -126,6 +126,23 @@ describe("monitoringFromApi", () => {
     expect(m.errorRate).toBe(1.2);
     expect(m.p95Ms).toBe(410);
     expect(m.freshness).toBe("fresh");
+  });
+});
+
+describe("camelize (/v1/data bodies)", () => {
+  it("maps snake_case keys recursively and leaves migration ops untouched", () => {
+    const m = camelize<Record<string, unknown>>({
+      raw_status: "approved",
+      proposed_by: { token_name: "t", user: "u" },
+      impact: { apps_broken: ["a"], breaks: [{ query: "q", app: "a", error: "e" }] },
+      ops: [{ op: "add_measure", name: "orders.unique_customers", impersonate_service_account: "x" }],
+    });
+    expect(m).toEqual({
+      rawStatus: "approved",
+      proposedBy: { tokenName: "t", user: "u" },
+      impact: { appsBroken: ["a"], breaks: [{ query: "q", app: "a", error: "e" }] },
+      ops: [{ op: "add_measure", name: "orders.unique_customers", impersonate_service_account: "x" }],
+    });
   });
 });
 

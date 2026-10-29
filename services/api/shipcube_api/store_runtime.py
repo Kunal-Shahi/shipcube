@@ -24,6 +24,8 @@ def deployer() -> Deployer:
         from .deploy.local import LocalDeployer
 
         return LocalDeployer(settings)
+    if settings.backend != "mock":
+        raise RuntimeError(f"SHIPCUBE_BACKEND must be gcp, local or mock, not {settings.backend!r}")
     if not settings.dev_mode:
         raise RuntimeError("SHIPCUBE_BACKEND=mock is allowed only with SHIPCUBE_DEV_MODE=1")
     from .deploy.mock import MockDeployer

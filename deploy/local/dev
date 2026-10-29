@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# ShipCube local stack: deploy/local/dev <up|down|reset|migrate|seed|smoke|e2e|logs|logs-dump|ps>
+# (the repo-root Makefile wraps these). docs/LOCAL.md explains each component and its switch.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
+cd "$HERE"
+STATE="$HERE/.state"
+SECRETS="$ROOT/.local/secrets.env"   # security's local secrets (infra/local/localsecrets.py)
+dc() { docker compose -f "$HERE/compose.yaml" --env-file "$SECRETS" --env-file "$HERE/.env" "$@"; }
+
+need() { command -v "$1" >/dev/null || { echo "missing $1 (see docs/LOCAL.md: Prerequisites)" >&2; exit 1; }; }
+need docker
+docker info >/dev/null 2>&1 || { echo "Docker isn't running (on macOS: colima start)" >&2; exit 1; }
+[ -f .env ] || cp .env.local.example .env
+python3 "$ROOT/infra/local/localsecrets.py" init >/dev/null   # idempotent: creates only missing values
+# .env (from .env.local.example) has port overrides and switches; secrets.env has META_API_KEY.
+set -a
+# shellcheck source=/dev/null
+. ./.env
+# shellcheck source=/dev/null
+. "$SECRETS"
+set +a
+
+# Production's buildpacks builder is amd64-only; use a multi-arch one on arm64 Docker hosts.
+if [ -z "${SHIPCUBE_BUILDER:-}" ] && [ "$(docker info --format '{{.Architecture}}')" = aarch64 ]; then
+  export SHIPCUBE_BUILDER=heroku/builder:24
+fi
+services=(api worker gateway)
+ollama=0
+if grep -qE '^LOCAL_LLM=ollama' .env 2>/dev/null || [ "${LOCAL_LLM:-}" = ollama ]; then ollama=1; services+=(ollama); fi
+
+migrate() {  # security's services: db, db-init (roles, bootstrap.sql), migrate (as sc-migrator)
+  dc up -d --wait db secretmanager
+  dc run --rm migrate
+}
+
+seed() {
+  # 711: other users (the gateway container runs as distroless `nonroot`) can open known files such as
+  # gateway-registry.json but can't list the directory; seed.env itself is 600.
+  mkdir -p "$STATE"; chmod 711 "$STATE"
+  if [ -f "$STATE/seed.env" ]; then echo "already seeded ($STATE/seed.env); 'reset' to start over"; return; fi
+  local email=dev@shipcube.local out ws user pat ses app_tok app_hash
+  out="$(dc run --rm --no-deps admin bootstrap --email "$email" --workspace demo --name "Local demo")"
+  ws="$(echo "$out" | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["workspace_id"])')"
+  user="$(echo "$out" | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["user_id"])')"
+  pat="$(echo "$out" | sed -n 's/^PAT (shown once): //p')"
+  [ -n "$pat" ] || { echo "bootstrap printed no PAT:"; echo "$out"; exit 1; }
+  ses="sc_ses_$(openssl rand -hex 4)_$(openssl rand -hex 24)"
+  app_tok="scg_$(openssl rand -hex 24)"
+  app_hash="$(printf %s "$app_tok" | shasum -a 256 | cut -d' ' -f1)"
+  umask 077
+  cat > "$STATE/seed.env" <<SEED
+# Written by deploy/local/dev seed. Local-only credentials for the local stack; never used elsewhere.
+SHIPCUBE_SEED_EMAIL=$email
+SHIPCUBE_SEED_USER_ID=$user
+SHIPCUBE_DATA_WORKSPACE=$ws
+SHIPCUBE_DEV_CONSOLE_EMAIL=$email
+SHIPCUBE_DEV_CONSOLE_TOKEN=$ses
+SHIPCUBE_PAT=$pat
+SHIPCUBE_GATEWAY_APP_TOKEN=$app_tok
+SEED
+  # Local development deploys many throwaway apps (each smoke run deploys one), so lift the workspace's
+  # default app and deploy caps, as services/api's test fixtures do. Local database only.
+  dc exec -T db psql -q -U postgres -d shipcube -c "update caps set limit_value = 500 where workspace_id = '$ws' \
+    and app_id is null and kind in ('max_apps', 'deploys_per_day')"
+  python3 "$HERE/gateway_registry.py" "$app_hash" "$ws" > "$STATE/gateway-registry.json"
+  chmod 644 "$STATE/gateway-registry.json"   # read by the gateway container (holds only a hash)
+  echo "seeded: user $email, workspace demo ($ws); PAT and console token in $STATE/seed.env"
+}
+
+data_seed() {  # shipcube-data: catalog + demo warehouse for the seeded workspace (idempotent)
+  dc run --rm --no-deps data-seed
+}
+
+case "${1:-}" in
+  up)
+    dc build
+    docker pull -q python:3.12-slim >/dev/null   # base of the profiler sandbox (PR #30): first estimate is faster
+    migrate
+    seed
+    data_seed
+    dc --profile ollama up -d --wait --remove-orphans "${services[@]}" fake-gcs local-iap
+    if [ "$ollama" = 1 ]; then dc exec ollama ollama pull "${LOCAL_LLM_MODEL:-qwen2.5:0.5b}" >/dev/null; fi
+    dc ps
+    cat <<URLS
+
+API + MCP:  http://localhost:${SHIPCUBE_API_PORT:-18080}  (MCP at /mcp; PAT in deploy/local/.state/seed.env)
+Gateway:    http://localhost:${SHIPCUBE_GATEWAY_PORT:-18090}/v1
+Apps:       http://<service>.localhost:${SHIPCUBE_IAP_PORT:-8088}  (local IAP; Bearer PAT or /_iap/login)
+Postgres:   127.0.0.1:${SHIPCUBE_DB_PORT:-54329} (db shipcube)
+Console:    cd apps/web && npm run dev   (see docs/LOCAL.md)
+URLS
+    ;;
+  down) dc --profile ollama --profile tools --profile console down --remove-orphans ;;
+  reset)
+    dc --profile ollama --profile tools --profile console down --remove-orphans --volumes
+    docker ps -aq --filter label=managed-by=shipcube | xargs -r docker rm -f >/dev/null
+    rm -rf "$STATE"
+    echo "reset: database, seed and deployed local apps removed (.local/ secrets kept)"
+    ;;
+  migrate) migrate ;;
+  seed) seed; data_seed ;;
+  smoke)
+    [ -f "$STATE/seed.env" ] || { echo "run 'up' first" >&2; exit 1; }
+    cd "$HERE/../.."
+    export SHIPCUBE_MCP_URL="http://localhost:${SHIPCUBE_API_PORT:-18080}/mcp"
+    export SHIPCUBE_GATEWAY_URL="http://localhost:${SHIPCUBE_GATEWAY_PORT:-18090}"
+    rc=0
+    uv run --project deploy/local/smoke python deploy/local/smoke/smoke.py "${@:2}" || rc=$?
+    echo; echo "== data layer smoke (shipcube-data)"
+    # data-layer's MCP-level smoke (shipcube-data PR #7), through this stack's MCP server and seeded PAT.
+    (cd "$HERE" && dc run --rm --no-deps -e SHIPCUBE_MCP_URL=http://api:8080/mcp data-seed \
+      shipcube-data smoke --mcp) || rc=$?
+    exit $rc
+    ;;
+  e2e)   # console + Auth emulator, then frontend's Playwright suite (run after `smoke`)
+    [ -f "$STATE/seed.env" ] || { echo "run 'up' and 'smoke' first" >&2; exit 1; }
+    # compose interpolates ${SHIPCUBE_DEV_CONSOLE_TOKEN} from the shell, not from env_file: load the seed.
+    set -a
+    # shellcheck source=/dev/null
+    . "$STATE/seed.env"
+    set +a
+    dc --profile console up -d --wait --build console auth-emulator
+    cd "$ROOT/apps/web"
+    npm ci --silent
+    npx playwright install --with-deps chromium >/dev/null
+    E2E_BASE_URL="http://localhost:${SHIPCUBE_CONSOLE_PORT:-3000}" \
+    E2E_API_URL="http://127.0.0.1:${SHIPCUBE_API_PORT:-18080}" \
+    E2E_MCP_URL="http://localhost:${SHIPCUBE_API_PORT:-18080}/mcp" \
+    E2E_APP="${SMOKE_APP:-$(cat "$STATE/smoke-app" 2>/dev/null || echo hello-local)}" \
+      npm run test:e2e
+    ;;
+  logs) dc logs -f --tail 100 "${@:2}" ;;
+  logs-dump) dc --profile tools logs --no-color --tail 200 "${@:2}" ;;   # non-following, for CI
+  ps) dc ps ;;
+  *) sed -n 2,3p "$0"; exit 2 ;;
+esac

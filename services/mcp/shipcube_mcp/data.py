@@ -130,7 +130,7 @@ class ShipcubeDataBackend:
         self._layer = DataLayer(runner.catalog, duckdb_executor(warehouse))
 
     def specs(self) -> list[dict[str, Any]]:
-        return self._tools.specs()
+        return self._tools.specs(prefix="")  # names without data_; mount_data_tools adds PREFIX
 
     def call(self, name: str, args: dict[str, Any], caller: CallerInfo) -> dict[str, Any]:
         return self._worker.submit(self._call, name, args, caller).result()
@@ -202,12 +202,33 @@ class StubDataBackend:
         raise DataToolError("unknown_tool", f"no tool named {name}")
 
 
+class CatalogDataBackend(ShipcubeDataBackend):
+    """shipcube-data on the shared catalog in ShipCube's database (schema `catalog`, FORCE RLS): the
+    same tools as the API's /v1/data routes, each call in db.tx(caller) as shipcube_app. Needs the API
+    in this process (the combined MCP + API server)."""
+
+    def __init__(self) -> None:  # noqa: D107 — no worker thread: each call opens its own db.tx
+        from shipcube_api import data_layer
+
+        self._tools = data_layer.tools()
+
+    def call(self, name: str, args: dict[str, Any], caller: CallerInfo) -> dict[str, Any]:
+        return self._call(name, args, caller)
+
+
 def default_backend() -> DataBackend | None:
     """The real library, or None (data tools not mounted). The stub only in SHIPCUBE_DEV_MODE.
 
     shipcube-data PR #1 serves one catalog per process (its demo warehouse), bound to the workspace in
     SHIPCUBE_DATA_WORKSPACE. Per-workspace catalogs in Postgres are the data layer's next step."""
     dev = os.environ.get("SHIPCUBE_DEV_MODE") == "1"
+    try:
+        import shipcube_data.http  # noqa: F401  (the `data` extra)
+        in_process_api = not os.environ.get("SHIPCUBE_API_URL")
+    except ImportError:
+        in_process_api = False
+    if in_process_api:
+        return CatalogDataBackend()
     workspace_id = os.environ.get("SHIPCUBE_DATA_WORKSPACE")
     try:
         from shipcube_data import demo

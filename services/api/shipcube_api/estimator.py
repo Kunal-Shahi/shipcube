@@ -11,6 +11,7 @@ exists only in DEV_MODE.
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Any, Protocol
@@ -35,9 +36,16 @@ class PlacementEstimator:
         from shipcube_placement import estimate
         from shipcube_profiler import CloudRunJobRunner, StaticRunner
 
-        # The sandbox (security §4: no-egress VPC, roleless SA) runs only once infra has created it.
-        runner = CloudRunJobRunner(project=settings.apps_project, region=settings.region,
-                                   service_account=settings.profiler_job) if settings.profiler_job else StaticRunner()
+        if os.environ.get("SHIPCUBE_PROFILER"):
+            # Explicit sandbox choice (e.g. `local`: docker run --network none on the local stack);
+            # shipcube_profiler.runner_from_env reads SHIPCUBE_PROFILER and its limits.
+            from shipcube_profiler import runner_from_env
+
+            runner = runner_from_env()
+        else:
+            # The sandbox (security §4: no-egress VPC, roleless SA) runs only once infra has created it.
+            runner = CloudRunJobRunner(project=settings.apps_project, region=settings.region,
+                                       service_account=settings.profiler_job) if settings.profiler_job else StaticRunner()
         tmp = Path(tempfile.mkdtemp(prefix="shipcube-upload-"))
 
         def fetch_upload(upload_id: str) -> Path:
@@ -72,8 +80,15 @@ class DevEstimator:
 
 
 def make_estimator(deployer: Deployer) -> Estimator:
-    if settings.dev_mode:
+    # SHIPCUBE_ESTIMATOR=placement|dev picks explicitly (the local stack runs the real estimator in
+    # DEV_MODE); unset keeps the default: dev in DEV_MODE, placement otherwise.
+    choice = os.environ.get("SHIPCUBE_ESTIMATOR") or ("dev" if settings.dev_mode else "placement")
+    if choice == "dev":
+        if not settings.dev_mode:
+            raise RuntimeError("SHIPCUBE_ESTIMATOR=dev is allowed only with SHIPCUBE_DEV_MODE=1")
         return DevEstimator()
+    if choice != "placement":
+        raise ValueError(f"SHIPCUBE_ESTIMATOR must be placement or dev, not {choice!r}")
     try:
         return PlacementEstimator(deployer)
     except ImportError:

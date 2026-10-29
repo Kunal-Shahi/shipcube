@@ -23,6 +23,7 @@ jobs:
       gateway: ${{ steps.diff.outputs.gateway }}
       web: ${{ steps.diff.outputs.web }}
       deploy: ${{ steps.diff.outputs.deploy }}
+      stack: ${{ steps.diff.outputs.stack }}
       infra: ${{ steps.diff.outputs.infra }}
       local_db: ${{ steps.diff.outputs.local_db }}
     steps:
@@ -49,6 +50,7 @@ jobs:
           echo "gateway=$(or "$(has '^services/gateway/')")" >> "$GITHUB_OUTPUT"
           echo "web=$(or "$(has '^apps/web/')")" >> "$GITHUB_OUTPUT"
           echo "deploy=$(or "$(has '^deploy/')")" >> "$GITHUB_OUTPUT"
+          echo "stack=$(or "$(has '^(deploy/local|services|packages|ml|infra/db|examples|Makefile)')")" >> "$GITHUB_OUTPUT"
           echo "infra=$(or "$(has '^infra/')")" >> "$GITHUB_OUTPUT"
           echo "local_db=$(or "$(has '^(infra/(db|local)/|services/api/)')")" >> "$GITHUB_OUTPUT"
           projects=$(find packages services ml deploy -name pyproject.toml -not -path '*/node_modules/*' \
@@ -156,6 +158,28 @@ jobs:
       - name: YAML
         run: pip install --quiet pyyaml && python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" deploy/*.yaml .github/workflows/*.yml
 
+  # The whole local stack, end to end: `make up` then `make smoke` (all 16 MCP tools, a real deploy,
+  # the gateway). No secrets: without META_API_KEY the gateway's model call is skipped.
+  local-stack:
+    needs: changes
+    if: needs.changes.outputs.stack == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: make up
+        run: make up
+      - name: make smoke
+        run: make smoke
+      - name: Logs on failure
+        if: failure()
+        run: deploy/local/dev logs-dump
+      - name: make down
+        if: always()
+        run: make down
   # Repo-wide guards that run on every PR. ShipCube owns no domain: a hard-coded one that someone
   # else registers would receive the tokens users paste next to it (red-team, PR #24).
   guards:
@@ -215,7 +239,7 @@ jobs:
   # The one required check. It runs even when jobs were skipped, and fails if any job failed.
   ci-ok:
     if: always()
-    needs: [changes, guards, python, gateway, web, deploy-scripts, infra, local-db]
+    needs: [changes, guards, python, gateway, web, deploy-scripts, local-stack, infra, local-db]
     runs-on: ubuntu-latest
     steps:
       - run: |

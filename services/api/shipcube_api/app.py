@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import auth, db, obs, store, workspace
+from . import auth, data_layer, db, obs, store, workspace
 from .auth import Caller
 from .deploy.base import DeployError
 from .models import (
@@ -42,6 +42,7 @@ def startup() -> None:
     """Also called by the combined MCP + API server, whose lifespan the API app doesn't get."""
     obs.setup_logging()
     db.check_schema(migrate_if_dev=settings.dev_mode)  # production: migrations run via infra/db/migrate.sh
+    data_layer.check_catalog(migrate_if_dev=settings.dev_mode)
     deployer()  # fail at startup, not on the first request, if the backend is misconfigured
     if settings.dev_mode and (tok := os.environ.get("SHIPCUBE_DEV_CONSOLE_TOKEN")):
         with db.tx(role=db.APP) as conn:  # DEV_MODE stand-in for a console login, for the bootstrap user
@@ -376,3 +377,7 @@ def list_gcp_targets(c: Annotated[Caller, Depends(scope("apps:read"))]):
 @app.post("/v1/gcp-targets", response_model=GcpLink, status_code=201)
 def link_gcp_project(body: LinkRequest, c: Annotated[Caller, Depends(console_session)]):
     return workspace.link_project(deployer(), c, body.project_id, body.region)
+
+
+# --- data layer (Kunal-Shahi/shipcube-data): the console's Data page; see data_layer.py -----------------------
+data_layer.mount(app, caller)

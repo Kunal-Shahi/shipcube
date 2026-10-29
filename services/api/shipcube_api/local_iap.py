@@ -20,6 +20,7 @@ import logging
 import os
 import time
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -133,6 +134,15 @@ class LocalIap:
 
         caps = st.get("caps") or {}
         rev = st["traffic"]
+        started = time.monotonic()
+
+        def record(status: int) -> None:
+            """One JSON line per proxied request: the local monitor's request metrics (packages/monitor
+            local.py), like Cloud Run's front end counts requests in production."""
+            print(json.dumps({"shipcube_request": True, "service": st["service"], "revision": rev, "status": status,
+                              "latency_ms": round((time.monotonic() - started) * 1000, 1), "method": request.method,
+                              "time": datetime.now(UTC).isoformat(timespec="milliseconds")}), flush=True)
+
         slot = self.slots.setdefault(rev, asyncio.Semaphore(int(caps.get("concurrency", 80))))
         timeout = float(caps.get("timeout_s", 60))
         headers = {k: v for k, v in request.headers.items()
@@ -148,6 +158,7 @@ class LocalIap:
         try:
             await asyncio.wait_for(slot.acquire(), timeout)
         except TimeoutError:
+            record(429)
             return JSONResponse({"error": {"code": "rate_limited", "message": "all instances are busy"}}, status_code=429)
         try:
             url = self.upstream(rev) + request.url.path + (f"?{request.url.query}" if request.url.query else "")
@@ -156,6 +167,7 @@ class LocalIap:
             upstream = await self.client.send(req, stream=True)
         except (httpx.HTTPError, OSError) as e:
             slot.release()
+            record(503)
             return JSONResponse({"error": {"code": "unavailable", "message": f"app did not answer: {type(e).__name__}: {e}"}},
                                 status_code=503)
 
@@ -166,6 +178,7 @@ class LocalIap:
             finally:
                 await upstream.aclose()
                 slot.release()
+                record(upstream.status_code)
 
         out = {k: v for k, v in upstream.headers.items() if k.lower() not in HOP and k.lower() != "content-encoding"}
         return StreamingResponse(body(), status_code=upstream.status_code, headers=out)

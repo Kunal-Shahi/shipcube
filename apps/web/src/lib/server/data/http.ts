@@ -13,17 +13,20 @@ import type {
   Approval,
   ApprovalKind,
   Caps,
+  Cube,
   Health,
   LoadEstimate,
   LogLine,
+  Migration,
   Monitoring,
   ProviderConfig,
   Role,
   TierId,
+  Warehouse,
 } from "@/lib/types";
 import { api } from "../http";
 import { log } from "../log";
-import { FEATURE_ENDPOINT, type ConsoleData, type Feature, type PendingApproval } from "./source";
+import { FEATURE_ENDPOINT, type ConsoleData, type Feature, type PendingApproval, type WarehouseInput } from "./source";
 
 // --- API shapes (services/api/shipcube_api/models.py) ---------------------------------
 
@@ -279,7 +282,7 @@ async function optional<T>(what: string, p: Promise<T>): Promise<T | undefined> 
 }
 
 const notConnected = (f: Feature) => new NotConnectedError(FEATURE_ENDPOINT[f].name, FEATURE_ENDPOINT[f].endpoint);
-const AVAILABLE = new Set<Feature>(["tokens", "approvals_inbox", "providers"]);
+const AVAILABLE = new Set<Feature>(["tokens", "data", "approvals_inbox", "providers"]);
 
 interface ApiTokenRow {
   id: string;
@@ -290,16 +293,6 @@ interface ApiTokenRow {
   expires_at: string;
   last_used_at: string | null;
 }
-
-const tokenFromApi = (t: ApiTokenRow): ApiToken => ({
-  id: t.id,
-  name: t.name,
-  prefix: t.prefix,
-  scopes: t.scopes,
-  createdAt: t.created_at,
-  expiresAt: t.expires_at,
-  lastUsedAt: t.last_used_at,
-});
 
 interface ApiProvider {
   id: ProviderConfig["id"];
@@ -326,6 +319,39 @@ export const providerFromApi = (p: ApiProvider): ProviderConfig => ({
   addedAt: p.added_at ?? undefined,
 });
 
+const tokenFromApi = (t: ApiTokenRow): ApiToken => ({
+  id: t.id,
+  name: t.name,
+  prefix: t.prefix,
+  scopes: t.scopes,
+  createdAt: t.created_at,
+  expiresAt: t.expires_at,
+  lastUsedAt: t.last_used_at,
+});
+// /v1/data/* is served by shipcube-data's router (shipcube_data/http.py). Its bodies are snake_case like the rest of
+// /v1 and map one-to-one onto lib/types; `ops` are the migration's own JSON and are passed through untouched.
+const camelKey = (k: string) => k.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+
+export function camelize<T>(v: unknown): T {
+  if (Array.isArray(v)) return v.map((x) => camelize(x)) as T;
+  if (v === null || typeof v !== "object") return v as T;
+  return Object.fromEntries(
+    Object.entries(v as Record<string, unknown>).map(([k, x]) => [camelKey(k), k === "ops" ? x : camelize(x)]),
+  ) as T;
+}
+
+// Local stacks run a DuckDB warehouse, which isn't a WarehouseKind the form offers; show it as a detail instead.
+function warehouseFromApi(raw: unknown): Warehouse {
+  const w = camelize<Warehouse & { kind?: string }>(raw);
+  if (!w.kind || ["bigquery", "postgres", "clickhouse"].includes(w.kind)) return w;
+  return { ...w, kind: undefined, details: [{ label: "Engine", value: `${w.kind} (local development)` }, ...(w.details ?? [])] };
+}
+
+function warehouseBody(input: WarehouseInput) {
+  return input.kind === "bigquery"
+    ? { kind: input.kind, project: input.project, location: input.location, service_account_key: input.serviceAccountKey }
+    : { kind: input.kind, host: input.host, port: input.port, database: input.database, user: input.user, password: input.password, ssl: input.ssl };
+}
 const enc = encodeURIComponent;
 
 export const httpData: ConsoleData = {
@@ -452,24 +478,38 @@ export const httpData: ConsoleData = {
     throw notConnected("gcp_link");
   },
   async getWarehouse() {
-    throw notConnected("data");
+    return warehouseFromApi(await api<unknown>("/v1/data/warehouse"));
   },
-  async connectWarehouse() {
-    throw notConnected("data");
+  async connectWarehouse(input, save) {
+    // The API tests the credentials first and never echoes them; PUT also stores them in Secret Manager.
+    if (!save) return api<{ tables: number; schemas: number }>("/v1/data/warehouse:test", { method: "POST", body: warehouseBody(input) });
+    const out = await api<{ tables: number; schemas: number; warehouse: unknown }>("/v1/data/warehouse", {
+      method: "PUT",
+      body: warehouseBody(input),
+    });
+    return { ...out, warehouse: warehouseFromApi(out.warehouse) };
   },
   async listCubes() {
-    throw notConnected("data");
+    return camelize<Cube[]>(await api<unknown>("/v1/data/cubes"));
   },
-  async getCube() {
-    throw notConnected("data");
+  async getCube(name) {
+    const c = await orNull(api<unknown>(`/v1/data/cubes/${enc(name)}`));
+    return c === null ? null : camelize<Cube>(c);
   },
   async listMigrations() {
-    throw notConnected("data");
+    return camelize<Migration[]>(await api<unknown>("/v1/data/migrations"));
   },
-  async getMigration() {
-    throw notConnected("data");
+  async getMigration(id) {
+    const m = await orNull(api<unknown>(`/v1/data/migrations/${enc(id)}`));
+    return m === null ? null : camelize<Migration>(m);
   },
-  async decideMigration() {
-    throw notConnected("data");
+  async decideMigration(id, decision, { allowBreaking, note }) {
+    // A person's console session only; the API refuses PATs. Deciding twice answers 409.
+    const m = await api<unknown>(`/v1/data/migrations/${enc(id)}:${decision}`, {
+      method: "POST",
+      body: decision === "apply" ? { allow_breaking: allowBreaking } : { note },
+      idempotencyKey: `${decision}-${id}`,
+    });
+    return camelize<Migration>(m);
   },
 };

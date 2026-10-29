@@ -1,0 +1,3 @@
+# Local stack state and switches (deploy/local/dev)
+.state/
+.env
