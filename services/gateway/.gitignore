@@ -1,0 +1,2 @@
+# Local builds (go build) write the binary here
+/gateway

@@ -368,6 +368,33 @@ class Error(BaseModel):
     error: ErrorBody
 
 
+# --- API tokens (console only) ------------------------------------------------------
+
+class TokenCreate(_Model):
+    name: str = Field(min_length=1, max_length=64)
+    scopes: list[str] = Field(min_length=1)
+    days: int = Field(30, ge=1, le=90)
+
+
+class Token(BaseModel):
+    id: str
+    name: str
+    prefix: str
+    scopes: list[str]
+    created_at: str
+    expires_at: str
+    last_used_at: str | None
+
+
+class TokenList(BaseModel):
+    tokens: list[Token]
+
+
+class TokenCreated(BaseModel):
+    token: Token
+    secret: str = Field(description="The full sc_pat_ token. Shown once; only its HMAC is stored.")
+
+
 # --- console: approvals inbox, AI providers, billing, linked projects ------------------------
 
 

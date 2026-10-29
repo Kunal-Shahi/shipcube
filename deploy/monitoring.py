@@ -9,7 +9,8 @@ access token comes from `gcloud auth print-access-token`.
 
 Creates:
 - An email notification channel.
-- Uptime checks, every 5 minutes from 3 regions: console /sign-in, MCP /healthz, gateway /healthz.
+- Uptime checks, every 5 minutes from 3 regions: console /sign-in, MCP /health, gateway /health,
+  worker /health (with an OIDC token: the worker is not public).
 - Alerts:
   - an uptime check failing from 2+ regions for 5 minutes (per service)
   - a 5xx ratio above 5% for 5 minutes (per service)
@@ -34,9 +35,14 @@ API = "https://monitoring.googleapis.com/v3"
 PREFIX = "ShipCube"
 SERVICES = {  # Cloud Run service -> uptime path
     "shipcube-console": "/sign-in",
-    "shipcube-mcp": "/healthz",
-    "shipcube-gateway": "/healthz",
+    # /health, not /healthz: Cloud Run's front end reserves /healthz on run.app URLs.
+    "shipcube-mcp": "/health",
+    "shipcube-gateway": "/health",
+    "shipcube-worker": "/health",
 }
+# Private services: the uptime check sends an OIDC token from the Monitoring service agent, which
+# deploy/deploy.sh grants run.invoker on them.
+PRIVATE = {"shipcube-worker"}
 
 
 class Client:
@@ -106,7 +112,8 @@ def main() -> None:
             "displayName": f"{PREFIX} {svc}",
             "monitoredResource": {"type": "uptime_url", "labels": {"project_id": a.project, "host": host}},
             "httpCheck": {"path": path, "port": 443, "useSsl": True, "validateSsl": True,
-                          "acceptedResponseStatusCodes": [{"statusClass": "STATUS_CLASS_2XX"}]},
+                          "acceptedResponseStatusCodes": [{"statusClass": "STATUS_CLASS_2XX"}],
+                          **({"serviceAgentAuthentication": {"type": "OIDC_TOKEN"}} if svc in PRIVATE else {})},
             "period": "300s",
             "timeout": "10s",
             "selectedRegions": ["USA", "EUROPE", "ASIA_PACIFIC"],

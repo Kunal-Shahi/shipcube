@@ -45,12 +45,35 @@ def dsn() -> str:
     return url
 
 
+class IamAuthConnection(psycopg.Connection):
+    """Cloud SQL IAM database authentication without a proxy sidecar: each new connection sends a
+    fresh OAuth token for the service's own account as the password. Used on Cloud Run with the
+    built-in Cloud SQL socket (SHIPCUBE_DB_IAM_AUTH=1). Tokens only matter at connect time, and the
+    pool recycles connections hourly (max_lifetime), so expiry never interrupts a session."""
+
+    _creds: Any = None
+
+    @classmethod
+    def connect(cls, conninfo: str = "", **kwargs: Any) -> IamAuthConnection:  # type: ignore[override]
+        import google.auth
+        import google.auth.transport.requests
+
+        if cls._creds is None:
+            cls._creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/sqlservice.login"])
+        if not cls._creds.valid:
+            cls._creds.refresh(google.auth.transport.requests.Request())
+        kwargs["password"] = cls._creds.token
+        return super().connect(conninfo, **kwargs)  # type: ignore[return-value]
+
+
 def pool() -> ConnectionPool:
     global _pool
     if _pool is None:
+        iam = os.environ.get("SHIPCUBE_DB_IAM_AUTH") == "1"
         _pool = ConnectionPool(dsn(), min_size=1, max_size=int(os.environ.get("SHIPCUBE_DB_POOL", "10")),
                                kwargs={"row_factory": dict_row, "autocommit": False}, open=True,
-                               name="shipcube")
+                               name="shipcube", max_lifetime=3000,
+                               connection_class=IamAuthConnection if iam else psycopg.Connection)
     return _pool
 
 
