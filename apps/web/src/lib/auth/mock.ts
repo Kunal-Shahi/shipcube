@@ -9,9 +9,9 @@ import type { AuthProvider, Session } from "./types";
 
 const DEMO_USER = {
   id: "usr_dev",
-  email: "kunal@acme-analytics.com",
+  email: "kunal@example.com",
   name: "Kunal Shahi",
-  hostedDomain: "acme-analytics.com",
+  hostedDomain: "example.com",
 };
 
 export const mockAuth: AuthProvider = {

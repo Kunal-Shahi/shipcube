@@ -8,13 +8,13 @@ This doc covers how a coding agent reaches ShipCube, how ShipCube reaches GCP, a
 
 | # | Topic | Decision for the 10-day build | Later |
 |---|---|---|---|
-| 1 | MCP transport | One remote **Streamable HTTP** endpoint, `https://mcp.shipcube.dev/mcp`, built on the stateless **2026-07-28** spec. No stdio package. | A stdio shim only if a client can't do remote HTTP |
+| 1 | MCP transport | One remote **Streamable HTTP** endpoint, `<your ShipCube MCP URL>` (the `shipcube-mcp` Cloud Run URL plus `/mcp`), built on the stateless **2026-07-28** spec. No stdio package. | A stdio shim only if a client can't do remote HTTP |
 | 1 | MCP auth | **Personal access token** (`sc_pat_<id>_<secret>`, stored as an HMAC per security's `api_tokens` table) from the web console, sent as `Authorization: Bearer`. | **OAuth 2.1** per the MCP authorization spec: ShipCube as the authorization server in front of Google sign-in, Client ID Metadata Documents first, DCR as fallback |
 | 1 | Language | **Python 3.12**: the official `mcp` 2.3.0 SDK (`MCPServer`) plus FastAPI, run as **one service** (`/mcp` and `/v1/*`). Tools call the API in-process. Kunal's decision on PR #4. | Split MCP and API with `SHIPCUBE_API_URL` |
 | 2 | Tools | **16 tools** (Kunal, Oct 28): 11 app tools plus 5 `data_*` tools mounted from shipcube-data (§2). Long-running tools return an **Operation**, wait up to `wait_s` (≤55 s) while streaming `notifications/progress`, then hand back the id for `operation`. **Idempotency keys** on every mutating call. Four kinds of action wait for a human: `awaiting_approval` + `approval_url` (§2.5). | The MCP `tasks` extension, once Claude Code and Cursor support it |
 | 3 | Control plane | **REST + JSON**, OpenAPI 3.1, `/v1` in the path, AIP-151-style operations. No gRPC. Deploys and profiling run as a **step machine driven by Cloud Tasks**. | Workflows if the step graph grows |
 | 4 | Flow | MCP → API → Cloud Tasks → worker → Cloud Build → Artifact Registry → Cloud Run. In a linked project the worker impersonates a deployer service account there. | |
-| 5 | Reaching apps | **IAP directly on each Cloud Run service** (security's decision, PR #2): the app's `run.app` URL, Google sign-in, and `set_access` writes `access_grants` plus an IAM binding. No load balancer. **[security]** | `<app>.apps.shipcube.dev` through an ALB and the Go access proxy (`services/gateway`), if custom domains or per-request caps are needed |
+| 5 | Reaching apps | **IAP directly on each Cloud Run service** (security's decision, PR #2): the app's `run.app` URL, Google sign-in, and `set_access` writes `access_grants` plus an IAM binding. No load balancer. **[security]** | `<app>.apps.<your domain>` through an ALB and the Go access proxy (`services/gateway`), if custom domains or per-request caps are needed |
 | 5 | Egress | Default: none. Apps that need a static IP for a customer database use Direct VPC egress + Cloud NAT with a reserved IP, one per GCP project. | |
 | 6 | Caps | Cloud Run handles instances, concurrency, CPU/memory and timeout. Requests per minute applies to AI-gateway calls only while apps sit behind IAP. Spend uses ShipCube's own cost meter plus a billing budget, and the kill switch is `max-instances=0`. | Per-request app caps through the access proxy or Cloud Armor |
 | 6 | Budget | About **$5–20/month** fixed (Cloud SQL, plus NAT once a demo app needs a static IP). The access-proxy option adds ~$18 for the ALB. GKE Autopilot is placement-only. | |
@@ -53,17 +53,17 @@ stdio's only real advantage is reading local files, and the `create_upload` + `c
 
 ```bash
 # Claude Code (scopes: local [default], project → .mcp.json, user)
-claude mcp add --transport http shipcube https://mcp.shipcube.dev/mcp \
+claude mcp add --transport http shipcube <your ShipCube MCP URL> \
   --header "Authorization: Bearer $SHIPCUBE_TOKEN"
 ```
 
 ```jsonc
 // .mcp.json (Claude Code, committed to the repo). ${VAR} expands at load time.
-{ "mcpServers": { "shipcube": { "type": "http", "url": "https://mcp.shipcube.dev/mcp",
+{ "mcpServers": { "shipcube": { "type": "http", "url": "<your ShipCube MCP URL>",
     "headers": { "Authorization": "Bearer ${SHIPCUBE_TOKEN}" } } } }
 
 // .cursor/mcp.json (Cursor). Note the ${env:NAME} syntax.
-{ "mcpServers": { "shipcube": { "url": "https://mcp.shipcube.dev/mcp",
+{ "mcpServers": { "shipcube": { "url": "<your ShipCube MCP URL>",
     "headers": { "Authorization": "Bearer ${env:SHIPCUBE_TOKEN}" } } } }
 ```
 
@@ -105,10 +105,10 @@ How it's wired (`services/mcp/shipcube_mcp/server.py`):
 - Locally, `SHIPCUBE_DEV_TOKEN` registers one dev token with every scope.
 
 **Phase 2: OAuth 2.1, with PATs kept.**
-1. Stand up an authorization server, built or rented, at `auth.shipcube.dev`, with Google as upstream IdP. Support CIMD, and DCR for older clients.
+1. Stand up an authorization server, built or rented, at `auth.<your domain>`, with Google as upstream IdP. Support CIMD, and DCR for older clients.
 2. Serve `/.well-known/oauth-protected-resource` from the MCP server, listing that authorization server and `scopes_supported`.
-3. Make the verifier accept **either** a PAT (prefix `sc_pat_`, hash lookup) **or** a JWT access token (signature, `aud == https://mcp.shipcube.dev/mcp`, expiry, scopes). The tools don't change: they read `authInfo` from the context either way.
-4. Return the RFC 9728 challenge on `401` when no `Authorization` header is present. Clients configured with a PAT keep working. New users just run `claude mcp add --transport http shipcube https://mcp.shipcube.dev/mcp` and finish OAuth in the browser.
+3. Make the verifier accept **either** a PAT (prefix `sc_pat_`, hash lookup) **or** a JWT access token (signature, `aud == <your ShipCube MCP URL>`, expiry, scopes). The tools don't change: they read `authInfo` from the context either way.
+4. Return the RFC 9728 challenge on `401` when no `Authorization` header is present. Clients configured with a PAT keep working. New users just run `claude mcp add --transport http shipcube <your ShipCube MCP URL>` and finish OAuth in the browser.
 5. Because Claude Code doesn't fall back from a rejected header to OAuth, the setup guide tells PAT users to **remove** the header to switch.
 
 For phase 2, the Python SDK's `AuthSettings(resource_server_url=…)` publishes the Protected Resource Metadata document and the `WWW-Authenticate` challenge. The phase-1 stub sets it to `None`, so it doesn't advertise an authorization server that doesn't exist yet.
@@ -117,7 +117,7 @@ For phase 2, the Python SDK's `AuthSettings(resource_server_url=…)` publishes 
 
 - **Origin and Host validation:** required by the spec, to stop DNS rebinding. Done with the SDK's `TransportSecuritySettings` (`ALLOWED_HOSTS`). In production the allow-list is the service's own host.
 - The server refuses to bind a non-loopback address unless `ALLOWED_HOSTS` is set. `/mcp` always requires a bearer token.
-- TLS terminates at Cloud Run (`*.run.app`), or at a Cloud Run domain mapping or the ALB if we put `mcp.shipcube.dev` in front.
+- TLS terminates at Cloud Run (`*.run.app`), or at a Cloud Run domain mapping or the ALB if we put `mcp.<your domain>` in front.
 - Send `X-Accel-Buffering: no` on SSE responses (the spec recommends it).
 - Set the Cloud Run request timeout to at least 60 s, so a `wait_s=55` call finishes.
 - **Rate limits per token** at the MCP layer (e.g. 60 tool calls/min, and 10 deploys/hour per workspace) live in the API, not in the MCP server.
@@ -260,7 +260,7 @@ Kunal's rule: agents act directly on reads, cap reductions, access removals, and
 | **`delete_app`** | always | Operation awaiting approval. Once approved it's a **soft delete**: scaled to zero, IAP access removed, `deleted_at` + `restorable_until` (7 days), restorable from the console |
 
 Mechanics:
-- **Status:** a waiting operation has `status: awaiting_approval`, `approval_url` (`https://console.shipcube.dev/w/<workspace>/approvals/<op id>`), `approval_reasons[]`, `approval_actions[]` (security's `approvals.action` values: `first_linked_deploy`, `cap_raise`, `domain_grant`, `delete_app`), `approval_expires_at` (72 h) and a slow `poll_after_s` (10 s). Its clock doesn't start until approval.
+- **Status:** a waiting operation has `status: awaiting_approval`, `approval_url` (`<console URL>/w/<workspace>/approvals/<op id>`), `approval_reasons[]`, `approval_actions[]` (security's `approvals.action` values: `first_linked_deploy`, `cap_raise`, `domain_grant`, `delete_app`), `approval_expires_at` (72 h) and a slow `poll_after_s` (10 s). Its clock doesn't start until approval.
 - **Agent side:** `next` tells the agent to show the link to the user and follow the operation with `operation`. `operation(action=cancel)` withdraws the request.
 - **Endpoints:** the console calls `POST /v1/operations/{id}/approve` or `/reject` (optional `comment`). Approval moves the operation to `queued`, and it runs as usual. As in security's `operations` table, there is no `rejected` status: a rejected, expired or withdrawn approval ends the operation as `cancelled`, with `error.code` set to `approval_rejected`, `approval_expired` or `approval_withdrawn`. `POST /v1/apps/{app}/restore` undoes a soft delete within the window.
 - **Who can approve: a human console session only.** A PAT gets `403`, whatever its scopes, so an agent can't approve its own request. The skeleton models console sessions as `sc_ses_…` tokens; in production they're Identity Platform sessions, owned by **[security]**.
@@ -464,11 +464,11 @@ Apps deployed from a laptop keep running after the laptop disconnects: they're C
 | Raw `https://<svc>-<hash>.<region>.run.app` | n/a | none | $0 | Ugly, leaks the project hash, different per project |
 | Cloud Run **domain mappings** | **No** | One mapping + certificate per app, takes minutes | $0 | Still **Preview** and "not recommended for production" (latency), in 10 regions only ([docs](https://docs.cloud.google.com/run/docs/mapping-custom-domains)) |
 | Firebase Hosting rewrite | Per site | Config per app | Free tier | **60 s request timeout**, which breaks SSE and WebSockets ([docs](https://firebase.google.com/docs/hosting/cloud-run)) |
-| **Global external ALB + wildcard cert** | **Yes** (`*.apps.shipcube.dev`, one level) | None. One DNS record and one cert for all apps | ~$18/month for the forwarding rule + $0.008/GiB ([pricing](https://cloud.google.com/load-balancing/pricing)) | Wildcard certs need Certificate Manager **DNS authorization** ([docs](https://docs.cloud.google.com/certificate-manager/docs/domain-authorization)) |
+| **Global external ALB + wildcard cert** | **Yes** (`*.apps.<your domain>`, one level) | None. One DNS record and one cert for all apps | ~$18/month for the forwarding rule + $0.008/GiB ([pricing](https://cloud.google.com/load-balancing/pricing)) | Wildcard certs need Certificate Manager **DNS authorization** ([docs](https://docs.cloud.google.com/certificate-manager/docs/domain-authorization)) |
 
 A serverless NEG can route with a **URL mask** (e.g. `<service>.example.com`) straight to many Cloud Run services ([serverless NEG concepts](https://docs.cloud.google.com/load-balancing/docs/negs/serverless-neg-concepts)). But a NEG can only target services in **its own project and region**, so masks can't reach apps in linked projects. That's one reason the ALB routes everything to our access proxy instead.
 
-**Decision (revised to match security, PR #2): use the `run.app` URLs** returned by `deploy_app` and shown in the console. They're stable per service, cost nothing, and are the only URL IAP-on-the-service supports (IAP can't be on both an ALB and the service). Pretty `<app>.apps.shipcube.dev` URLs come with the access-proxy option below, which needs the ALB and a real domain.
+**Decision (revised to match security, PR #2): use the `run.app` URLs** returned by `deploy_app` and shown in the console. They're stable per service, cost nothing, and are the only URL IAP-on-the-service supports (IAP can't be on both an ALB and the service). Pretty `<app>.apps.<your domain>` URLs come with the access-proxy option below, which needs the ALB and a real domain.
 
 ### 5.2 Access control: IAP vs our own proxy **[security]**
 
@@ -477,7 +477,7 @@ A serverless NEG can route with a **URL mask** (e.g. `<service>.example.com`) st
 | | Direct IAP on each app | ShipCube access proxy (`services/gateway`) |
 |---|---|---|
 | Cost | $0 | Shares the ALB (~$18/month) + one small Cloud Run service |
-| URLs | Only `run.app` (IAP can't be on both the ALB and the service) | `<app>.apps.shipcube.dev` |
+| URLs | Only `run.app` (IAP can't be on both the ALB and the service) | `<app>.apps.<your domain>` |
 | Grants | IAM bindings in the **app's project**. In linked projects that means writing IAM in the user's project for every share. | One ACL table in ShipCube, the same for every target |
 | Identity | Google accounts. Users outside an org need a custom OAuth client with an external brand. | Google sign-in via ShipCube, the same identity as the console |
 | Rate caps / AI gateway / metering | No | Yes: one hop where we can count requests, enforce `requests_per_minute` and inject `X-ShipCube-User` |
@@ -493,9 +493,9 @@ The **access proxy** (Go, `services/gateway`) remains the fallback. It is built 
 If the proxy is built, networking needs this from its design (security's `services/gateway/DESIGN.md` owns it):
 1. **Routing:** look up `Host` → `{app, target_url (run.app), acl_version}` from the API, cached for 30 s.
 2. **AuthN:**
-   - Browser: the OIDC login runs at `auth.shipcube.dev`, which then hands the session to the app's host. The gateway sets a **host-only** session cookie on `<app>.apps.shipcube.dev`. **Never** set a cookie on `.apps.shipcube.dev`: every app is user code on a sibling subdomain and would receive it.
+   - Browser: the OIDC login runs at `auth.<your domain>`, which then hands the session to the app's host. The gateway sets a **host-only** session cookie on `<app>.apps.<your domain>`. **Never** set a cookie on `.apps.<your domain>`: every app is user code on a sibling subdomain and would receive it.
    - Programmatic callers: `Authorization: Bearer` with a PAT scoped to that app.
-   - Longer term, submit `apps.shipcube.dev` to the **Public Suffix List** so browsers isolate sibling apps.
+   - Longer term, submit `apps.<your domain>` to the **Public Suffix List** so browsers isolate sibling apps.
 3. **Strip** ShipCube's cookies and `Authorization` before proxying. Add `X-ShipCube-User` (email) and a signed `X-ShipCube-Assertion` (a JWT the app can verify, like IAP's `x-goog-iap-jwt-assertion`).
 4. **Upstream auth:** fetch a Google **ID token** for audience = the app's `run.app` URL from the metadata server, cached about 55 min, and send it as `Authorization`. The app stays `--no-allow-unauthenticated`, with invoker IAM granted only to the gateway SA (and the owner, for debugging).
 
@@ -518,7 +518,7 @@ With IAP, these limits apply to the app directly. If the access proxy is built, 
 - Gateway timeout ≥ app timeout. Set the ALB backend timeout to 3,600 s for the gateway backend.
 - The ALB proxies WebSockets natively, so the ALB → gateway → app chain works.
 - Logs in the console stream over SSE from the API, which is the same pattern.
-- The ALB's own MCP endpoint (if `mcp.shipcube.dev` sits behind it) needs a timeout ≥ 60 s.
+- The ALB's own MCP endpoint (if `mcp.<your domain>` sits behind it) needs a timeout ≥ 60 s.
 
 ### 5.5 Egress to user databases
 
@@ -582,7 +582,7 @@ Guardrails on ShipCube's project:
 
 ## Open questions
 
-1. **Domain.** Not needed for the IAP plan (apps use `run.app` URLs). A real domain (~$12/year) is only needed for `mcp.shipcube.dev`, OAuth redirect URIs in phase 2, or the access-proxy option.
+1. **Domain.** Not needed for the IAP plan (apps use `run.app` URLs). A real domain (~$12/year) is only needed for `mcp.<your domain>`, OAuth redirect URIs in phase 2, or the access-proxy option.
 2. **Muse Code MCP support** (remote HTTP? headers? OAuth?) is undocumented publicly. Test it on day 2.
 3. **[security]** Mostly done in PR #2: the `operations` and `approvals` tables, soft-delete columns on `apps` (`purge_after` = our `restorable_until`) and the data scopes. Still open: what `approvals.action` holds when one deploy needs two approvals (linked project + cap raise); see the PR description. Rename the caps (`memory` → `memory_mib`, `timeout_s` → `request_timeout_s`, `monthly_spend_usd` → `spend_usd_per_month`), and either add `concurrency` to the `caps` table or keep it as a per-app setting. Also note the shared static egress IP risk (§5.5).
 4. **[language]** Decided: Python. Only the access proxy and AI gateway are Go, in `services/gateway`.

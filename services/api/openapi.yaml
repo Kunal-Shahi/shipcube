@@ -8,7 +8,7 @@ info:
     modelled on google.longrunning.Operation (AIP-151). Mutating POST/DELETE calls
     accept an Idempotency-Key header (draft-ietf-httpapi-idempotency-key-header).
 servers:
-  - url: https://api.shipcube.dev
+  # Production: the shipcube-mcp Cloud Run service URL (deploy/README.md).
   - url: http://127.0.0.1:8080
 security:
   - bearer: []

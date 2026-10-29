@@ -118,7 +118,7 @@ Rotating the pepper invalidates every PAT.
 
 ## Known limits
 
-- **No custom domain.** Cloud Run domain mapping isn't offered in asia-south1, and a load balancer costs about $18/month.
+- **No custom domain.** Cloud Run domain mapping isn't offered in asia-south1, and a load balancer costs about $18/month. Until we register one, nothing may name a ShipCube domain; CI's `guards` job fails if the old placeholder domain comes back.
 - **Data tools serve one workspace per process** (shipcube-data PR #1): a DuckDB demo warehouse built in each instance, so it is rebuilt on cold start.
 - **The gateway registry is interim** until `/internal/gateway/resolve` exists: one default Muse config and caps for every app.
 - **Invite-only sign-up isn't enforced yet:** the Identity Platform `beforeCreate` blocking function isn't deployed.

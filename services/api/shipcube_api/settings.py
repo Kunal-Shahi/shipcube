@@ -52,6 +52,8 @@ class Settings:
         "SHIPCUBE_BUILD_SUBMITTER_SA", "sc-hosted-deployer@shipcube-control-ks.iam.gserviceaccount.com"))
     # Optional: impersonate this deployer for hosted deploys; unset means ADC acts directly.
     hosted_deployer_sa: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_HOSTED_DEPLOYER_SA") or None)
+    # Where approval links point (the console). Set per environment; the default is the local console.
+    console_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000").rstrip("/"))
     # The AI gateway's URL, injected into every deployed app as SHIPCUBE_AI_GATEWAY. Unset: not injected.
     ai_gateway_url: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_AI_GATEWAY_URL") or None)
     # SHIPCUBE_BACKEND=local (deploy/local.py, local_iap.py): Docker + pack + fake-gcs-server.

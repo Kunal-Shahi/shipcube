@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { CheckCircle2 } from "lucide-react";
 import { PageHeader, Panel, PanelHeader } from "@/components/ui";
 import { cn } from "@/lib/cn";
-import { MCP_URL, TOOLS, type ToolGroup } from "@/lib/mcp";
+import { TOOLS, type ToolGroup } from "@/lib/mcp";
 import { supports } from "@/lib/api";
+import { config } from "@/lib/server/config";
 import { ConnectSteps } from "./connect-steps";
 
 export const metadata: Metadata = { title: "Connect your agent" };
@@ -14,7 +16,11 @@ type Turn =
   | { who: "tool"; name: string; args: string; result: string; waiting?: boolean }
   | { who: "event"; text: string };
 
-const CONVERSATION: Turn[] = [
+// Apps are served on their Cloud Run run.app URLs (security, PR #2). The approval link points
+// at whichever console is showing this page.
+const APP_URL = "regional-revenue-tracker-123456789012.us-central1.run.app";
+
+const conversation = (consoleUrl: string): Turn[] => [
   { who: "you", text: "Deploy this tracker to our GCP project and share it with my team. Keep it under $20 a month." },
   {
     who: "tool",
@@ -26,19 +32,19 @@ const CONVERSATION: Turn[] = [
     who: "tool",
     name: "deploy_app",
     args: `{ "name": "regional-revenue-tracker", "tier": "T1", "project": "acme-analytics-prod" }`,
-    result: "status: awaiting_approval\napproval_url: https://console.shipcube.dev/approvals/apr_7k2m",
+    result: `status: awaiting_approval\napproval_url: ${consoleUrl}/approvals/apr_7k2m`,
     waiting: true,
   },
   {
     who: "agent",
-    text: "This is the first deploy to acme-analytics-prod, so it needs your approval: console.shipcube.dev/approvals/apr_7k2m. I'll continue once you approve.",
+    text: `This is the first deploy to acme-analytics-prod, so it needs your approval: ${consoleUrl}/approvals/apr_7k2m. I'll continue once you approve.`,
   },
   { who: "event", text: "You approve the deploy in the console." },
   {
     who: "tool",
     name: "operation",
     args: `{ "action": "get", "id": "op_31d8" }`,
-    result: "succeeded: https://regional-revenue-tracker.apps.shipcube.dev (private)",
+    result: `succeeded: https://${APP_URL} (private)`,
   },
   {
     who: "tool",
@@ -49,17 +55,19 @@ const CONVERSATION: Turn[] = [
   {
     who: "tool",
     name: "set_access",
-    args: `{ "app": "regional-revenue-tracker", "add": ["group:finance-team@acme-analytics.com"] }`,
-    result: "Access list: kunal@acme-analytics.com (owner), finance-team@acme-analytics.com (viewer)",
+    args: `{ "app": "regional-revenue-tracker", "add": ["group:finance-team@example.com"] }`,
+    result: "Access list: kunal@example.com (owner), finance-team@example.com (viewer)",
   },
   {
     who: "agent",
-    text: "Done. The tracker is live at regional-revenue-tracker.apps.shipcube.dev and bills to acme-analytics-prod. Only you and finance-team@ can open it, and it stops serving at $20 this month. ShipCube expects about $6.80.",
+    text: `Done. The tracker is live at ${APP_URL} and bills to acme-analytics-prod. Only you and finance-team@ can open it, and it stops serving at $20 this month. ShipCube expects about $6.80.`,
   },
 ];
 
 export default async function SetupPage({ searchParams }: { searchParams: Promise<{ welcome?: string }> }) {
   const { welcome } = await searchParams;
+  const h = await headers();
+  const consoleOrigin = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost:3000"}`;
   return (
     <>
       {welcome && (
@@ -78,13 +86,13 @@ export default async function SetupPage({ searchParams }: { searchParams: Promis
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <Panel className="p-5">
-          <ConnectSteps canCreateTokens={await supports("tokens")} mcpUrl={process.env.SHIPCUBE_MCP_URL || MCP_URL} />
+          <ConnectSteps canCreateTokens={await supports("tokens")} mcpUrl={config().mcpUrl} />
         </Panel>
 
         <Panel className="self-start">
           <PanelHeader title="What it looks like" description="Prompt in Claude Code, with ShipCube's tool calls" />
           <ol className="flex flex-col gap-3 p-4">
-            {CONVERSATION.map((t, i) => (
+            {conversation(consoleOrigin).map((t, i) => (
               <li key={i}>
                 {t.who === "event" ? (
                   <div className="flex items-center gap-2 rounded-md border border-dashed border-border-strong px-2.5 py-2 text-[12px] text-fg-muted">
