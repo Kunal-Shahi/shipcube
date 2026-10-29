@@ -47,6 +47,31 @@ cd ../mcp && uv run python -m shipcube_mcp.server          # /mcp + /v1 on :8080
 # Or DEV_MODE (mock deployer, mock estimator, mock telemetry, dev console sessions): SHIPCUBE_DEV_MODE=1
 ```
 
+### Local backend: real builds and containers, no GCP (`SHIPCUBE_BACKEND=local`)
+
+Needs Docker (Docker Desktop or Colima) and, for sources without a Dockerfile, [`pack`](https://buildpacks.io/docs/for-platform-operators/how-to/integrate-ci/pack/) (`brew install buildpacks/tap/pack`).
+
+```bash
+docker network create shipcube-local
+docker run -d --name fake-gcs -p 127.0.0.1:4443:4443 fsouza/fake-gcs-server:1.55.1 \
+  -scheme http -port 4443 -public-host localhost:4443
+export SHIPCUBE_DEV_MODE=1 SHIPCUBE_BACKEND=local SHIPCUBE_LOCAL_GCS_URL=http://localhost:4443
+uv run python -m shipcube_api.worker &          # builds and runs app containers
+uv run python -m shipcube_api.local_iap &       # IAP stand-in on :8088
+# an app is then at http://<service>.localhost:8088 for principals on its access list
+```
+
+| | GCP | Local |
+|---|---|---|
+| Upload | V4 signed PUT to GCS, `ws/<workspace>/uploads/` | V4 signed PUT to fake-gcs-server, same object names |
+| Build | Cloud Build, buildpacks, as the workspace's builder SA | `pack build` (same builder) or `docker build` if there's a Dockerfile |
+| Image | `…/ws-<ws_short>/<service>@sha256:<digest>` | `shipcube.local/ws-<ws_short>/<service>@sha256:<image id>` |
+| Run | Cloud Run gen2, caps, scale to zero | one container per revision on the `shipcube-local` network (labels `managed-by=shipcube`, `shipcube.app`, `shipcube.workspace`, `shipcube.service`), cpu/memory caps, `SHIPCUBE_AI_GATEWAY` when `SHIPCUBE_AI_GATEWAY_URL` is set; old revisions stopped, 5 kept |
+| Access | IAP, `roles/iap.httpsResourceAccessor` | `local_iap.py`: ShipCube token → `/v1/me` → `user:`/`domain:` on the access list; `X-Goog-Authenticated-User-*` headers |
+| Logs | Cloud Logging | `docker logs` (inspect_app logs); no metrics |
+
+Isolation locally is enforced by the deployer (the same `isolation.py` checks: object names from the token's workspace, image ids must be tagged in the workspace's namespace). There is one Docker daemon and no per-workspace identity, so the IAM half exists only on GCP. fake-gcs-server doesn't verify URL signatures.
+
 ## Configure
 
 | Variable | Default | Meaning |
@@ -56,11 +81,17 @@ cd ../mcp && uv run python -m shipcube_mcp.server          # /mcp + /v1 on :8080
 | `SHIPCUBE_DB_IAM_AUTH` | unset | `1` on Cloud Run: each new connection authenticates with an IAM token for the service account (Cloud SQL IAM database auth over the built-in `/cloudsql/<instance>` socket; no proxy, no password) |
 | `SHIPCUBE_TOKEN_PEPPER` | required outside DEV_MODE | HMAC pepper for token digests, from Secret Manager |
 | `SHIPCUBE_IDP_PROJECT` | unset | Identity Platform project for console ID tokens (approvals, restore) |
-| `SHIPCUBE_BACKEND` | `gcp` (`mock` in DEV_MODE) | `mock` is refused outside DEV_MODE |
+| `SHIPCUBE_BACKEND` | `gcp` (`mock` in DEV_MODE) | `gcp`, `local` (Docker + pack + fake-gcs-server, below; DEV_MODE only) or `mock` (tests; DEV_MODE only) |
 | `SHIPCUBE_DEV_MODE` | unset | `1` enables every mock; never set in production |
 | `SHIPCUBE_APPS_PROJECT`, `SHIPCUBE_CONTROL_PROJECT`, `SHIPCUBE_REGION` | `shipcube-apps-ks`, `shipcube-control-ks`, `asia-south1` | Where apps run |
 | `SHIPCUBE_UPLOAD_BUCKET`, `SHIPCUBE_SIGNER_SA`, `SHIPCUBE_REPO`, `SHIPCUBE_BUILDER` | see `settings.py` | Upload bucket, URL signer, Artifact Registry repo in linked projects, buildpacks builder |
 | `SHIPCUBE_BUILDER_SA_TEMPLATE`, `SHIPCUBE_AR_REPO_TEMPLATE`, `SHIPCUBE_UPLOAD_PREFIX_TEMPLATE` | `sc-build-{ws_short}@{apps_project}.iam.gserviceaccount.com`, `ws-{ws_short}`, `ws/{ws}/` | Per-workspace build isolation: each workspace builds as its own SA, reads only its upload prefix and pushes only to its own repo; deploys pin the digest (`deploy/isolation.py`) |
+| `SHIPCUBE_PROVISIONER_SA`, `SHIPCUBE_WORKER_SA`, `SHIPCUBE_BUILD_SUBMITTER_SA` | `sc-provisioner@…`, `sc-worker@…`, `sc-hosted-deployer@…` (control project) | Per-workspace builder provisioning (`GcpDeployer.ensure_builder`) |
+| `SHIPCUBE_LOCAL_STATE` | `.shipcube-local` | Local backend: per-service state (revisions, traffic, access), shared by the worker and `local_iap` |
+| `SHIPCUBE_LOCAL_GCS_URL`, `SHIPCUBE_LOCAL_GCS_PUBLIC_URL` | `http://localhost:4443` (public defaults to the first) | fake-gcs-server as the worker reaches it, and as clients PUT to it (must match its `-public-host`) |
+| `SHIPCUBE_LOCAL_NETWORK`, `SHIPCUBE_LOCAL_IAP_PORT`, `SHIPCUBE_LOCAL_READY_TIMEOUT_S` | `shipcube-local`, `8088`, `90` | Docker network for app containers, local IAP port (also in app URLs), startup wait |
+| `SHIPCUBE_LOCAL_UPSTREAM`, `SHIPCUBE_LOCAL_IAP_API_URL` | `published`, `http://localhost:8080` | How the worker and local_iap reach app containers: `network` (by alias; in compose) or `published` (127.0.0.1 port; on the host). Where local_iap resolves tokens |
+| `SHIPCUBE_AI_GATEWAY_URL` | unset | Injected into local apps as `SHIPCUBE_AI_GATEWAY` |
 | `SHIPCUBE_HOSTED_DEPLOYER_SA` | unset | Impersonate this SA for hosted deploys (production: `sc-hosted-deployer`) |
 | `SHIPCUBE_PROFILER_JOB` | unset | Profiler sandbox job for `estimate_load`; unset means static analysis only |
 | `SHIPCUBE_EMBEDDED_WORKER` | `1` in DEV_MODE, else `0` | Run a worker thread in the API process. Not possible in production: the API's login (`shipcube_app`) is confined to the caller's workspace by RLS, and the worker needs `shipcube_worker`. |

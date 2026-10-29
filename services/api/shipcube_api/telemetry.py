@@ -74,6 +74,11 @@ def telemetry() -> Telemetry:
 
     if _telemetry is not None:
         return _telemetry
+    if settings.backend == "local":
+        from .deploy.local import LocalTelemetry
+        from .store_runtime import deployer
+
+        return LocalTelemetry(deployer())  # type: ignore[arg-type]
     if settings.dev_mode:
         return MockTelemetry()
     try:  # the platform workstream's Cloud Monitoring / Cloud Logging provider

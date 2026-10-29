@@ -54,6 +54,18 @@ class Settings:
     hosted_deployer_sa: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_HOSTED_DEPLOYER_SA") or None)
     # The AI gateway's URL, injected into every deployed app as SHIPCUBE_AI_GATEWAY. Unset: not injected.
     ai_gateway_url: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_AI_GATEWAY_URL") or None)
+    # SHIPCUBE_BACKEND=local (deploy/local.py, local_iap.py): Docker + pack + fake-gcs-server.
+    local_state_dir: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_STATE", ".shipcube-local"))
+    local_gcs_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_GCS_URL", "http://localhost:4443"))
+    # What a client PUTs to (the signed URL's host); differs from local_gcs_url inside compose.
+    local_gcs_public_url: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_LOCAL_GCS_PUBLIC_URL", os.environ.get("SHIPCUBE_LOCAL_GCS_URL", "http://localhost:4443")))
+    local_network: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_NETWORK", "shipcube-local"))
+    # How the worker and local_iap reach app containers: "network" (by alias, when they run on that
+    # Docker network, as in compose) or "published" (the 127.0.0.1 port, when they run on the host).
+    local_upstream: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_UPSTREAM", "published"))
+    local_iap_port: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_LOCAL_IAP_PORT", "8088")))
+    local_ready_timeout_s: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_LOCAL_READY_TIMEOUT_S", "90")))
     builder_image: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_BUILDER", "gcr.io/buildpacks/builder:latest"))
 
 
