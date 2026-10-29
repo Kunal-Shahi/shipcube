@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEV_MCP_URL, config, mockDataEnabled, resetConfig } from "./config";
 
 function withEnv(env: Record<string, string>) {
-  for (const k of ["DEV_MODE", "AUTH_PROVIDER", "K_SERVICE", "SHIPCUBE_API_URL", "IDENTITY_PLATFORM_PROJECT", "NEXT_PUBLIC_FIREBASE_PROJECT_ID", "SHIPCUBE_MCP_URL"]) vi.stubEnv(k, "");
+  for (const k of ["DEV_MODE", "AUTH_PROVIDER", "K_SERVICE", "SHIPCUBE_API_URL", "IDENTITY_PLATFORM_PROJECT", "NEXT_PUBLIC_FIREBASE_PROJECT_ID", "SHIPCUBE_MCP_URL", "FIREBASE_AUTH_EMULATOR_HOST"]) vi.stubEnv(k, "");
   for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
   resetConfig();
 }
@@ -36,6 +36,20 @@ describe("config()", () => {
   it("defaults the MCP URL to the local server in DEV_MODE", () => {
     withEnv({ DEV_MODE: "1" });
     expect(config().mcpUrl).toBe(DEV_MCP_URL);
+  });
+
+  it("uses the Firebase Auth emulator only in DEV_MODE, never on Cloud Run", () => {
+    withEnv({ DEV_MODE: "1", AUTH_PROVIDER: "firebase-emulator" });
+    expect(config()).toMatchObject({ auth: "firebase-emulator", authEmulatorHost: "127.0.0.1:9099", identityProject: "demo-shipcube" });
+    withEnv({ AUTH_PROVIDER: "firebase-emulator", SHIPCUBE_API_URL: "https://api", SHIPCUBE_MCP_URL: "https://mcp/mcp" });
+    expect(() => config()).toThrow(/requires DEV_MODE/);
+    withEnv({ DEV_MODE: "1", AUTH_PROVIDER: "firebase-emulator", K_SERVICE: "c" });
+    expect(() => config()).toThrow(/refused on Cloud Run/);
+  });
+
+  it("refuses FIREBASE_AUTH_EMULATOR_HOST outside DEV_MODE, whatever the provider", () => {
+    withEnv({ SHIPCUBE_API_URL: "https://api", SHIPCUBE_MCP_URL: "https://mcp/mcp", IDENTITY_PLATFORM_PROJECT: "p", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9099" });
+    expect(() => config()).toThrow(/unsigned tokens/);
   });
 
   it("refuses the mock sign-in outside DEV_MODE", () => {

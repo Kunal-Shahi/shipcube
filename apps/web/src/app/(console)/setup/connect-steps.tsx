@@ -48,7 +48,7 @@ export function ConnectSteps({ canCreateTokens, mcpUrl }: { canCreateTokens: boo
           tokens are listed under <a href="/settings/tokens" className="text-accent hover:underline">API tokens</a>.
         </p>
         {canCreateTokens ? (
-          <TokenCreator defaultName="MacBook – Claude Code" compact onCreated={(t) => setToken(t.secret)} />
+          <TokenCreator compact onCreated={(t) => setToken(t.secret)} />
         ) : (
           <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-fg-muted">
             Token creation isn&apos;t available in this deployment yet (it needs <code className="font-mono text-[12px]">POST /v1/tokens</code> on

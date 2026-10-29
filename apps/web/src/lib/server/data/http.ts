@@ -14,8 +14,10 @@ import type {
   ApprovalKind,
   Caps,
   Health,
+  LoadEstimate,
   LogLine,
   Monitoring,
+  ProviderConfig,
   Role,
   TierId,
 } from "@/lib/types";
@@ -27,7 +29,7 @@ import { FEATURE_ENDPOINT, type ConsoleData, type Feature, type PendingApproval 
 
 interface ApiAppSummary { name: string; url: string; tier: string; status: string; updated_at: string }
 interface ApiAccess { principal: string; role: string; granted_at: string }
-interface ApiApp extends ApiAppSummary {
+export interface ApiApp extends ApiAppSummary {
   target: string;
   region: string;
   revision: string;
@@ -38,6 +40,21 @@ interface ApiApp extends ApiAppSummary {
   deleted_at?: string | null;
   restorable_until?: string | null;
   runtime?: Record<string, unknown> | null;
+  /** The load estimate of the deploy that created the app (networking, GET /v1/apps/{app}). */
+  estimate?: ApiEstimate | null;
+}
+export interface ApiEstimate {
+  estimate_id: string;
+  workload_class: string;
+  tier: string;
+  confidence: number;
+  /** A number, or the estimator's {low, high, expected} range. */
+  monthly_cost_usd: number | { low?: number; high?: number; expected?: number };
+  explained_by: string;
+  created_at: string;
+  estimated_by?: string;
+  reasoning?: string[];
+  signals?: { label: string; value: string }[];
 }
 interface ApiLogs { entries: { timestamp: string; severity: string; message: string; revision?: string | null }[]; next_page_token: string | null }
 interface ApiMetrics {
@@ -86,6 +103,38 @@ export function healthOf(status: string): Health {
 /** "512Mi" ↔ "512 MiB" */
 export const memoryToUi = (m: unknown) => (typeof m === "string" ? m.replace(/^(\d+)(Mi|Gi)$/, "$1 $2B") : "512 MiB");
 export const memoryToApi = (m: string) => m.replace(/^(\d+)\s*(Mi|Gi)B$/, "$1$2");
+
+/** Where an app runs. The local stack reports target "local", or the local backend in runtime. */
+export function placementOf(a: Pick<ApiApp, "target" | "region" | "runtime">): Pick<AppDetail, "runsLocally" | "billing" | "region"> {
+  const target = a.target ?? "";
+  if (target === "local" || a.runtime?.backend === "local") return { runsLocally: true };
+  return { billing: target.includes("linked") ? "own-gcp" : "shipcube", region: a.region };
+}
+
+/** Resources come from the app's caps, which deploy set from the estimate's sizing. */
+export function estimateFromApi(e: ApiEstimate, caps: Caps, cpu?: unknown): LoadEstimate {
+  const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
+  const cost = e.monthly_cost_usd;
+  const range = typeof cost === "object" && cost && finite(cost.low) && finite(cost.high) ? { low: cost.low, high: cost.high } : undefined;
+  return {
+    // The estimator writes classes with underscores (bursty_interactive); the console uses hyphens.
+    workloadClass: String(e.workload_class ?? "").replaceAll("_", "-") as LoadEstimate["workloadClass"],
+    confidence: finite(e.confidence) ? e.confidence : 0,
+    recommendedTier: tierOf(e.tier),
+    cpu: `${typeof cpu === "string" || typeof cpu === "number" ? cpu : 1} vCPU`,
+    memory: caps.memory,
+    minInstances: 0,
+    maxInstances: caps.maxInstances,
+    monthlyCost: finite(cost) ? cost : typeof cost === "object" && cost && finite(cost.expected) ? cost.expected : undefined,
+    monthlyCostRange: range,
+    reasoning: e.reasoning ?? [],
+    signals: e.signals ?? [],
+    estimatedBy: e.estimated_by ?? "workload classifier",
+    explainedBy: e.explained_by,
+    estimatedAt: e.created_at,
+    overridden: false,
+  };
+}
 
 export function capsFromApi(c: Record<string, unknown>): Caps {
   const n = (k: string, d = 0) => (typeof c[k] === "number" ? (c[k] as number) : d);
@@ -230,7 +279,7 @@ async function optional<T>(what: string, p: Promise<T>): Promise<T | undefined> 
 }
 
 const notConnected = (f: Feature) => new NotConnectedError(FEATURE_ENDPOINT[f].name, FEATURE_ENDPOINT[f].endpoint);
-const AVAILABLE = new Set<Feature>(["tokens"]);
+const AVAILABLE = new Set<Feature>(["tokens", "approvals_inbox", "providers"]);
 
 interface ApiTokenRow {
   id: string;
@@ -251,6 +300,32 @@ const tokenFromApi = (t: ApiTokenRow): ApiToken => ({
   expiresAt: t.expires_at,
   lastUsedAt: t.last_used_at,
 });
+
+interface ApiProvider {
+  id: ProviderConfig["id"];
+  label: string;
+  description: string;
+  connected: boolean;
+  default: boolean;
+  key_hint: string | null;
+  base_url: string | null;
+  model: string | null;
+  added_at: string | null;
+}
+
+// The API never returns a stored key, only its last 4 characters (key_hint).
+export const providerFromApi = (p: ApiProvider): ProviderConfig => ({
+  id: p.id,
+  label: p.label,
+  description: p.description,
+  connected: p.connected,
+  isDefault: p.default,
+  keyHint: p.key_hint ?? undefined,
+  baseUrl: p.base_url ?? undefined,
+  defaultModel: p.model ?? undefined,
+  addedAt: p.added_at ?? undefined,
+});
+
 const enc = encodeURIComponent;
 
 export const httpData: ConsoleData = {
@@ -279,10 +354,10 @@ export const httpData: ConsoleData = {
       tier: tierOf(a.tier),
       health,
       url: a.url,
-      region: a.region,
+      ...placementOf(a),
+      estimate: a.estimate ? estimateFromApi(a.estimate, caps, a.caps.cpu) : undefined,
       revision: a.revision,
       lastDeployAt: a.updated_at,
-      billing: a.target.startsWith("linked") || a.target.includes("linked") ? "own-gcp" : "shipcube",
       aiProvider: a.ai.provider === "meta" ? `Muse (${a.ai.model})` : `${a.ai.provider} (${a.ai.model})`,
       spendCap: caps.monthlySpend,
       caps,
@@ -319,7 +394,9 @@ export const httpData: ConsoleData = {
   },
 
   async listApprovals() {
-    throw notConnected("approvals_inbox");
+    // Pending ones, plus recent operations a person decided (they keep approval_actions).
+    const { operations } = await api<{ operations: ApiOperation[] }>("/v1/operations?limit=100");
+    return operations.filter((op) => op.status === "awaiting_approval" || (op.approval_actions?.length ?? 0) > 0).map(approvalFromOperation);
   },
 
   async getApproval(id) {
@@ -338,7 +415,8 @@ export const httpData: ConsoleData = {
   },
 
   async pendingApprovalCount() {
-    return null;
+    const r = await optional("pending approvals", api<{ operations: ApiOperation[] }>("/v1/operations?status=awaiting_approval&limit=200"));
+    return r ? r.operations.length : null;
   },
 
   async listTokens() {
@@ -354,13 +432,18 @@ export const httpData: ConsoleData = {
     await api<void>(`/v1/tokens/${enc(id)}`, { method: "DELETE" });
   },
   async listProviders() {
-    throw notConnected("providers");
+    const { providers } = await api<{ providers: ApiProvider[] }>("/v1/ai/providers");
+    return providers.map(providerFromApi);
   },
-  async saveProviderKey() {
-    throw notConnected("providers");
+  async saveProviderKey(id, input) {
+    const p = await api<ApiProvider>(`/v1/ai/providers/${enc(id)}`, {
+      method: "PUT",
+      body: { key: input.key || undefined, base_url: input.baseUrl || undefined, model: input.model || undefined },
+    });
+    return providerFromApi(p);
   },
-  async removeProviderKey() {
-    throw notConnected("providers");
+  async removeProviderKey(id) {
+    await api<void>(`/v1/ai/providers/${enc(id)}`, { method: "DELETE" });
   },
   async getBilling() {
     throw notConnected("billing");

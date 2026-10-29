@@ -523,8 +523,9 @@ export const providers: ProviderConfig[] = [
   {
     id: "meta",
     label: "Meta Muse",
-    description: "Muse Spark through the Meta Model API. Default for every app; ShipCube's own load estimation always uses it.",
+    description: "Muse Spark through the Meta Model API. Included with ShipCube; its own load estimation always uses it.",
     connected: true,
+    isDefault: true,
     defaultModel: "muse-spark",
   },
   {

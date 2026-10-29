@@ -2,10 +2,16 @@
 
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Intent } from "@/lib/auth/types";
 
-export type WebAuthConfig = { apiKey: string; authDomain: string; projectId: string; tenantId?: string } | null;
+// Sign-in opens Google in a popup. Where popups can't work (a popup blocker, an embedded browser,
+// or a browser that opens the window in this same tab, where it has no opener to report back to),
+// it continues in this tab with signInWithRedirect, and this page finishes it with
+// getRedirectResult when Google sends the browser back. Both paths end in the same exchange:
+// the ID token is posted to /api/auth/session, which sets the httpOnly session cookie.
+
+export type WebAuthConfig = { apiKey: string; authDomain: string; projectId: string; tenantId?: string; emulatorUrl?: string } | null;
 
 function GoogleG() {
   return (
@@ -30,6 +36,52 @@ function messageFor(code: string, raw: string): string | null {
   return "Google sign-in didn't complete. Try again.";
 }
 
+/** What a sign-in started in this tab needs after it leaves for Google and comes back. */
+const PENDING_KEY = "sc_sign_in";
+type Pending = { flow: "popup" | "redirect"; intent: Intent; returnTo?: string; at: number };
+const PENDING_TTL_MS = 10 * 60_000;
+
+function readPending(): Pending | null {
+  try {
+    const p = JSON.parse(sessionStorage.getItem(PENDING_KEY) ?? "null") as Pending | null;
+    return p && Date.now() - p.at < PENDING_TTL_MS ? p : null;
+  } catch {
+    return null;
+  }
+}
+function writePending(p: Pending | null) {
+  try {
+    if (p) sessionStorage.setItem(PENDING_KEY, JSON.stringify(p));
+    else sessionStorage.removeItem(PENDING_KEY);
+  } catch {
+    // Storage blocked: the redirect path can't resume, but the popup path still works.
+  }
+}
+
+/**
+ * Popups don't come back from in-app browsers: Facebook, Instagram, LINE, Android WebViews, and
+ * the Claude desktop app's browser pane, which opens the window in the same tab.
+ */
+function embeddedBrowser() {
+  return /FBAN|FBAV|Instagram|Line\/|; wv\)|Claude\//.test(navigator.userAgent);
+}
+
+/** Errors after which only the redirect flow can work. */
+const USE_REDIRECT = new Set(["auth/popup-blocked", "auth/operation-not-supported-in-environment"]);
+
+async function firebaseAuth(webConfig: NonNullable<WebAuthConfig>) {
+  // Loaded on demand: the Firebase SDK is only needed on this page.
+  const [{ initializeApp, getApps }, fa] = await Promise.all([import("firebase/app"), import("firebase/auth")]);
+  const app = getApps()[0] ?? initializeApp(webConfig);
+  const a = fa.getAuth(app);
+  // Local development: the Firebase Auth emulator stands in for Google (AUTH_PROVIDER=firebase-emulator).
+  if (webConfig.emulatorUrl && !a.emulatorConfig) fa.connectAuthEmulator(a, webConfig.emulatorUrl, { disableWarnings: true });
+  if (webConfig.tenantId) a.tenantId = webConfig.tenantId;
+  const provider = new fa.GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
+  return { a, fa, provider };
+}
+
 export function GoogleSignIn({
   label,
   intent,
@@ -43,43 +95,123 @@ export function GoogleSignIn({
 }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** A popup opened in this tab and never reported back: popups can't work in this browser. */
+  const [popupBroken, setPopupBroken] = useState(false);
   const router = useRouter();
 
-  async function signIn() {
-    setPending(true);
-    setError(null);
-    try {
-      let idToken = "";
-      if (webConfig) {
-        // Loaded on demand: the Firebase SDK is only needed on this page.
-        const [{ initializeApp, getApps }, fa] = await Promise.all([import("firebase/app"), import("firebase/auth")]);
-        const app = getApps()[0] ?? initializeApp(webConfig);
-        const a = fa.getAuth(app);
-        if (webConfig.tenantId) a.tenantId = webConfig.tenantId;
-        // The server session is the source of truth; don't keep a second session in the browser.
-        await fa.setPersistence(a, fa.inMemoryPersistence);
-        const provider = new fa.GoogleAuthProvider();
-        provider.setCustomParameters({ prompt: "select_account" });
-        const cred = await fa.signInWithPopup(a, provider);
-        idToken = await cred.user.getIdToken();
-        await fa.signOut(a);
-      }
+  /** Both flows end here: trade the ID token for the server session, then go on. */
+  const finish = useCallback(
+    async (idToken: string, i: Intent, to?: string) => {
       const res = await fetch("/api/auth/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idToken, intent }),
+        body: JSON.stringify({ idToken, intent: i }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(messageFor(body?.error?.code ?? "", body?.error?.message ?? "") ?? body?.error?.message ?? "Sign-in failed.");
         return;
       }
-      const safe = returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/apps";
+      const safe = to && to.startsWith("/") && !to.startsWith("//") ? to : "/apps";
       router.replace(body.next === "onboarding" ? "/onboarding" : safe);
       router.refresh();
+    },
+    [router],
+  );
+
+  const fail = useCallback((e: unknown) => {
+    const err = e as { code?: string; message?: string };
+    setError(messageFor(err.code ?? "", err.message ?? ""));
+  }, []);
+
+  // Back from Google after a redirect, or back on this page after a popup that opened in this
+  // tab and so could never report back.
+  useEffect(() => {
+    if (!webConfig) return;
+    const resume = async () => {
+      const p = readPending();
+      if (!p) return;
+      writePending(null);
+      if (p.flow === "popup") {
+        setPending(false);
+        setPopupBroken(true);
+        return;
+      }
+      setPending(true);
+      try {
+        const { a, fa } = await firebaseAuth(webConfig);
+        await fa.setPersistence(a, fa.browserSessionPersistence);
+        const cred = await fa.getRedirectResult(a);
+        // No result: the browser went to Google's popup page in this tab instead (the redirect
+        // raced a blocked popup's navigation). Use the redirect flow from now on.
+        if (!cred) {
+          setPopupBroken(true);
+          return;
+        }
+        const idToken = await cred.user.getIdToken();
+        await fa.signOut(a);
+        await finish(idToken, p.intent, p.returnTo);
+      } catch (e) {
+        fail(e);
+      } finally {
+        setPending(false);
+      }
+    };
+    void resume();
+    // A page restored from the back-forward cache doesn't re-run effects.
+    const onShow = (e: PageTransitionEvent) => e.persisted && void resume();
+    window.addEventListener("pageshow", onShow);
+    return () => window.removeEventListener("pageshow", onShow);
+  }, [webConfig, finish, fail]);
+
+  async function redirect() {
+    if (!webConfig) return;
+    setPending(true);
+    setError(null);
+    try {
+      const { a, fa, provider } = await firebaseAuth(webConfig);
+      // The redirect result has to survive leaving the page; signOut clears it once used.
+      await fa.setPersistence(a, fa.browserSessionPersistence);
+      writePending({ flow: "redirect", intent, returnTo, at: Date.now() });
+      await fa.signInWithRedirect(a, provider);
     } catch (e) {
-      const err = e as { code?: string; message?: string };
-      setError(messageFor(err.code ?? "", err.message ?? ""));
+      writePending(null);
+      fail(e);
+      setPending(false);
+    }
+  }
+
+  async function signIn() {
+    if (webConfig && (popupBroken || embeddedBrowser())) return redirect();
+    setPending(true);
+    setError(null);
+    try {
+      let idToken = "";
+      if (webConfig) {
+        const { a, fa, provider } = await firebaseAuth(webConfig);
+        // The server session is the source of truth; don't keep a second session in the browser.
+        await fa.setPersistence(a, fa.inMemoryPersistence);
+        // If the popup opens in this tab instead, this page unloads; the marker lets it offer
+        // the redirect flow when the person comes back.
+        writePending({ flow: "popup", intent, returnTo, at: Date.now() });
+        let cred;
+        try {
+          cred = await fa.signInWithPopup(a, provider);
+        } catch (e) {
+          // A blocked popup may still have sent this tab to Google (the Claude browser pane does);
+          // keep the marker so that coming back here switches to the redirect flow.
+          if (!USE_REDIRECT.has((e as { code?: string }).code ?? "")) writePending(null);
+          throw e;
+        }
+        writePending(null);
+        idToken = await cred.user.getIdToken();
+        await fa.signOut(a);
+      }
+      await finish(idToken, intent, returnTo);
+    } catch (e) {
+      const code = (e as { code?: string }).code ?? "";
+      if (USE_REDIRECT.has(code)) return redirect();
+      fail(e);
     } finally {
       setPending(false);
     }
@@ -96,6 +228,15 @@ export function GoogleSignIn({
         {pending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <GoogleG />}
         {pending ? "Waiting for Google…" : label}
       </button>
+      {webConfig && !pending && (
+        // Always offered: no detection catches every browser where the popup can't work.
+        <p className="text-[12px] text-fg-muted">
+          {popupBroken ? "The sign-in window opened in this tab and couldn't finish. " : "Sign-in window not opening? "}
+          <button type="button" onClick={redirect} className="text-accent hover:underline">
+            Sign in in this tab
+          </button>
+        </p>
+      )}
       {error && (
         <p role="alert" className="text-[12px] text-critical">
           {error}

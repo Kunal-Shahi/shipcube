@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalFromOperation, capsFromApi, capsToApi, grantFromApi, healthOf, type ApiOperation } from "./http";
+import { approvalFromOperation, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, placementOf, providerFromApi, type ApiOperation } from "./http";
 
 const op = (over: Partial<ApiOperation>): ApiOperation => ({
   id: "op_1",
@@ -33,6 +33,59 @@ describe("approvalFromOperation", () => {
 
   it("falls back to the operation kind when approval_actions is missing", () => {
     expect(approvalFromOperation(op({ kind: "delete", approval_actions: [] })).kind).toBe("delete_app");
+  });
+});
+
+describe("estimateFromApi", () => {
+  it("maps the API's estimate, with sizing from the caps deploy set", () => {
+    const caps = capsFromApi({ monthly_spend_usd: 20, max_instances: 3, memory: "512Mi", concurrency: 80, requests_per_minute: 120 });
+    const e = estimateFromApi(
+      { estimate_id: "est_1", workload_class: "bursty-interactive", tier: "T1", confidence: 0.91, monthly_cost_usd: 6.8, explained_by: "muse-spark", created_at: "2026-10-29T10:00:00Z" },
+      caps,
+      "1",
+    );
+    expect(e).toMatchObject({
+      workloadClass: "bursty-interactive",
+      recommendedTier: "T1",
+      confidence: 0.91,
+      monthlyCost: 6.8,
+      cpu: "1 vCPU",
+      memory: "512 MiB",
+      maxInstances: 3,
+      explainedBy: "muse-spark",
+      reasoning: [],
+      signals: [],
+    });
+  });
+});
+
+describe("estimateFromApi with the estimator's own shapes", () => {
+  it("reads a {low, high, expected} cost and an underscored class", () => {
+    const caps = capsFromApi({ max_instances: 2, memory: "512Mi" });
+    const e = estimateFromApi(
+      { estimate_id: "e", workload_class: "bursty_interactive", tier: "T1", confidence: 0.62, monthly_cost_usd: { low: 0.07, high: 0.51, expected: 0.19 }, explained_by: "rules", created_at: "2026-10-29T00:00:00Z" },
+      caps,
+    );
+    expect(e).toMatchObject({ workloadClass: "bursty-interactive", monthlyCost: 0.19, monthlyCostRange: { low: 0.07, high: 0.51 } });
+  });
+  it("leaves the cost undefined, never NaN, when there's no number", () => {
+    const e = estimateFromApi(
+      { estimate_id: "e", workload_class: "", tier: "T1", confidence: NaN, monthly_cost_usd: {}, explained_by: "rules", created_at: "2026-10-29T00:00:00Z" },
+      capsFromApi({}),
+    );
+    expect(e.monthlyCost).toBeUndefined();
+    expect(e.confidence).toBe(0);
+  });
+});
+
+describe("placementOf", () => {
+  it("shows local apps as local, with no GCP region or billing", () => {
+    expect(placementOf({ target: "local", region: "asia-south1" })).toEqual({ runsLocally: true });
+    expect(placementOf({ target: "shipcube", region: "asia-south1", runtime: { backend: "local" } })).toEqual({ runsLocally: true });
+  });
+  it("tells ShipCube's project from a linked one", () => {
+    expect(placementOf({ target: "shipcube", region: "asia-south1", runtime: { backend: "gcp" } })).toEqual({ billing: "shipcube", region: "asia-south1" });
+    expect(placementOf({ target: "linked:acme-prod", region: "us-central1" })).toEqual({ billing: "own-gcp", region: "us-central1" });
   });
 });
 
@@ -73,5 +126,18 @@ describe("monitoringFromApi", () => {
     expect(m.errorRate).toBe(1.2);
     expect(m.p95Ms).toBe(410);
     expect(m.freshness).toBe("fresh");
+  });
+});
+
+describe("providerFromApi", () => {
+  it("keeps only the key hint, and maps the rest to lib/types", () => {
+    const p = providerFromApi({
+      id: "anthropic", label: "Anthropic", description: "Your own Anthropic API key.", connected: true, default: true,
+      key_hint: "…Wxyz", base_url: null, model: "claude-haiku-5-5", added_at: "2026-10-29T03:00:00Z",
+    });
+    expect(p).toEqual({
+      id: "anthropic", label: "Anthropic", description: "Your own Anthropic API key.", connected: true, isDefault: true,
+      keyHint: "…Wxyz", baseUrl: undefined, defaultModel: "claude-haiku-5-5", addedAt: "2026-10-29T03:00:00Z",
+    });
   });
 });
