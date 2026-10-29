@@ -34,6 +34,8 @@ export interface AppSummary {
   url: string;
   region?: string;
   billing?: Billing;
+  /** Runs in the local stack's Docker, not on GCP (DEV_MODE only). */
+  runsLocally?: boolean;
   costMonthToDate?: number;
   spendCap?: number;
   requests24h?: number;
@@ -53,7 +55,10 @@ export interface LoadEstimate {
   memory: string;
   minInstances: number;
   maxInstances: number;
-  monthlyCost: number;
+  /** Expected monthly cost; undefined when the estimate has no usable number. */
+  monthlyCost?: number;
+  /** The estimator's range around monthlyCost, when it gives one. */
+  monthlyCostRange?: { low: number; high: number };
   reasoning: string[];
   signals: { label: string; value: string }[];
   /** The classifier that produced the numbers. */
@@ -154,6 +159,8 @@ export interface ProviderConfig {
   label: string;
   description: string;
   connected: boolean;
+  /** The workspace's default provider: apps without an override use it. Saving a key makes that provider the default. */
+  isDefault?: boolean;
   keyHint?: string;
   baseUrl?: string;
   defaultModel?: string;

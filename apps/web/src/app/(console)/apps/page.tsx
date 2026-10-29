@@ -51,7 +51,7 @@ async function AppsTable({ state }: { state: DemoState }) {
                 Code and ask it to deploy, for example:
               </p>
               <div className="mt-3 max-w-[560px]">
-                <CodeBlock label="Prompt" wrap code="Deploy this tracker with ShipCube and share it with finance-team@acme-analytics.com" />
+                <CodeBlock label="Prompt" wrap code="Deploy this tracker with ShipCube and share it with finance-team@example.com" />
               </div>
             </>
           }

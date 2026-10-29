@@ -202,6 +202,8 @@ export const mockData: ConsoleData = {
       throw new ApiError("invalid_argument", `${p.label} rejected this key (401 Unauthorized). ${p.label} keys start with "${prefix}". Check you copied the whole key.`, 400, "");
     }
     Object.assign(p, { connected: true, keyHint: `${key.slice(0, 3)}…${key.slice(-4)}`, baseUrl, defaultModel: model, addedAt: new Date().toISOString() });
+    // Like the API: the provider whose key was just saved becomes the workspace default.
+    for (const x of providers) x.isDefault = x === p;
     return p;
   },
 
@@ -209,6 +211,7 @@ export const mockData: ConsoleData = {
     await wait(300);
     const p = providers.find((x) => x.id === id);
     if (p) Object.assign(p, { connected: false, keyHint: undefined });
+    if (!providers.some((x) => x.isDefault && x.connected)) for (const x of providers) x.isDefault = x.id === "meta";
   },
 
   async getBilling(state) {

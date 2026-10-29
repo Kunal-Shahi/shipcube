@@ -25,7 +25,7 @@ gcloud iam service-accounts add-iam-policy-binding "$DEPLOYER" --project "$PROJE
 for role in roles/run.admin roles/cloudbuild.builds.editor roles/serviceusage.serviceUsageConsumer roles/storage.admin; do
   gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$DEPLOYER" --role "$role" --condition None >/dev/null
 done
-for sa in "$SA_API" "$SA_GATEWAY" "$SA_WEB" "$SA_BUILD"; do
+for sa in "$SA_API" "$SA_WORKER" "$SA_GATEWAY" "$SA_WEB" "$SA_BUILD"; do
   gcloud iam service-accounts add-iam-policy-binding "$sa" --project "$PROJECT" \
     --member "serviceAccount:$DEPLOYER" --role roles/iam.serviceAccountUser >/dev/null
 done

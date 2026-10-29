@@ -58,13 +58,20 @@ export function codeForStatus(status: number): ErrorCode {
   return "internal";
 }
 
+/** False for messages that only restate the status ("403 Forbidden", "Forbidden"). */
+function specific(message: string) {
+  const m = message.trim();
+  return m !== "" && !/^\d{3}\b/.test(m) && !/^(forbidden|permission denied)\.?$/i.test(m);
+}
+
 /** One sentence a person can act on, for an error shown in the UI. */
 export function describeError(e: ActionError): string {
   switch (e.code) {
     case "unauthenticated":
       return "Your session ended. Sign in again and retry.";
     case "permission_denied":
-      return "Your role in this workspace doesn't allow this. Ask a workspace owner.";
+      // The API often says why (a proposer can't apply their own migration); a role is only the fallback.
+      return specific(e.message) ? e.message : "Your role in this workspace doesn't allow this. Ask a workspace owner.";
     case "conflict":
       return `${e.message} Reload the page to see the latest state.`;
     case "rate_limited":

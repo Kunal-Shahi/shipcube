@@ -14,6 +14,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import time
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -28,6 +29,9 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 
 from .backend import Api, ApiError
+
+# Where approval links point. Set per environment; the default is the local console.
+CONSOLE_URL = os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000").rstrip("/")
 
 log = logging.getLogger(__name__)
 
@@ -76,13 +80,37 @@ class ShipcubeDataBackend:
     """shipcube-data on its demo warehouse (DuckDB in memory, Olist migrations).
 
     The library's catalog is a sqlite3 connection, which is bound to the thread that opened it,
-    so one dedicated worker thread builds the layer and runs every call."""
+    so one dedicated worker thread builds the layer and runs every call.
+
+    The build (about 4.6 s on one Cloud Run vCPU) runs in the background so the server starts
+    listening at once. The worker thread is FIFO, so a call that arrives first simply waits for it."""
 
     name = "shipcube-data"
 
     def __init__(self, workspace_id: str, migrations: Path) -> None:
+        from shipcube_data.tools import DataTools
+
+        self._layer: Any = None
+        self._build_error: str | None = None
+        self._tools = DataTools(lambda _ws: self._require_layer())  # specs need no layer
         self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="shipcube-data")
-        self._worker.submit(self._build, workspace_id, migrations).result()
+        self._worker.submit(self._build_logged, workspace_id, migrations)
+
+    def _build_logged(self, workspace_id: str, migrations: Path) -> None:
+        started = time.monotonic()
+        try:
+            self._build(workspace_id, migrations)
+        except Exception as e:  # noqa: BLE001 — reported on every data call instead of crashing the server
+            self._build_error = f"{type(e).__name__}: {e}"
+            log.exception("data layer build failed")
+            return
+        log.info("data layer ready", extra={"seconds": round(time.monotonic() - started, 2)})
+
+    def _require_layer(self) -> Any:
+        if self._layer is None:
+            raise DataToolError("data_unavailable", f"the data layer failed to start: {self._build_error}",
+                                "Check the MCP server's logs for 'data layer build failed'.")
+        return self._layer
 
     def _build(self, workspace_id: str, migrations: Path) -> None:
         import duckdb
@@ -90,8 +118,6 @@ class ShipcubeDataBackend:
         from shipcube_data.catalog import Catalog
         from shipcube_data.engine import DataLayer, duckdb_executor
         from shipcube_data.migrate import Runner, load_dir
-        from shipcube_data.tools import DataTools
-
         warehouse = duckdb.connect()
         demo.build(warehouse)
         runner = Runner(Catalog(workspace_id=workspace_id))
@@ -101,8 +127,7 @@ class ShipcubeDataBackend:
         for pair in os.environ.get("SHIPCUBE_DATA_DEMO_TENANTS", "example.com=acme").split(","):
             domain, _, tenant = pair.partition("=")
             runner.catalog.set_attribute("domain", domain.strip(), "tenant", tenant.strip(), by="system:shipcube-mcp")
-        layer = DataLayer(runner.catalog, duckdb_executor(warehouse))
-        self._tools = DataTools(lambda _ws: layer)
+        self._layer = DataLayer(runner.catalog, duckdb_executor(warehouse))
 
     def specs(self) -> list[dict[str, Any]]:
         return self._tools.specs(prefix="")  # names without data_; mount_data_tools adds PREFIX
@@ -172,7 +197,7 @@ class StubDataBackend:
         if name == "propose_migration":
             mid = f"mig_{uuid.uuid4().hex[:8]}"
             return {"id": mid, "class": "additive", "diff": args["ops"],
-                    "approval_url": f"https://console.shipcube.dev/w/{caller.workspace_id}/data/migrations/{mid}",
+                    "approval_url": f"{CONSOLE_URL}/w/{caller.workspace_id}/data/migrations/{mid}",
                     "auto_approved": False}
         raise DataToolError("unknown_tool", f"no tool named {name}")
 

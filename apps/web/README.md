@@ -19,6 +19,17 @@ DEV_MODE=1 npm run dev
 
 Open http://localhost:3000 and choose **Continue with Google**. In `DEV_MODE` this signs you in as a demo user without contacting Google.
 
+### With the Firebase Auth emulator
+
+The same popup, ID token and session cookie flow as production, with the emulator in place of Google. It needs Node only:
+
+```bash
+npx firebase-tools emulators:start --only auth --project demo-shipcube   # in another terminal
+DEV_MODE=1 AUTH_PROVIDER=firebase-emulator SHIPCUBE_API_URL=http://127.0.0.1:8080 SHIPCUBE_MCP_URL=http://localhost:8080/mcp SHIPCUBE_DEV_API_SESSION=<the API's dev console token> npm run dev
+```
+
+The emulator's popup lets you type any email address. The API can't verify the emulator's unsigned tokens, so the console calls it with `SHIPCUBE_DEV_API_SESSION`, as the API's bootstrap user.
+
 ### Against a local control-plane API
 
 Start `services/api` with a console session token (see its README), then point the console at it. The mock sign-in sends that token to the API, so approvals, restores and caps go through the real API.
@@ -37,6 +48,7 @@ DEV_MODE=1 SHIPCUBE_API_URL=http://127.0.0.1:8081 SHIPCUBE_DEV_API_SESSION=sc_se
 | `npm run lint` | ESLint (`next/core-web-vitals`, TypeScript) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Unit tests: the API client (timeouts, retries, errors), API-to-console mapping, config guards, and WCAG contrast of the design tokens |
+| `npm run test:e2e` | Playwright against a running local stack: sign in, create a PAT, the setup guide, the smoke app, access, caps, delete and restore. See [`e2e/README.md`](e2e/README.md) |
 | `npm run test:integration` | Runs the HTTP data source against a live API. Set `SHIPCUBE_IT_API_URL` and `SHIPCUBE_IT_SESSION`; skipped otherwise |
 
 ### Previewing states in `DEV_MODE`
@@ -55,9 +67,12 @@ Everything is read from the environment at request time.
 
 | Variable | Required | Meaning |
 |---|---|---|
-| `SHIPCUBE_API_URL` | Yes, unless `DEV_MODE=1` | Control-plane API base URL, e.g. `https://api.shipcube.dev` |
+| `SHIPCUBE_API_URL` | Yes, unless `DEV_MODE=1` | Control-plane API base URL: the `shipcube-mcp` Cloud Run service URL |
+| `SHIPCUBE_MCP_URL` | Yes, unless `DEV_MODE=1` | The MCP endpoint shown on the setup guide: `<your ShipCube MCP URL>`, the `shipcube-mcp` service URL plus `/mcp`. Must be `https` in production; the server exits at boot without it. `DEV_MODE` defaults to `http://localhost:8080/mcp` |
 | `SHIPCUBE_API_TIMEOUT_MS` | No (10000) | Per-request timeout for API calls |
-| `AUTH_PROVIDER` | No | `identity-platform` (default) or `mock` (`DEV_MODE` only) |
+| `AUTH_PROVIDER` | No | `identity-platform` (default). `DEV_MODE` only: `firebase-emulator` (the real sign-in flow against the Firebase Auth emulator) or `mock` |
+| `FIREBASE_AUTH_EMULATOR_HOST` | With `firebase-emulator` (`127.0.0.1:9099`) | The emulator as the console server reaches it. Refused outside `DEV_MODE` with any provider, because the Admin SDK would accept unsigned tokens |
+| `FIREBASE_AUTH_EMULATOR_PUBLIC_URL` | No | The emulator as the browser reaches it, when that differs (Docker Compose) |
 | `IDENTITY_PLATFORM_PROJECT` | Yes for Identity Platform | Project that hosts Identity Platform, e.g. `shipcube-control-ks` |
 | `FIREBASE_WEB_API_KEY` | Yes for Identity Platform | The web API key from Identity Platform → Application setup details. It's public by design, not a secret |
 | `FIREBASE_AUTH_DOMAIN` | No | Defaults to `<project>.firebaseapp.com`. Set it if you use a custom auth domain |
