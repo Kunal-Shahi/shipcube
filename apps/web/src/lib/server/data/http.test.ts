@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalFromOperation, camelize, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, placementOf, providerFromApi, type ApiOperation } from "./http";
+import { approvalFromOperation, camelize, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, linkFromApi, placementOf, providerFromApi, type ApiOperation } from "./http";
 
 const op = (over: Partial<ApiOperation>): ApiOperation => ({
   id: "op_1",
@@ -85,7 +85,28 @@ describe("placementOf", () => {
   });
   it("tells ShipCube's project from a linked one", () => {
     expect(placementOf({ target: "shipcube", region: "asia-south1", runtime: { backend: "gcp" } })).toEqual({ billing: "shipcube", region: "asia-south1" });
-    expect(placementOf({ target: "linked:acme-prod", region: "us-central1" })).toEqual({ billing: "own-gcp", region: "us-central1" });
+    expect(placementOf({ target: "0b6c3a52-61a4-4d2e-9b1f-5c7e8d9a0f12", region: "us-central1" })).toEqual({ billing: "own-gcp", region: "us-central1" });
+    expect(placementOf({ target: "0b6c3a52-61a4-4d2e-9b1f-5c7e8d9a0f12", region: "local" })).toEqual({ runsLocally: true });
+  });
+});
+
+describe("linkFromApi", () => {
+  const row = {
+    id: "l1",
+    project_id: "acme-prod",
+    region: "europe-west1",
+    deployer_sa: "ws-abc-deployer@shipcube-control-ks.iam.gserviceaccount.com",
+    linked_at: "2026-10-29T00:00:00Z",
+  };
+
+  it("treats an active link as linked, dated by its last check", () => {
+    const l = linkFromApi({ ...row, status: "active", missing_permissions: [], verified_at: "2026-10-30T00:00:00Z" });
+    expect(l).toMatchObject({ linked: true, projectId: "acme-prod", region: "europe-west1", linkedAt: "2026-10-30T00:00:00Z", status: "active" });
+  });
+
+  it("keeps a broken link unlinked, with what's missing", () => {
+    const l = linkFromApi({ ...row, status: "broken", missing_permissions: ["run.services.create"], verified_at: null });
+    expect(l).toMatchObject({ linked: false, status: "broken", missingPermissions: ["run.services.create"], linkedAt: "2026-10-29T00:00:00Z" });
   });
 });
 

@@ -14,6 +14,7 @@ import type {
   ApprovalKind,
   Caps,
   Cube,
+  GcpLink,
   Health,
   LoadEstimate,
   LogLine,
@@ -107,11 +108,12 @@ export function healthOf(status: string): Health {
 export const memoryToUi = (m: unknown) => (typeof m === "string" ? m.replace(/^(\d+)(Mi|Gi)$/, "$1 $2B") : "512 MiB");
 export const memoryToApi = (m: string) => m.replace(/^(\d+)\s*(Mi|Gi)B$/, "$1$2");
 
-/** Where an app runs. The local stack reports target "local", or the local backend in runtime. */
+/** Where an app runs. The local stack reports target or region "local", or the local backend in runtime; a
+ * linked project's apps have the link's id as their target. */
 export function placementOf(a: Pick<ApiApp, "target" | "region" | "runtime">): Pick<AppDetail, "runsLocally" | "billing" | "region"> {
   const target = a.target ?? "";
-  if (target === "local" || a.runtime?.backend === "local") return { runsLocally: true };
-  return { billing: target.includes("linked") ? "own-gcp" : "shipcube", region: a.region };
+  if (target === "local" || a.region === "local" || a.runtime?.backend === "local") return { runsLocally: true };
+  return { billing: target === "shipcube" ? "shipcube" : "own-gcp", region: a.region };
 }
 
 /** Resources come from the app's caps, which deploy set from the estimate's sizing. */
@@ -282,7 +284,28 @@ async function optional<T>(what: string, p: Promise<T>): Promise<T | undefined> 
 }
 
 const notConnected = (f: Feature) => new NotConnectedError(FEATURE_ENDPOINT[f].name, FEATURE_ENDPOINT[f].endpoint);
-const AVAILABLE = new Set<Feature>(["tokens", "data", "approvals_inbox", "providers"]);
+const AVAILABLE = new Set<Feature>(["tokens", "data", "approvals_inbox", "providers", "gcp_link"]);
+
+export interface ApiGcpLink {
+  id: string;
+  project_id: string;
+  region: string;
+  status: "active" | "broken";
+  deployer_sa: string;
+  missing_permissions: string[];
+  linked_at: string | null;
+  verified_at: string | null;
+}
+
+export const linkFromApi = (l: ApiGcpLink): GcpLink => ({
+  linked: l.status === "active",
+  projectId: l.project_id,
+  region: l.region,
+  linkedAt: l.verified_at ?? l.linked_at ?? undefined,
+  serviceAccount: l.deployer_sa,
+  status: l.status,
+  missingPermissions: l.missing_permissions,
+});
 
 interface ApiTokenRow {
   id: string;
@@ -474,8 +497,17 @@ export const httpData: ConsoleData = {
   async getBilling() {
     throw notConnected("billing");
   },
-  async linkGcpProject() {
-    throw notConnected("gcp_link");
+  async getGcpLink() {
+    // New apps default to ShipCube's project; the console shows the first active link, as billing does.
+    const t = await api<{ deployer_sa: string; targets: ApiGcpLink[] }>("/v1/gcp-targets");
+    const active = t.targets.find((l) => l.status === "active");
+    return { deployer: t.deployer_sa, link: active ? linkFromApi(active) : { linked: false } };
+  },
+  async linkGcpProject(input) {
+    // Safe to repeat: the API updates the existing link for the same project.
+    return linkFromApi(
+      await api<ApiGcpLink>("/v1/gcp-targets", { method: "POST", body: { project_id: input.projectId, region: input.region } }),
+    );
   },
   async getWarehouse() {
     return warehouseFromApi(await api<unknown>("/v1/data/warehouse"));

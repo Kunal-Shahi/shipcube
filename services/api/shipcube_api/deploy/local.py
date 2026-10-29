@@ -392,8 +392,13 @@ class LocalDeployer:
 
 
     def verify_link(self, project_id: str, deployer_sa: str) -> list[str]:
-        raise DeployError("invalid_argument", "linking a GCP project needs SHIPCUBE_BACKEND=gcp; the local backend "
-                                              "deploys only to Docker on this machine")
+        """A simulated link: there's no GCP to check, so any project passes except broken-* ones, which
+        report a missing permission like an unfinished link-project.sh would. Apps on a linked target
+        still run in Docker here; the point is to exercise linking, targets and first-deploy approval."""
+        return ["run.services.create"] if project_id.startswith("broken-") else []
+
+    def ensure_link_deployer(self, workspace_id: str, deployer_sa: str) -> None:
+        pass
 
 
 class LocalTelemetry:

@@ -33,9 +33,5 @@ export const getCube = async (name: string) => (await data()).getCube(name);
 export const listMigrations = async (s?: DemoState) => (await data()).listMigrations(s);
 export const getMigration = async (id: string) => (await data()).getMigration(id);
 
-/** This workspace's deployer service account, which the link script grants roles to. */
-export async function deployerAccount(): Promise<string> {
-  if (mockDataEnabled()) return "ws-01jb8k-deployer@shipcube-control-ks.iam.gserviceaccount.com";
-  // Needs the workspace id from GET /v1/me and the control project; served once gcp_link exists.
-  return "";
-}
+/** This workspace's deployer service account, which the link script grants roles to, and its linked project. */
+export const getGcpLink = async () => (await data()).getGcpLink();

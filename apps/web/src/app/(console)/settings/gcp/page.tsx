@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { PageHeader, Panel, PanelHeader } from "@/components/ui";
-import { demoState, deployerAccount, getBilling, supports } from "@/lib/api";
+import { demoState, getBilling, getGcpLink, supports } from "@/lib/api";
 import { money } from "@/lib/format";
 import { GcpSettings } from "./gcp-settings";
 
@@ -8,8 +8,8 @@ export const metadata: Metadata = { title: "GCP project" };
 
 export default async function GcpPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const state = demoState(await searchParams);
-  const [canLink, canBill, deployer] = await Promise.all([supports("gcp_link"), supports("billing"), deployerAccount()]);
-  const billing = canBill ? await getBilling(state) : null;
+  const [canLink, canBill] = await Promise.all([supports("gcp_link"), supports("billing")]);
+  const [billing, gcp] = await Promise.all([canBill ? getBilling(state) : null, canLink ? getGcpLink() : null]);
   return (
     <>
       <PageHeader
@@ -20,8 +20,8 @@ export default async function GcpPage({ searchParams }: { searchParams: Promise<
         <PanelHeader title="Default for new apps" />
         <div className="p-4">
           <GcpSettings
-            link={billing?.gcp ?? { linked: false }}
-            deployer={deployer}
+            link={gcp?.link ?? billing?.gcp ?? { linked: false }}
+            deployer={gcp?.deployer ?? ""}
             canLink={canLink}
             creditsLeft={billing ? money(billing.credits.granted - billing.credits.used) : undefined}
           />

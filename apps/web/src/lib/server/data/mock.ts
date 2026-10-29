@@ -221,6 +221,11 @@ export const mockData: ConsoleData = {
     return billing;
   },
 
+  async getGcpLink() {
+    await wait();
+    return { deployer: "ws-01jb8k-deployer@shipcube-control-ks.iam.gserviceaccount.com", link: billing.gcp };
+  },
+
   async linkGcpProject({ projectId, region }) {
     await wait(900);
     if (!/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)) {

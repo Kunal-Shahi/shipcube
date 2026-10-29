@@ -28,6 +28,7 @@ Switches live in `deploy/local/.env`, created from `deploy/local/.env.local.exam
 | API + MCP | container `api` (127.0.0.1:18080, MCP at `/mcp`) as `sc-api` → `shipcube_app` | | Cloud Run `shipcube-mcp` |
 | Worker | container `worker` as `sc-worker` → `shipcube_worker` (BYPASSRLS) | `SHIPCUBE_EMBEDDED_WORKER=0` | Cloud Run `shipcube-worker` |
 | Deployer | `pack build` (buildpacks) or the app's Dockerfile, then a container on network `shipcube`, behind `local-iap` (networking) | `SHIPCUBE_BACKEND=local` (needs DEV_MODE) | `gcp` |
+| Linked GCP projects | Simulated: the permission check passes for any project ID except `broken-*` (which reports `run.services.create` missing), and linked apps run in Docker like the rest. Exercises linking, `whoami` targets and first-deploy approval | `SHIPCUBE_BACKEND=local` | `testIamPermissions` as the workspace's `ws-*-deployer` SA |
 | Uploads | `fake-gcs` (127.0.0.1:4443): signed PUT URLs and reads, the same code path as GCS | `SHIPCUBE_BACKEND=local` | GCS |
 | App access (IAP) | `local-iap` (127.0.0.1:8088): `http://<service>.localhost:8088`, only principals on the app's access list (401/403/404 like IAP) | `SHIPCUBE_BACKEND=local` | IAP on Cloud Run |
 | Load estimator | classifier + profiler + explainer | `SHIPCUBE_ESTIMATOR=placement` | same |

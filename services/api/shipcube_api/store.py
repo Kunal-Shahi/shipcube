@@ -232,7 +232,8 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
     return {
         "name": app["slug"], "url": app["url"] or "", "tier": app["tier"],
         "target": hosted_target() if app["gcp_link_id"] is None else str(app["gcp_link_id"]),
-        "region": "local" if app["gcp_link_id"] is None and settings.backend == "local" else app["region"],
+        # The local backend runs every app in Docker, linked ones included (deploy/local.py).
+        "region": "local" if settings.backend == "local" else app["region"],
         "status": app["status"],
         "revision": (dep or {}).get("revision") or "", "image": (dep or {}).get("image_digest") or "",
         "caps": app_caps(conn, str(app["workspace_id"]), app["id"]),

@@ -184,6 +184,9 @@ export interface GcpLink {
   region?: string;
   linkedAt?: string;
   serviceAccount?: string;
+  /** broken: the deployer still lacks some of these permissions (link-project.sh hasn't run, or was undone). */
+  status?: "active" | "broken";
+  missingPermissions?: string[];
 }
 
 export interface BillingOverview {

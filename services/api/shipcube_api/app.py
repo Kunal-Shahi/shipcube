@@ -371,7 +371,7 @@ def get_billing(c: Annotated[Caller, Depends(scope("apps:read"))]):
 
 @app.get("/v1/gcp-targets", response_model=GcpTargets)
 def list_gcp_targets(c: Annotated[Caller, Depends(scope("apps:read"))]):
-    return workspace.gcp_targets(c)
+    return workspace.gcp_targets(deployer(), c)
 
 
 @app.post("/v1/gcp-targets", response_model=GcpLink, status_code=201)

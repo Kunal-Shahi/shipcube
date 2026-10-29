@@ -83,6 +83,8 @@ export interface ConsoleData {
   removeProviderKey(id: ProviderConfig["id"]): Promise<void>;
 
   getBilling(state?: DemoState): Promise<BillingOverview>;
+  /** The workspace's deployer SA (what link-project.sh grants roles to) and its active linked project, if any. */
+  getGcpLink(): Promise<{ deployer: string; link: GcpLink }>;
   /** The API checks the deployer's permissions on the project (testIamPermissions). */
   linkGcpProject(input: { projectId: string; region: string }): Promise<GcpLink>;
 
