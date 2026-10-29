@@ -17,6 +17,7 @@ os.environ.setdefault("SHIPCUBE_DEV_MODE", "1")
 os.environ.setdefault("SHIPCUBE_BACKEND", "mock")
 os.environ.setdefault("SHIPCUBE_MOCK_SPEED", "0.05")
 os.environ.setdefault("SHIPCUBE_TOKEN_PEPPER", "test-pepper")
+os.environ.setdefault("SHIPCUBE_LOCAL_SECRETS_FILE", os.path.join(tempfile.mkdtemp(prefix="scsec-"), "secrets.json"))
 
 
 def _start_local_cluster() -> tuple[str, callable]:

@@ -92,6 +92,9 @@ Isolation locally is enforced by the deployer (the same `isolation.py` checks: o
 | `SHIPCUBE_LOCAL_NETWORK`, `SHIPCUBE_LOCAL_IAP_PORT`, `SHIPCUBE_LOCAL_READY_TIMEOUT_S` | `shipcube-local`, `8088`, `90` | Docker network for app containers, local IAP port (also in app URLs), startup wait |
 | `SHIPCUBE_LOCAL_UPSTREAM`, `SHIPCUBE_LOCAL_IAP_API_URL` | `published`, `http://localhost:8080` | How the worker and local_iap reach app containers: `network` (by alias; in compose) or `published` (127.0.0.1 port; on the host). Where local_iap resolves tokens |
 | `SHIPCUBE_AI_GATEWAY_URL` | unset | Injected into local apps as `SHIPCUBE_AI_GATEWAY` |
+| `SHIPCUBE_SECRET_STORE`, `SHIPCUBE_LOCAL_SECRETS_FILE` | `gcp` (`local` in DEV_MODE), `.shipcube-local/secrets.json` | Where BYOK keys from `PUT /v1/ai/providers/{id}` go: Secret Manager in the control project, or (DEV_MODE) a JSON file in the format `infra/local/secretmanager.py` serves. The DB keeps only a reference, last 4 and a SHA-256 fingerprint |
+| `SHIPCUBE_LINK_DEPLOYER_SA_TEMPLATE` | `ws-{ws12}-deployer@{control_project}.iam.gserviceaccount.com` | The per-workspace deployer a user grants roles to (`link-project.sh`); `POST /v1/gcp-targets` checks it with testIamPermissions |
+| `SHIPCUBE_CREDIT_GRANT_USD`, `SHIPCUBE_CREDIT_EXPIRES_AT` | `0`, unset | Credits shown on the billing page against hosted usage (`usage_daily`) |
 | `SHIPCUBE_HOSTED_DEPLOYER_SA` | unset | Impersonate this SA for hosted deploys (production: `sc-hosted-deployer`) |
 | `SHIPCUBE_PROFILER_JOB` | unset | Profiler sandbox job for `estimate_load`; unset means static analysis only |
 | `SHIPCUBE_EMBEDDED_WORKER` | `1` in DEV_MODE, else `0` | Run a worker thread in the API process. Not possible in production: the API's login (`shipcube_app`) is confined to the caller's workspace by RLS, and the worker needs `shipcube_worker`. |

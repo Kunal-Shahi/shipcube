@@ -92,3 +92,6 @@ class MockDeployer:
 
     def purge(self, app: AppRef) -> None:
         self.access.pop(app.service, None)
+
+    def verify_link(self, project_id: str, deployer_sa: str) -> list[str]:
+        return [] if not project_id.startswith("broken-") else ["run.services.create"]

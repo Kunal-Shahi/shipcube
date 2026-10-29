@@ -45,6 +45,12 @@ GCS = "https://storage.googleapis.com/storage/v1"
 INVOKER = "roles/run.invoker"
 ACCESSOR = "roles/iap.httpsResourceAccessor"
 UPLOAD_MAX_BYTES = 100 * 1024 * 1024
+# What deploying into a linked project needs (infra/scripts/link-project.sh grants these).
+LINK_PERMISSIONS = [
+    "run.services.create", "run.services.update", "run.services.setIamPolicy", "cloudbuild.builds.create",
+    "artifactregistry.repositories.uploadArtifacts", "iam.serviceAccounts.actAs", "iap.webServices.setIamPolicy",
+    "serviceusage.services.use",
+]
 # Same as the shared repo's policy in security's Terraform: keep the 5 newest, delete after 30 days.
 REPO_CLEANUP = {
     "keep-5-newest": {"id": "keep-5-newest", "action": "KEEP", "mostRecentVersions": {"keepCount": 5}},
@@ -502,6 +508,23 @@ class GcpDeployer:
                 if e.code != "not_found":
                     raise
         log.info("purged %s in %s", app.service, app.target.project)
+
+
+    def verify_link(self, project_id: str, deployer_sa: str) -> list[str]:
+        """testIamPermissions on the project, as the workspace's deployer (impersonated)."""
+        import google.auth.exceptions
+
+        try:
+            got = self._call(self._session(deployer_sa), "POST",
+                             f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}:testIamPermissions",
+                             json={"permissions": LINK_PERMISSIONS}).get("permissions", [])
+        except google.auth.exceptions.RefreshError:
+            return [f"ShipCube can't act as {deployer_sa} yet (it may still be being created); try again in a minute"]
+        except DeployError as e:
+            if e.code in ("permission_denied", "not_found"):
+                return [f"project {project_id} not found, or {deployer_sa} has no access to it: run link-project.sh"]
+            raise
+        return [p for p in LINK_PERMISSIONS if p not in got]
 
 
 def describe_resources(s: Settings) -> list[str]:
