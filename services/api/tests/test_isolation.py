@@ -65,3 +65,10 @@ def test_built_images_are_pinned_in_the_workspace_repo(client, two):
     assert op["status"] == "succeeded", op
     image = op["result"]["image"]
     assert image.startswith(isolation.image_prefix(settings, a["workspace_id"])) and isolation.DIGEST.search(image)
+
+
+def test_git_estimates_are_paused(client, two):
+    a, _ = two
+    r = client.post("/v1/estimates", json={"source": {"kind": "git", "url": "https://github.com/example/app"}}, headers=a["agent"])
+    assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_argument", r.text
+    assert "paused" in r.json()["error"]["message"]
