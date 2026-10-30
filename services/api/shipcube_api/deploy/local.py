@@ -160,7 +160,7 @@ class LocalDeployer:
         return f"{isolation.LOCAL_REGISTRY}/{isolation.ar_repo(self.s, app.workspace_id)}/"
 
     def check_image(self, app: AppRef, image: str) -> None:
-        isolation.check_image(self.s, app.workspace_id, image)
+        isolation.check_image(self.s, app.workspace_id, image, linked=app.target.kind == "linked")
         if image.startswith(f"{isolation.LOCAL_REGISTRY}/"):
             # The digest is a local image id: it must exist and carry a tag in this workspace's namespace.
             image_id = image.rsplit("@", 1)[1]

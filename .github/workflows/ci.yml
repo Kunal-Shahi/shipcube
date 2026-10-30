@@ -153,6 +153,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: shellcheck
         run: shellcheck -x -e SC1091 deploy/*.sh
+      - name: No dev mode or local values in production manifests (#29)
+        run: python3 deploy/check_production_test.py && python3 deploy/check_production.py deploy/services/*.yaml deploy/*.sh
       - name: YAML
         run: pip install --quiet pyyaml && python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" deploy/*.yaml .github/workflows/*.yml
 

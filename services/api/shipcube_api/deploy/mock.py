@@ -42,7 +42,7 @@ class MockDeployer:
 
     def stage_source(self, app: AppRef, source: dict[str, Any], op_id: str) -> dict[str, Any]:
         self._sleep(1)
-        isolation.check_source(settings, app.workspace_id, source)
+        isolation.check_source(settings, app.workspace_id, source, linked=app.target.kind == "linked")
         if source.get("kind") == "upload" and isolation.upload_object(settings, app.workspace_id, source["upload_id"]) not in self.uploads:
             raise DeployError("invalid_argument", f"upload {source['upload_id']} was not found; PUT the tarball first")
         if source.get("kind") == "image":
