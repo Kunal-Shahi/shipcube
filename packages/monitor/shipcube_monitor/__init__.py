@@ -11,6 +11,7 @@ Usage from the API:
 
 from __future__ import annotations
 
+import logging
 import os
 
 from .alerts import Rule, evaluate, notify
@@ -33,6 +34,12 @@ def provider_from_env(usage: UsageSource | None = None) -> MonitorProvider:
     silent fallback.
     """
     mode = os.environ.get("SHIPCUBE_MONITOR", "gcp")
+    # On Cloud Run only Cloud Monitoring, never Docker stats or canned data, and never dev mode (#29).
+    if any(os.environ.get(k) for k in ("K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB")):
+        dev = any(os.environ.get(k) in ("1", "true") for k in ("DEV_MODE", "SHIPCUBE_DEV_MODE"))
+        if mode != "gcp" or dev:
+            raise RuntimeError(f"refusing SHIPCUBE_MONITOR={mode}{' with dev mode' if dev else ''} on Cloud Run: "
+                               "production reads only Cloud Monitoring")
     if mode == "gcp":
         from .gcp import GcpMonitor
 
@@ -42,7 +49,11 @@ def provider_from_env(usage: UsageSource | None = None) -> MonitorProvider:
 
         return LocalMonitor(usage=usage)
     if mode == "mock":
-        if os.environ.get("DEV_MODE") != "1":
-            raise RuntimeError("SHIPCUBE_MONITOR=mock is only allowed with DEV_MODE=1 (local development)")
+        # SHIPCUBE_DEV_MODE is the one switch name (#29); DEV_MODE still works, with a warning.
+        if os.environ.get("SHIPCUBE_DEV_MODE") != "1" and os.environ.get("DEV_MODE") != "1":
+            raise RuntimeError("SHIPCUBE_MONITOR=mock is only allowed with SHIPCUBE_DEV_MODE=1 "
+                               "(or the deprecated DEV_MODE=1): local development")
+        if os.environ.get("SHIPCUBE_DEV_MODE") != "1":
+            logging.getLogger("shipcube.monitor").warning("DEV_MODE=1 is deprecated; use SHIPCUBE_DEV_MODE=1")
         return MockMonitor()
     raise ValueError(f"SHIPCUBE_MONITOR must be gcp, local or mock, not {mode!r}")
