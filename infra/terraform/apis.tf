@@ -15,6 +15,7 @@ locals {
     "cloudfunctions.googleapis.com", # budget kill switch
     "eventarc.googleapis.com",
     "logging.googleapis.com",
+    "monitoring.googleapis.com", # uptime checks and alerts (modules/monitoring)
   ]
   apps_apis = [
     "run.googleapis.com",

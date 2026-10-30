@@ -24,6 +24,7 @@ Database (Oct 28): roles bootstrapped; migrations `0001`–`0004` applied and ve
 | Registry | `shipcube` (apps, adopted) and `platform` repos; keep 5 newest versions, delete others after 30 days | $0.10/GB-month over 0.5 GB ≈ **<$1** |
 | Network | Profiler sandbox VPC, one /26 subnet, deny-all-egress firewall | free |
 | Billing | Hard-cap budget, topic and kill-switch account (adopted, unchanged) | free |
+| Monitoring | `modules/monitoring`: 4 uptime checks, 8 alert policies (one condition each), 1 email channel | uptime checks ~104k executions/month of 1M free; alerting is billed per condition (~$0.10/condition-month) ≈ **<$1** |
 | APIs | Enables the APIs both projects need (most already on) | free |
 
 **Total ≈ $12–17/month (~₹1,000–1,450), about $40–50 over the rest of the trial**, nearly all Cloud SQL. That is within the ₹24,000 cap.
@@ -97,6 +98,16 @@ Hosted builds run tenant code, so each workspace builds as its own service accou
 - `tests/build-isolation.sh`: live test. It provisions two throwaway workspaces and, with real tokens for A's build SA, checks that A reads its own upload but not B's, can't list the bucket, and can push and pull only its own repo (not B's, `shipcube` or `profiler`). It cleans up on exit. Run it as an apps-project Owner.
 
 Rollout: done on 2026-10-30. `build_isolation` is applied, `build-isolation.sh` passes, hosted builds run as `sc-build-<ws_short>` and deploy by digest, and the shared `sc-builder` (with its bucket-wide read, project-wide registry write and hand-made `logging.logWriter`) is deleted.
+
+## Monitoring (uptime checks and alerts)
+
+`terraform/modules/monitoring` (wired in `monitoring.tf`) watches the control project. Every alert emails one channel, `var.alert_email`, which lives only in the gitignored `terraform.tfvars`, and links to the runbook in `deploy/README.md` (Operate).
+
+- **Uptime checks**, every 5 minutes from 3 regions: console `/api/healthz`, MCP `/health`, gateway `/health`, and worker `/health` (with an OIDC token from the Monitoring service agent, which `deploy/deploy.sh` grants `run.invoker`; the worker answers 503 when its queue loop died or stalled).
+- **Alerts:** a service's uptime check failing from 2+ regions for 5 minutes (one per service); a 5xx ratio above 5% for 5 minutes on any of the four services; no worker instance for 15 minutes (the queue isn't draining); Cloud SQL down for 5 minutes; Cloud SQL CPU above 80% for 15 minutes.
+- **Spend** isn't alerted here: the budget and its kill switch (`budget.tf`) email at 25/50/75/90% and unlink billing at the cap.
+
+Cost: under $1/month (see the table above). Scaling the worker to zero to save money (deploy/README.md) trips the worker alert by design.
 
 ## Database
 

@@ -5,3 +5,4 @@ region             = "asia-south1"
 existing_budget_id = "00000000-0000-0000-0000-000000000000"
 # Every project billed to the account, control project last.
 killswitch_projects = ["shipcube-apps-ks", "OTHER-PROJECT", "shipcube-control-ks"]
+alert_email = "oncall@example.com"

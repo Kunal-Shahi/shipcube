@@ -35,8 +35,7 @@ terraform -chdir=infra/terraform plan -out=tfplan && terraform -chdir=infra/terr
 API_DIR=services/api infra/db/migrate.sh
 # 2. Build and deploy all four services (prints health and URLs):
 DATA_WORKSPACE=<workspace uuid> deploy/deploy.sh
-# 3. Once: uptime checks and alerts
-python3 deploy/monitoring.py --email <on-call address>
+# Uptime checks and alerts are Terraform (infra/terraform/modules/monitoring), applied in step 0.
 ```
 
 Partial deploys: `deploy/deploy.sh --only gateway`, `--no-build` (redeploy the images for the current
@@ -62,7 +61,7 @@ variables `SHIPCUBE_DATA_WORKSPACE` and `SHIPCUBE_PROFILER_ENV_JSON`.
 | console, MCP+API, gateway (scale to zero) | $0–2 | request-based billing; demo traffic fits the free tier |
 | Cloud Build (`E2_HIGHCPU_8`, ~6–8 min per release) | ≈ $0.10–0.15 per release | build minutes on that machine type aren't in the free tier |
 | Artifact Registry, build bucket | < $1 | ~1.5 GB of images, 5 kept per service; sources deleted after 7 days |
-| Uptime checks and alerts | $0 | ~52k executions/month of 1M free |
+| Uptime checks and alerts | < $1 | ~104k uptime executions/month of 1M free; 8 alert conditions (see infra/README.md) |
 | Cloud SQL (already running, security's) | ≈ $11–15 | unchanged |
 
 **Why the worker is always on.** The durable queue is a Postgres table that the worker polls. With
@@ -73,7 +72,7 @@ queued operations wait until it's scaled back up.
 
 ## Operate (runbook)
 
-Alerts (from `monitoring.py`) arrive by email and point here.
+Alerts (from `infra/terraform/modules/monitoring`) arrive by email and point here.
 
 **A service is down**
 1. `gcloud run services describe <svc> --region asia-south1`: is the latest revision ready? Check the
