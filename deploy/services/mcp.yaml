@@ -41,6 +41,8 @@ spec:
             - {name: SHIPCUBE_CONSOLE_URL, value: "${CONSOLE_URL}"}
             # Returned to agents by ai_config; unset, it falls back to http://localhost:8090 (#41).
             - {name: SHIPCUBE_AI_GATEWAY_URL, value: "${GATEWAY_URL}"}
+            # The gateway's ID token must carry this audience for /internal/gateway/* (#20); unset, those routes refuse everyone.
+            - {name: SHIPCUBE_INTERNAL_AUDIENCE, value: "${MCP_URL}"}
             - {name: SHIPCUBE_DATA_WORKSPACE, value: "${DATA_WORKSPACE}"}
             # Warehouse credentials live in this project's Secret Manager (ws-<id>-… secrets); unset, every warehouse with a password is refused.
             - {name: SHIPCUBE_DATA_SECRET_PROJECT, value: "${PROJECT}"}
