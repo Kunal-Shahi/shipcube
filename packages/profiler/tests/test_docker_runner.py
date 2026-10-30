@@ -506,3 +506,32 @@ def test_offline_build_has_no_network_without_fetched_wheels(tmp_path):
     build = subprocess.run(["docker", "build", "--network=none", "-q", "-t", "shipcube-profiler-offline-neg:latest",
                             str(ctx)], capture_output=True, text=True, timeout=600)
     assert build.returncode != 0                             # nothing to install from, and no index to reach
+
+
+# The live shipcube-worker service's profiler settings (Oct 31, 2026): SHIPCUBE_PROFILER unset.
+LIVE_WORKER = {
+    "K_SERVICE": "shipcube-worker",
+    "SHIPCUBE_PROFILER_BUCKET": "shipcube-ks-ml",
+    "SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT": "profiler-build@shipcube-apps-ks.iam.gserviceaccount.com",
+    "SHIPCUBE_PROFILER_NETWORK": "profiler-no-egress",
+    "SHIPCUBE_PROFILER_PROJECT": "shipcube-apps-ks",
+    "SHIPCUBE_PROFILER_REGION": "asia-south1",
+    "SHIPCUBE_PROFILER_REPOSITORY": "profiler",
+    "SHIPCUBE_PROFILER_SERVICE_ACCOUNT": "profiler-sandbox@shipcube-apps-ks.iam.gserviceaccount.com",
+    "SHIPCUBE_PROFILER_SUBNET": "profiler",
+}
+
+
+def test_the_live_worker_still_gets_the_cloud_run_sandbox():
+    assert isinstance(runner_from_env(LIVE_WORKER), CloudRunJobRunner)
+    assert isinstance(runner_from_env({**LIVE_WORKER, "SHIPCUBE_PROFILER": "gcp"}), CloudRunJobRunner)
+
+
+@pytest.mark.parametrize("extra", [{"SHIPCUBE_PROFILER": "local"}, {"SHIPCUBE_PROFILER": "inproc", "SHIPCUBE_DEV_MODE": "1"},
+                                   {"SHIPCUBE_DEV_MODE": "1"}, {"SHIPCUBE_PROFILER": "gcp", "SHIPCUBE_DEV_MODE": "1"}])
+@pytest.mark.parametrize("cloud_run", ["K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB"])
+def test_cloud_run_refuses_every_runner_but_the_sandbox(extra, cloud_run):
+    env = {**{k: v for k, v in LIVE_WORKER.items() if k != "K_SERVICE"}, cloud_run: "x", **extra}
+    with pytest.raises(ProfilerError, match="on Cloud Run") as e:
+        runner_from_env(env)
+    assert e.value.stage == "config"
