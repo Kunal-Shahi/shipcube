@@ -301,6 +301,8 @@ class CloudRunJobRunner:
         h = hints or Hints()
         env = [{"name": "SHIPCUBE_RUN_ID", "value": run_id},
                {"name": NONCE_ENV, "value": nonce},
+               {"name": "SHIPCUBE_AGENT_CPUS", "value": "1"},
+               {"name": "SHIPCUBE_SANDBOX_MEMORY_MB", "value": "2048"},
                {"name": "SHIPCUBE_HINTS", "value": json.dumps(
                    {k: v for k, v in h.__dict__.items() if v is not None and k != "sample_input"})}]
         return {

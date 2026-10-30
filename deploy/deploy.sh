@@ -64,6 +64,23 @@ export IMAGE_API="$IMAGES/api:$TAG" IMAGE_GATEWAY="$IMAGES/gateway:$TAG" IMAGE_C
 export MCP_HOST="${MCP_URL#https://}"
 export CONSOLE_ORIGINS   # both the API (waitlist CORS) and the console (where the form shows) read it
 
+# The profiler sandbox (docs/research/profiler-sandbox.md). Its settings come from Terraform
+# (module.profiler.env), or from PROFILER_ENV_JSON where Terraform state isn't readable (the
+# GitHub deploy workflow). The API (admission) and the worker (runs) both need the switch,
+# SHIPCUBE_PROFILER_JOB = the sandbox's runtime SA. It's on unless PROFILER_ON=0; the quick off
+# switch on a running service is SHIPCUBE_PROFILER_ENABLED=0.
+if want mcp || want worker; then
+  if [ -z "${PROFILER_ENV_JSON:-}" ]; then
+    PROFILER_ENV_JSON="$(terraform -chdir=infra/terraform output -json profiler)"
+  fi
+  PROFILER_JOB=""
+  if [ "${PROFILER_ON:-1}" != 0 ]; then
+    PROFILER_JOB="$(echo "$PROFILER_ENV_JSON" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("SHIPCUBE_PROFILER_SERVICE_ACCOUNT", ""))')"
+  fi
+  echo "profiler: ${PROFILER_JOB:+on (job SA ${PROFILER_JOB})}${PROFILER_JOB:-off}" >&2
+  export PROFILER_JOB
+fi
+
 if want mcp; then
   if [ -z "${DATA_WORKSPACE:-}" ]; then
     echo "warning: DATA_WORKSPACE is unset, so the data_* tools are not mounted (11 of 16 MCP tools)" >&2
@@ -87,11 +104,6 @@ if want mcp; then
 fi
 
 if want worker; then
-  # The profiler sandbox settings come from Terraform (module.profiler.env), or from
-  # PROFILER_ENV_JSON where Terraform state isn't readable (the GitHub deploy workflow).
-  if [ -z "${PROFILER_ENV_JSON:-}" ]; then
-    PROFILER_ENV_JSON="$(terraform -chdir=infra/terraform output -json profiler)"
-  fi
   PROFILER_ENV="$(echo "$PROFILER_ENV_JSON" | python3 -c '
 import json, sys
 for k, v in sorted(json.load(sys.stdin).items()):

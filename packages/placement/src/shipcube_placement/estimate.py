@@ -28,6 +28,33 @@ def _measured(profile, tr: pl.Traffic) -> dict:
     return {k: (round(v, 4) if isinstance(v, float) else v) for k, v in d.items()}
 
 
+STATIC_MAX_CONFIDENCE = 0.4   # below the model's 0.5 gate: a static estimate is always low confidence
+SANDBOX_CONFIDENCE = 0.75
+# Relative to the sandbox the app ran in (1 vCPU / 2 GiB on Cloud Run). The trace thresholds
+# (compute_heavy: >= 1.5 cores) can't be reached by a single process in a 1-vCPU sandbox.
+SATURATED_CPU_P95 = 0.9       # x the CPU limit
+SATURATED_CPU_MEAN = 0.6      # x the CPU limit, over the measured window
+HEAVY_MEMORY = 0.5            # x the memory limit
+
+
+def sandbox_class(profile) -> tuple[str, str] | None:
+    """compute_heavy / memory_heavy for a web app, judged against the sandbox's own limits, or None.
+
+    A measured app that pins the sandbox's CPU, or uses half its memory (or was stopped for
+    memory), is CPU- or memory-bound whatever the trace-trained classifier says: it never
+    saw an app that hit a 1-vCPU ceiling."""
+    if profile.mode != "measured" or not profile.cpu_limit_cores or profile.kind != "web":
+        return None   # scripts: batch_cron is about when they run; their sizing already uses the numbers
+    lim_cpu, lim_mem = profile.cpu_limit_cores, profile.mem_limit_gb or 2.0
+    if (profile.killed_reason or "").startswith("memory") or profile.mem_peak_gb >= HEAVY_MEMORY * lim_mem:
+        return "memory_heavy", (f"peaked at {profile.mem_peak_gb * 1024:.0f} MiB of the sandbox's "
+                                f"{lim_mem * 1024:.0f} MiB, so treated as memory-heavy")
+    if profile.cpu_p95_cores >= SATURATED_CPU_P95 * lim_cpu and profile.cpu_mean_cores >= SATURATED_CPU_MEAN * lim_cpu:
+        return "compute_heavy", (f"kept the sandbox's {lim_cpu:g} vCPU busy (mean {profile.cpu_mean_cores:.2f}, "
+                                 f"p95 {profile.cpu_p95_cores:.2f}), so treated as compute-heavy")
+    return None
+
+
 def decide(features: dict, shape: str):
     """Model + rules policy (docs/research/load-estimation.md §3.5).
 
@@ -120,6 +147,16 @@ def _estimate(estimate_id, source, h: Hints, runner, explainer, fetch_upload, wo
         cls, confidence, decided_by, low_conf, pred, rules_cls = decide(features, shape)
         if rules_cls != cls:
             assumptions.append(f"the rule set alone would call this {rules_cls}")
+        saturated = sandbox_class(profile)
+        if saturated and cls != saturated[0]:
+            cls, confidence, decided_by, low_conf = saturated[0], SANDBOX_CONFIDENCE, "rules", False
+            assumptions.append(saturated[1])
+        if profile.mode != "measured":
+            # Nothing ran: the classifier only saw typical numbers for this app's shape, so its
+            # certainty about those numbers says nothing about the app itself.
+            confidence, low_conf = min(confidence, STATIC_MAX_CONFIDENCE), True
+            assumptions.append("not run, so the class comes from the app's shape only; "
+                               "a CPU- or memory-heavy app can look like any other web app")
         tr = pl.traffic(profile, features, h)
         cpu_need, mem_need = pl.needs(profile)
         tier, target = pl.choose_tier(cls, summary, h, profile, cpu_need, mem_need)

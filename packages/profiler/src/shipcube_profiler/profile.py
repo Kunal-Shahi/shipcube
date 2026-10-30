@@ -70,6 +70,8 @@ class Profile:
     net_blocked: int = 0
     remote_hosts: list[str] = field(default_factory=list)
     remote_ports: list[int] = field(default_factory=list)
+    cpu_limit_cores: float = 0.0     # the sandbox's CPU and memory limits (0 = unknown, e.g. in-process)
+    mem_limit_gb: float = 0.0
     tamper_attempts: int = 0         # signals the app aimed at the agent (all refused by the kernel)
     processes_max: int = 1
     samples: int = 0
