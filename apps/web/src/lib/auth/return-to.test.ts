@@ -11,6 +11,7 @@ describe("safeReturnTo", () => {
 
   it.each([
     "//evil.example", "/\\evil.example", "/\\/evil.example", "/%5Cevil.example".replace("%5C", "\\"),
+    "/.//evil.example", "/x/..//evil.example", "/%2e//evil.example", "/.\\/evil.example",
     "https://evil.example", "javascript:alert(1)", "evil.example", "", "\\\\evil.example",
   ])("refuses %s", (to) => {
     expect(safeReturnTo(to, O)).toBe("/apps");

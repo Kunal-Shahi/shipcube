@@ -6,7 +6,10 @@ export function safeReturnTo(to: string | null | undefined, origin: string, fall
   try {
     const url = new URL(to, origin);
     if (url.origin !== origin) return fallback;
-    return url.pathname + url.search + url.hash;
+    const out = url.pathname + url.search + url.hash;
+    // Dot segments can normalise to "//host" ("/.//evil", "/x/..//evil"): re-check what we return.
+    if (out.startsWith("//") || out.startsWith("/\\") || new URL(out, origin).origin !== origin) return fallback;
+    return out;
   } catch {
     return fallback;
   }
