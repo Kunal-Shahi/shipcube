@@ -54,6 +54,15 @@ All four services were redeployed. The method was as before: code review, read-o
 
 **#45 review: no issues.** The catalog probe now runs on the API's pool under the nil workspace and only reads the migration ledger.
 
+### Verified after the C-1 steps (2026-10-30, later)
+
+Lead ran the C-1 steps; checked live, read-only:
+
+- **Verified:** #46 binding on the uploads bucket (`storage.buckets.get` only). Two hosted builds (`01a602fb`, `9d8804e7`) ran as `sc-build-<ws_short>`, `GCS_ONLY`, logs in `ws/<uuid>/build-logs/`; `golive-check` runs `ws-<ws_short>/…@sha256:…` as its own runtime SA. `sc-builder` has no project or bucket roles and no user-managed keys. The `ws-` repo grants writer to its own builder only. C-1 is closed for new builds.
+- **Mismatch 1:** `sc-builder` still holds `artifactregistry.writer` **on the shared `shipcube` repo** (a repo-level binding from `scripts/gcp_setup.sh`, outside Terraform, so `legacy_shared_builder=false` didn't remove it). Dormant (nothing builds as `sc-builder`), and deleting the SA (#47) ends it, but remove the binding too so the repo policy doesn't keep a `deleted:` member. *(security)*
+- **Mismatch 2:** the `firebase-adminsdk-fbsvc` change was made in the **control** project only. In **`shipcube-apps-ks`** that SA still has project-level `roles/iam.serviceAccountTokenCreator`, i.e. it can mint tokens for every SA there, including the Editor compute SA and every tenant runtime and builder SA. No user-managed keys exist, so it's not exploitable from outside today; apply the same self-only fix there. *(security)*
+- **Still open:** `hello-tracker` on a shared-repo tag; H-2 (`roles/editor` on default compute and App Engine SAs); O-1 (no alerts).
+
 ### Unchanged since the morning
 
 - **R-1 (#42)** is still latent: the hosted gateway reads `GATEWAY_REGISTRY_FILE`, not `provider_configs`. `set_ai` is unchanged (`store.py:605-614`).
