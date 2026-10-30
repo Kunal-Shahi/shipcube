@@ -39,8 +39,12 @@ class PlacementEstimator:
         from shipcube_profiler import CloudRunJobRunner, StaticRunner
 
         if static_reason:
-            # The profiler guard said no (quota, budget, busy, disabled, image_source): never run the code.
-            runner = StaticRunner()
+            # The profiler guard said no (quota, budget, suspended, busy, disabled, image_source): never run
+            # the code. StaticRunner(reason=...) records it as profile.static_reason (shipcube_profiler.STATIC_REASONS).
+            try:
+                runner = StaticRunner(reason=static_reason)
+            except TypeError:  # a shipcube_profiler from before the reason codes; with_static_reason adds it below
+                runner = StaticRunner()
         elif os.environ.get("SHIPCUBE_PROFILER"):
             # Explicit sandbox choice (e.g. `local`: docker run --network none on the local stack);
             # shipcube_profiler.runner_from_env reads SHIPCUBE_PROFILER and its limits.

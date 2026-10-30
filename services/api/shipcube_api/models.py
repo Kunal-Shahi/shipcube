@@ -148,6 +148,9 @@ class EstimateRequest(_Model):
     app: AppName | None = None
     expected_users: int | None = Field(None, ge=1, description="Rough number of people who will open the app")
     schedule: str | None = Field(None, description="Cron expression if this is a scheduled job")
+    region: str | None = Field(None, description="GCP region to price for, e.g. us-central1")
+    traffic: Literal["office_hours", "always_on"] | None = Field(
+        None, description="office_hours: people opening pages in the working day; always_on: other systems calling an API")
 
 
 class DeployRequest(_Model):

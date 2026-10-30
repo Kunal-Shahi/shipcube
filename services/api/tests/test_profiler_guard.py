@@ -20,9 +20,11 @@ GIT = {"kind": "git", "url": "https://github.com/example/app"}
 class RecordingEstimator:
     def __init__(self):
         self.calls = []
+        self.hints = []
 
     def estimate(self, source, hints, *, workspace_id, op_id, static_reason=None):
         self.calls.append(static_reason)
+        self.hints.append(hints)
         profile = {"measurements": {"mode": "static" if static_reason else "measured"}}
         if static_reason:
             profile["static_reason"] = static_reason
@@ -321,3 +323,14 @@ def test_a_janitor_error_does_not_stop_housekeeping(client):
         conn.execute("update operations set created_at = now() - interval '11 minutes' where id = %s", (op,))
     _worker(janitor=Janitor(Broken(datetime.now(UTC)))).housekeeping()
     assert _op(op)["input"]["static_reason"] == "busy"
+
+
+def test_every_estimate_hint_reaches_the_estimator(client):
+    ws = new_workspace()
+    r = client.post("/v1/estimates", json={"source": GIT, "expected_users": 40, "region": "asia-south1",
+                                           "traffic": "always_on"}, headers=ws["agent"])
+    assert r.status_code == 202, r.text
+    est = RecordingEstimator()
+    _drain(_worker(estimator=est))
+    assert est.hints == [{"expected_users": 40, "schedule": None, "region": "asia-south1", "traffic": "always_on"}]
+    assert client.post("/v1/estimates", json={"source": GIT, "traffic": "sometimes"}, headers=ws["agent"]).status_code == 400

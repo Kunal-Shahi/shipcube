@@ -47,6 +47,7 @@ log = logging.getLogger("shipcube.worker")
 LEASE_S = 90
 HEARTBEAT_S = 30
 RETRYABLE = {"unavailable", "timeout", "rate_limited"}
+HINTS = ("expected_users", "schedule", "region", "traffic")  # estimate_load hints passed to the estimator
 LANES = {"all": "true", "deploy": "o.kind <> 'estimate'", "estimate": "o.kind = 'estimate'"}
 
 
@@ -256,7 +257,7 @@ class Worker:
                         state.update(profiler_guard.start_run(conn, op))
 
             def place() -> dict[str, Any]:
-                return self.estimator.estimate(inp["source"], {k: inp.get(k) for k in ("expected_users", "schedule")},
+                return self.estimator.estimate(inp["source"], {k: inp.get(k) for k in HINTS},
                                                workspace_id=str(op["workspace_id"]), op_id=str(op["id"]),
                                                static_reason=state.get("static_reason"))
 
