@@ -8,11 +8,18 @@ import { ApiError } from "@/lib/errors";
 import { approvals } from "@/lib/mock-approvals";
 import { apps, billing, providers, tokens } from "@/lib/mock-data";
 import { cubes, migrations, warehouse } from "@/lib/mock-data-layer";
-import type { AccessGrant, AppSummary, Approval, GcpLink } from "@/lib/types";
+import type { AccessGrant, AppSummary, Approval, GcpLink, WaitlistRequest } from "@/lib/types";
 import type { ConsoleData, DemoState } from "./source";
 
 const LATENCY_MS = 350;
 const wait = (ms = LATENCY_MS) => new Promise((r) => setTimeout(r, ms));
+
+const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
+const waitlist: WaitlistRequest[] = [
+  { id: "wl_3", email: "priya@example.com", name: "Priya N.", useCase: "A cost dashboard for our ops team that reads BigQuery.", status: "pending", createdAt: daysAgo(0.2) },
+  { id: "wl_2", email: "sam@example.org", name: "Sam O.", useCase: "Internal tools that our analysts build with Cursor.", status: "pending", createdAt: daysAgo(1.1) },
+  { id: "wl_1", email: "lee@example.net", name: "Lee W.", useCase: "A nightly batch job that scores leads.", status: "approved", createdAt: daysAgo(3), decidedAt: daysAgo(2), decidedBy: "you" },
+];
 
 function fail(): never {
   throw new ApiError("unavailable", "The control-plane API didn't respond within 10 seconds.", 503, "req_dev_7f3a91c2");
@@ -309,5 +316,29 @@ export const mockData: ConsoleData = {
     m.status = "applied";
     m.applied = { version: warehouse.modelVersion, at: new Date().toISOString(), by: "you" };
     return m;
+  },
+
+  async requestAccess(input) {
+    await wait(400);
+    const known = waitlist.find((r) => r.email.toLowerCase() === input.email.toLowerCase());
+    if (!known) waitlist.unshift({ id: `wl_${waitlist.length + 1}`, ...input, status: "pending", createdAt: new Date().toISOString() });
+  },
+  async accountStatus() {
+    // DEV_MODE's demo user is a member and a platform admin, so every page is reachable.
+    return { member: true, platformAdmin: true };
+  },
+  async listWaitlist(status) {
+    await wait();
+    return status === "all" ? waitlist : waitlist.filter((r) => r.status === status);
+  },
+  async decideWaitlist(id, decision) {
+    await wait(500);
+    const r = waitlist.find((x) => x.id === id);
+    if (!r) throw new ApiError("not_found", "No such request.", 404, "");
+    if (r.status !== "pending" && r.status !== (decision === "approve" ? "approved" : "rejected")) {
+      throw new ApiError("conflict", `This request was already ${r.status}.`, 409, "");
+    }
+    Object.assign(r, { status: decision === "approve" ? "approved" : "rejected", decidedAt: new Date().toISOString(), decidedBy: "you" });
+    return r;
   },
 };

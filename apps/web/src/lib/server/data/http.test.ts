@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { approvalFromOperation, billingFromApi, camelize, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, linkFromApi, placementOf, providerFromApi, summaryFromApi, type ApiOperation } from "./http";
+import { ApiError } from "@/lib/errors";
+import { accountStatusFrom, approvalFromOperation, billingFromApi, camelize, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, linkFromApi, placementOf, providerFromApi, summaryFromApi, waitlistFromApi, type ApiOperation } from "./http";
 
 const op = (over: Partial<ApiOperation>): ApiOperation => ({
   id: "op_1",
@@ -213,5 +214,44 @@ describe("summaryFromApi", () => {
     });
     expect(summaryFromApi({ ...base, target: "acme-prod" })).toMatchObject({ billing: "own-gcp", deletedAt: undefined });
     expect(summaryFromApi({ ...base, target: "local" }).billing).toBeUndefined();
+  });
+});
+
+describe("waitlistFromApi", () => {
+  it("maps an admin list row", () => {
+    expect(
+      waitlistFromApi({
+        id: "wl_1", email: "a@example.com", name: "A", use_case: "A dashboard", status: "pending",
+        created_at: "2026-10-31T10:00:00Z", decided_at: null, decided_by: null,
+      }),
+    ).toEqual({ id: "wl_1", email: "a@example.com", name: "A", useCase: "A dashboard", status: "pending", createdAt: "2026-10-31T10:00:00Z", decidedAt: undefined, decidedBy: undefined });
+  });
+});
+
+describe("accountStatusFrom", () => {
+  const unauth = () => Promise.reject(new ApiError("unauthenticated", "no", 401, "r"));
+
+  it("is a member when /v1/me answers, with the admin flag", async () => {
+    expect(await accountStatusFrom(async () => ({ platform_admin: true }), unauth)).toEqual({ member: true, platformAdmin: true });
+    expect(await accountStatusFrom(async () => ({}), unauth)).toEqual({ member: true, platformAdmin: false });
+  });
+
+  it("asks the waitlist when /v1/me refuses the session", async () => {
+    expect(await accountStatusFrom(unauth, async () => ({ status: "pending", requested_at: "2026-10-31T10:00:00Z" }))).toEqual({
+      member: false,
+      platformAdmin: false,
+      waitlist: "pending",
+      requestedAt: "2026-10-31T10:00:00Z",
+    });
+  });
+
+  it("never sends a member to the waitlist because the API failed", async () => {
+    const down = () => Promise.reject(new ApiError("unavailable", "down", 503, "r"));
+    await expect(accountStatusFrom(down, async () => ({ status: "none" }))).rejects.toThrow("down");
+  });
+
+  it("treats an API without the waitlist as no request yet", async () => {
+    const missing = () => Promise.reject(new ApiError("not_found", "no route", 404, "r"));
+    expect(await accountStatusFrom(unauth, missing)).toEqual({ member: false, platformAdmin: false, waitlist: "none" });
   });
 });

@@ -6,7 +6,14 @@ import { emulatorPublicUrl } from "@/lib/server/config";
 // 1. A per-request nonce and Content-Security-Policy (Next applies the nonce to its own scripts).
 // 2. A cheap gate: no session cookie means no console. Pages still verify the session itself.
 
+// Pages anyone may open. "/" is the landing page, matched exactly (its "Request access" form posts
+// back to "/" as a server action); everything else needs a session cookie.
+const PUBLIC_EXACT = ["/"];
 const PUBLIC = ["/sign-in", "/sign-up", "/api/auth/session", "/api/healthz"];
+
+export function isPublic(pathname: string) {
+  return PUBLIC_EXACT.includes(pathname) || PUBLIC.some((p) => pathname === p || pathname.startsWith(p + "/"));
+}
 
 export function csp(nonce: string, dev: boolean) {
   const authDomain = process.env.FIREBASE_AUTH_DOMAIN;
@@ -35,10 +42,10 @@ export function csp(nonce: string, dev: boolean) {
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  if (!PUBLIC.some((p) => pathname === p || pathname.startsWith(p + "/")) && !req.cookies.has(SESSION_COOKIE)) {
+  if (!isPublic(pathname) && !req.cookies.has(SESSION_COOKIE)) {
     const url = req.nextUrl.clone();
     url.pathname = "/sign-in";
-    url.search = pathname === "/" ? "" : `?returnTo=${encodeURIComponent(pathname + req.nextUrl.search)}`;
+    url.search = `?returnTo=${encodeURIComponent(pathname + req.nextUrl.search)}`;
     return NextResponse.redirect(url);
   }
 

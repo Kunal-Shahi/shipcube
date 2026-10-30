@@ -25,6 +25,9 @@ import type {
   Role,
   TierId,
   Warehouse,
+  AccountStatus,
+  WaitlistRequest,
+  WaitlistState,
 } from "@/lib/types";
 import { api } from "../http";
 import { log } from "../log";
@@ -294,7 +297,54 @@ async function optional<T>(what: string, p: Promise<T>): Promise<T | undefined> 
   }
 }
 
-const AVAILABLE = new Set<Feature>(["tokens", "data", "approvals_inbox", "providers", "gcp_link", "billing", "deleted_apps"]);
+const AVAILABLE = new Set<Feature>(["tokens", "data", "approvals_inbox", "providers", "gcp_link", "billing", "deleted_apps", "waitlist"]);
+
+interface ApiWaitlistRequest {
+  id: string;
+  email: string;
+  name: string;
+  use_case: string;
+  status: Exclude<WaitlistState, "none">;
+  created_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+}
+
+export const waitlistFromApi = (r: ApiWaitlistRequest): WaitlistRequest => ({
+  id: r.id,
+  email: r.email,
+  name: r.name,
+  useCase: r.use_case,
+  status: r.status,
+  createdAt: r.created_at,
+  decidedAt: r.decided_at ?? undefined,
+  decidedBy: r.decided_by ?? undefined,
+});
+
+/**
+ * A verified console session that isn't a workspace member gets 401 from /v1/me; it then asks
+ * /v1/waitlist/me where its request stands. Any other failure is the API's, and is thrown: a
+ * member must never be sent to the waitlist because the API blipped.
+ */
+export async function accountStatusFrom(
+  me: () => Promise<{ platform_admin?: boolean }>,
+  waitlistMe: () => Promise<{ status: WaitlistState; requested_at?: string | null; platform_admin?: boolean }>,
+): Promise<AccountStatus> {
+  try {
+    const m = await me();
+    return { member: true, platformAdmin: m.platform_admin === true };
+  } catch (e) {
+    if (!(e instanceof ApiError) || (e.code !== "unauthenticated" && e.code !== "permission_denied")) throw e;
+  }
+  try {
+    const w = await waitlistMe();
+    return { member: false, platformAdmin: w.platform_admin === true, waitlist: w.status, requestedAt: w.requested_at ?? undefined };
+  } catch (e) {
+    // An API without the waitlist yet: the person simply hasn't asked.
+    if (e instanceof ApiError && (e.code === "not_found" || e.code === "unauthenticated")) return { member: false, platformAdmin: false, waitlist: "none" };
+    throw e;
+  }
+}
 
 export interface ApiGcpLink {
   id: string;
@@ -582,5 +632,28 @@ export const httpData: ConsoleData = {
       idempotencyKey: `${decision}-${id}`,
     });
     return camelize<Migration>(m);
+  },
+
+  async requestAccess(input, clientIp) {
+    // Public. Signed in, the API uses the session's verified email instead of the body's.
+    await api<unknown>("/v1/waitlist", {
+      method: "POST",
+      body: { email: input.email, name: input.name, use_case: input.useCase },
+      headers: clientIp ? { "X-Forwarded-For": clientIp } : undefined,
+    });
+  },
+  async accountStatus() {
+    return accountStatusFrom(
+      () => api<{ platform_admin?: boolean }>("/v1/me"),
+      () => api<{ status: WaitlistState; requested_at?: string | null; platform_admin?: boolean }>("/v1/waitlist/me"),
+    );
+  },
+  async listWaitlist(status) {
+    const { requests } = await api<{ requests: ApiWaitlistRequest[] }>("/v1/admin/waitlist", { query: { status, limit: 200 } });
+    return requests.map(waitlistFromApi);
+  },
+  async decideWaitlist(id, decision) {
+    // Approving creates the workspace; the API makes both calls safe to repeat.
+    return waitlistFromApi(await api<ApiWaitlistRequest>(`/v1/admin/waitlist/${enc(id)}/${decision}`, { method: "POST" }));
   },
 };

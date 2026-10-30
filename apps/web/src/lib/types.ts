@@ -297,3 +297,34 @@ export interface Migration {
   applied?: { version: number; at: string; by: string };
   rejected?: { at: string; by: string; note?: string };
 }
+
+// Early access: a public waitlist that a platform admin approves by hand. Approval creates the
+// person's workspace; their first sign-in with that Google account claims it.
+export type WaitlistState = "none" | "pending" | "approved" | "rejected";
+
+/** Who the signed-in person is to ShipCube: a workspace member, or someone on (or off) the waitlist. */
+export interface AccountStatus {
+  member: boolean;
+  /** Can approve waitlist requests. Reported by the API; the API also enforces it. */
+  platformAdmin: boolean;
+  /** For non-members: where their access request stands. */
+  waitlist?: WaitlistState;
+  requestedAt?: string;
+}
+
+export interface AccessRequestInput {
+  email: string;
+  name: string;
+  useCase: string;
+}
+
+export interface WaitlistRequest {
+  id: string;
+  email: string;
+  name: string;
+  useCase: string;
+  status: Exclude<WaitlistState, "none">;
+  createdAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+}

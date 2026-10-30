@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { Check } from "lucide-react";
+import { redirect } from "next/navigation";
 import { Wordmark } from "@/components/logo";
-import { getGcpLink, supports } from "@/lib/api";
+import { accountStatus, getGcpLink, supports } from "@/lib/api";
 import { requireSession } from "@/lib/auth";
 import { cn } from "@/lib/cn";
 import { OnboardingForm } from "./onboarding-form";
@@ -12,6 +13,7 @@ const STEPS = ["Account", "Where apps run", "Connect your agent"];
 
 export default async function OnboardingPage() {
   const session = await requireSession();
+  if (!(await accountStatus().catch(() => ({ member: true }))).member) redirect("/waitlist");
   const canLink = await supports("gcp_link");
   const deployer = canLink ? (await getGcpLink()).deployer : "";
   return (

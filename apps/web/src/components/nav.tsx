@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, Cable, CreditCard, Cloud, Database, Inbox, KeyRound, Sparkles } from "lucide-react";
+import { Boxes, Cable, CreditCard, Cloud, Database, Inbox, KeyRound, Sparkles, UserCheck } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 const SECTIONS = [
@@ -26,11 +26,15 @@ const SECTIONS = [
   },
 ];
 
-export function Nav({ pendingApprovals = 0 }: { pendingApprovals?: number }) {
+// Platform admins (as the API reports them) also see the early-access queue.
+const ADMIN = { label: "Platform", items: [{ href: "/admin/waitlist", label: "Waitlist", icon: UserCheck }] };
+
+export function Nav({ pendingApprovals = 0, platformAdmin = false }: { pendingApprovals?: number; platformAdmin?: boolean }) {
   const pathname = usePathname();
+  const sections = platformAdmin ? [...SECTIONS, ADMIN] : SECTIONS;
   return (
     <nav aria-label="Main" className="-mx-4 flex gap-1 overflow-x-auto px-4 [scrollbar-width:none] md:mx-0 md:flex-col md:gap-5 md:overflow-visible md:px-0">
-      {SECTIONS.map((section, i) => (
+      {sections.map((section, i) => (
         <div key={i} className="flex shrink-0 gap-1 md:flex-col md:gap-0.5">
           {section.label && (
             <div className="hidden px-2 pb-1 text-[12px] font-medium text-fg-subtle md:block">{section.label}</div>

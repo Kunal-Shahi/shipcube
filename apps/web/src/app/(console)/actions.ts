@@ -165,3 +165,20 @@ export async function decideMigrationAction(id: string, decision: "apply" | "rej
     return (await data()).decideMigration(id, decision, opts);
   }, "/data");
 }
+
+const WAITLIST_ID = /^[A-Za-z0-9_-]{1,80}$/;
+
+/** Platform admins only. The page hides itself from others, and the API enforces it again. */
+export async function decideWaitlistAction(id: string, decision: "approve" | "reject") {
+  return run(
+    "decideWaitlist",
+    async () => {
+      if (!WAITLIST_ID.test(id)) throw new Invalid("That request ID isn't valid.");
+      if (decision !== "approve" && decision !== "reject") throw new Invalid("Choose approve or reject.");
+      const d = await data();
+      if (!(await d.accountStatus()).platformAdmin) throw new ApiError("permission_denied", "Only platform admins can decide access requests.", 403, "");
+      return d.decideWaitlist(id, decision);
+    },
+    "/admin/waitlist",
+  );
+}

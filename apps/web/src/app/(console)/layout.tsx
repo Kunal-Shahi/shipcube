@@ -4,12 +4,17 @@ import { redirect } from "next/navigation";
 import { Wordmark } from "@/components/logo";
 import { Nav } from "@/components/nav";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { pendingApprovalCount } from "@/lib/api";
+import { accountStatus, pendingApprovalCount } from "@/lib/api";
 import { requireSession } from "@/lib/auth";
 import { signOut } from "../(auth)/actions";
 
 export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const session = await requireSession();
+  // Signed in but not in a workspace yet: the waitlist page, not a console full of errors. If the
+  // API itself is failing, carry on: each page shows its own error state with a retry, and the
+  // API still enforces membership and admin rights.
+  const account = await accountStatus().catch(() => ({ member: true, platformAdmin: false }));
+  if (!account.member) redirect("/waitlist");
   if (!session.onboarded) redirect("/onboarding");
   const { user } = session;
   const initials = user.name
@@ -33,7 +38,7 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
           </div>
         </div>
         <div className="md:flex-1">
-          <Nav pendingApprovals={(await pendingApprovalCount()) ?? 0} />
+          <Nav pendingApprovals={(await pendingApprovalCount()) ?? 0} platformAdmin={account.platformAdmin} />
         </div>
         <div className="hidden flex-col gap-3 md:flex">
           <div className="px-2">

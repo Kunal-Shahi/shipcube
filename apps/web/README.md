@@ -58,8 +58,21 @@ With mock data, data pages accept `?state=empty` or `?state=error`. Production i
 - Approvals: `/approvals/apr_7k2m` (first deploy to your GCP project), `apr_c4q9` (cap raise), `apr_d8w1` (domain sharing), `apr_e2n5` (delete)
 - Migrations: `/data/migrations/0006_late_delivery_rate` (additive), `0007_net_revenue` (changes results), `0008_rework_items` (breaking)
 - A deleted app: `/apps/app_q3p07`
+- The waitlist page for someone without a workspace: `/waitlist?preview=none`, `pending`, `approved` or `rejected`
 
 Mock data is held in memory. The dev server can reload modules between requests, so a change made in one page may not show up in another; `npm run build && DEV_MODE=1 npm start` keeps one copy.
+
+## Early access
+
+ShipCube is in early access, with a waitlist that a platform admin approves by hand.
+
+| Route | Who | What |
+|---|---|---|
+| `/` | Anyone | The landing page and its "Request access" form, which posts to `POST /v1/waitlist` through a server action. A hidden honeypot field drops bot posts, which get the same "Thanks" answer. The visitor's IP goes to the API as `X-Forwarded-For` for rate limiting. |
+| `/waitlist` | Signed in, no workspace | "You're on the waitlist", "Request access" (email taken from the account), approved or not approved, from `GET /v1/waitlist/me`. The console layout and onboarding send non-members here. |
+| `/admin/waitlist` | Platform admins | Requests with Approve and Reject (`/v1/admin/waitlist`). Hidden (404) for everyone else, and shown in the nav only when the API reports `platform_admin`. The API enforces it either way. |
+
+Approving creates the person's user, workspace and membership in the API. Their first sign-in with that email's Google account claims the user record (`services/api` `auth._claim_pending_user`). `src/middleware.ts` keeps every other route behind sign-in, and `src/middleware.test.ts` checks the list.
 
 ## Configure
 
