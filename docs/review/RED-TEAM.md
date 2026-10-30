@@ -12,6 +12,22 @@ Owners: **security** (`infra/**`, IAM, DB roles), **networking** (`services/api`
 
 ---
 
+## Peer-change watch, 2026-10-30 evening (`main` at `b9130fe`)
+
+The red team now watches every push and PR in both repos and reviews each one as it lands.
+
+**Merged since re-review 2:**
+- **#47 (retire `sc-builder`):** fine. It removes the SA, its legacy grants and `legacy_shared_builder`. Live: the SA is gone and the shared repo, bucket and project have no stale members. **C-1 is closed.**
+- **#50–#53 (monitoring as Terraform):** fine, and **O-1 is fixed live.** The control project now has 4 uptime checks and 8 enabled alert policies (each service down, 5xx > 5%, worker not running, Cloud SQL down, Cloud SQL CPU), all routed to an email channel whose address comes from gitignored tfvars. Gaps, medium:
+  - nothing alerts when the budget kill switch fires or fails;
+  - nothing covers the apps project (tenant apps, profiler jobs).
+- **#49 (profiler sandbox design):** docs only. It agrees with P-1. The wheels-only build and the per-workspace profiler builder are the parts to hold it to before `SHIPCUBE_PROFILER_JOB` is set in production.
+
+**Open:**
+- **#48 (console `secrets:write`):** the first version pre-checked `secrets:write` on every new token, which widens R-1 (#42). It has been revised so the scope is opt-in and the label is accurate. Good to merge.
+
+**New, low:** `services/api/scripts/gcp_setup.sh` still creates `sc-builder` with bucket-wide read and registry write. Rerunning it would bring the C-1 exposure back. Delete those lines or the script. *(security)*
+
 ## Re-review 2, 2026-10-30 afternoon (`main` at `3320b7c`)
 
 Since the morning re-review, three PRs have merged:
