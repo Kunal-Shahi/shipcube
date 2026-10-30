@@ -17,7 +17,7 @@
         "provider": "openai_compatible",
         "model": "accounts/fireworks/models/llama-v3p3-70b-instruct",
         "base_url": "https://api.fireworks.ai/inference/v1",
-        "secret_ref": "projects/shipcube-control-ks/secrets/ws-aa-ai_key-demo/versions/1"
+        "secret_ref": "projects/shipcube-control-ks/secrets/ws-ai-00000000-0000-0000-0000-0000000000aa-9f0e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c/versions/1"
       },
       "caps": {"requests_per_minute": 30, "spend_usd_per_month": 5}
     }

@@ -256,12 +256,29 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 			openAIError(w, c.status, "invalid_request_error", "no_key", "no API key is configured for this provider")
 			return
 		}
+		byok := kind != ProviderMeta
+		if byok {
+			if err := checkKeyRef(ref, cfg.WorkspaceID, g.DevMode); err != nil {
+				log.Error("refused a provider key reference", "app", cfg.App, "error", err.Error())
+				c.status = http.StatusForbidden
+				openAIError(w, c.status, "permission_error", "key_not_bound", err.Error())
+				return
+			}
+		}
 		c.key, err = g.Secrets.Get(r.Context(), ref)
 		if err != nil {
 			log.Error("secret lookup failed", "app", cfg.App, "error", err.Error())
 			c.status = http.StatusServiceUnavailable
 			openAIError(w, c.status, "api_error", "secret_unavailable", "the provider key could not be read")
 			return
+		}
+		if byok {
+			if c.key, err = boundKey(c.key, ref, kind, c.baseURL, g.DevMode); err != nil {
+				log.Error("refused a provider key", "app", cfg.App, "error", err.Error())
+				c.status = http.StatusForbidden
+				openAIError(w, c.status, "permission_error", "key_not_bound", err.Error())
+				return
+			}
 		}
 	}
 
