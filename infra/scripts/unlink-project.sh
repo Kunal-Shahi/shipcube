@@ -2,7 +2,7 @@
 # Removes every grant link-project.sh made. Apps already deployed keep running
 # until you delete them (the console can do that before you run this).
 #
-#   ./unlink-project.sh <your-project-id> <ws-xxxx-deployer@shipcube-control.iam.gserviceaccount.com> [region]
+#   ./unlink-project.sh <your-project-id> <ws-xxxx-deployer@shipcube-links.iam.gserviceaccount.com> [region]
 set -uo pipefail
 
 PROJECT="${1:?project id}"

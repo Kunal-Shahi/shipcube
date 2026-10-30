@@ -80,8 +80,11 @@ class Settings:
     local_secrets_file: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_SECRETS_FILE",
                                                                            ".shipcube-local/secrets.json"))
     # Linked projects: the per-workspace deployer the user grants roles to (infra/scripts/link-project.sh).
+    # Created in a project of their own (infra/terraform/links.tf), where the API can create SAs and
+    # the API and worker can act as them, and nothing else (#15).
+    links_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LINKS_PROJECT", "shipcube-links-ks"))
     link_deployer_sa_template: str = field(default_factory=lambda: os.environ.get(
-        "SHIPCUBE_LINK_DEPLOYER_SA_TEMPLATE", "ws-{ws12}-deployer@{control_project}.iam.gserviceaccount.com"))
+        "SHIPCUBE_LINK_DEPLOYER_SA_TEMPLATE", "ws-{ws12}-deployer@{links_project}.iam.gserviceaccount.com"))
     # The API's own SA: it creates each workspace's deployer SA and checks links by impersonating it.
     api_sa: str = field(default_factory=lambda: os.environ.get(
         "SHIPCUBE_API_SA", "sc-api@shipcube-control-ks.iam.gserviceaccount.com"))
