@@ -43,7 +43,7 @@ resource "google_monitoring_uptime_check_config" "service" {
     path         = each.value
     port         = 443
     use_ssl      = true
-    validate_ssl = true
+    validate_ssl = !contains(var.private_services, each.key) # only allowed on uptime_url checks
     accepted_response_status_codes {
       status_class = "STATUS_CLASS_2XX"
     }
