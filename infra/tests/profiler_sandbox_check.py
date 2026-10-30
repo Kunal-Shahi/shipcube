@@ -112,6 +112,39 @@ def check(root: Path) -> list[str]:
             role = re.search(r'role\s*=\s*"([^"]+)"', body)
             if role and role.group(1) != "roles/iam.serviceAccountUser":
                 problems.append(f"{where} grants {role.group(1)} on the sandbox SA; only actAs for the estimator")
+    problems += _uploads_worker_problems(resources)
+    return problems
+
+
+# The worker on the uploads bucket: read and create, plus delete only for profiler sources
+# (uploads.tf, profiler_source_janitor). Never bucket-wide delete or overwrite.
+WORKER_UPLOAD_ROLES = {"roles/storage.objectViewer", "roles/storage.objectCreator"}
+JANITOR_ROLE = "google_project_iam_custom_role.profiler_source_janitor.id"
+
+
+def _uploads_worker_problems(resources) -> list[str]:
+    problems = []
+    for f, t, n, body in resources:
+        where = f"{f}: {t}.{n}"
+        if (t, n) == ("google_project_iam_custom_role", "profiler_source_janitor"):
+            perms = re.search(r"permissions\s*=\s*\[(.*?)\]", body, re.S)
+            if not perms or set(re.findall(r'"([^"]+)"', perms[1])) != {"storage.objects.delete"}:
+                problems.append(f"{where} must hold storage.objects.delete and nothing else")
+        if t != "google_storage_bucket_iam_member" or "google_storage_bucket.uploads" not in body \
+                or "google_service_account.worker.member" not in body:
+            continue
+        roles = set(re.findall(r'"(roles/[^"]+)"', body))
+        if JANITOR_ROLE in body:
+            cond = re.search(r'expression\s*=\s*"(.*)"\s*$', body, re.M)
+            if not cond or "matches(" not in cond[1] or "^projects/_/buckets/" not in cond[1] \
+                    or "/objects/ws/" not in cond[1] or "/profiler/" not in cond[1] or not cond[1].rstrip(')\\"').endswith("$"):
+                problems.append(f"{where} must be conditioned on an anchored ws/<uuid>/profiler/ object regex")
+        elif not roles or not roles <= WORKER_UPLOAD_ROLES:
+            problems.append(f"{where} gives the worker {sorted(roles - WORKER_UPLOAD_ROLES) or 'a non-literal role'} "
+                            f"on the uploads bucket; only viewer, creator and the conditioned janitor role")
+    if not any((t, n) == ("google_storage_bucket_iam_member", "uploads_worker_profiler_janitor")
+               for _, t, n, _ in resources):
+        problems.append("missing google_storage_bucket_iam_member.uploads_worker_profiler_janitor")
     return problems
 
 

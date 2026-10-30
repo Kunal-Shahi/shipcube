@@ -3,6 +3,7 @@ network, zero bindings for its runtime SA (infra/tests/profiler_sandbox_check.py
 the module's plan-only `terraform test` where terraform is installed."""
 
 import importlib.util
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -73,3 +74,30 @@ def test_module_terraform_test(tmp_path):
         pytest.skip(f"terraform init failed (offline?): {init.stderr[-200:]}")
     r = subprocess.run(["terraform", "test", "-no-color"], cwd=mod, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-2000:]
+
+
+UPLOADS_BREAKS = {
+    "bucket-wide admin": ('roles/storage.objectViewer", "roles/storage.objectCreator"',
+                          'roles/storage.objectViewer", "roles/storage.objectAdmin"'),
+    "condition dropped": None,
+    "condition widened": ("/objects/ws/[0-9a-f-]+/profiler/[^/]+$", "/objects/ws/.*"),
+    "unanchored": ('matches(\\"^projects', 'matches(\\"projects'),
+    "extra permission": ('permissions = ["storage.objects.delete"]',
+                         'permissions = ["storage.objects.delete", "storage.objects.create"]'),
+}
+
+
+@pytest.mark.parametrize("name", UPLOADS_BREAKS)
+def test_worker_delete_on_uploads_stays_profiler_only(tmp_path, name):
+    root = tmp_path / "terraform"
+    shutil.copytree(TF, root, ignore=shutil.ignore_patterns(".terraform*"))
+    up = root / "uploads.tf"
+    text = up.read_text()
+    if UPLOADS_BREAKS[name] is None:   # the janitor grant without its condition block
+        broken = re.sub(r"\n  condition \{.*?\n  \}", "", text, count=1, flags=re.S)
+    else:
+        old, new = UPLOADS_BREAKS[name]
+        broken = text.replace(old, new)
+    assert broken != text, name
+    up.write_text(broken)
+    assert chk.check(root), name
