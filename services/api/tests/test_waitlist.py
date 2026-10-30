@@ -261,3 +261,52 @@ def test_api_callers_cant_read_the_waitlist(client, idp):
     # Someone signed in sees only their own entry.
     with db.tx(role=db.APP, settings={"app.via": "waitlist_self", "app.email": "nobody@example.com"}) as conn:
         assert conn.execute("select count(*) as n from waitlist").fetchone()["n"] == 0
+
+
+def test_client_net_groups_ipv6_by_64():
+    assert waitlist.client_net("2001:db8:1:2:aaaa::1") == waitlist.client_net("2001:db8:1:2:ffff:ffff:ffff:ffff") == "2001:db8:1:2::/64"
+    assert waitlist.client_net("2001:db8:1:3::1") == "2001:db8:1:3::/64"
+    assert waitlist.client_net("::ffff:203.0.113.9") == waitlist.client_net("203.0.113.9") == "203.0.113.9"
+
+
+def test_one_ipv6_64_shares_one_per_ip_limit(client, idp, monkeypatch):
+    set_waitlist(monkeypatch, platform_admins=frozenset({ADMIN}), waitlist_per_ip_per_hour=2, waitlist_per_hour=100000)
+    net = f"2001:db8:{uuid.uuid4().int % 65535:x}:{uuid.uuid4().int % 65535:x}"
+    assert join(client, email(), ip=f"{net}::1").status_code == 202
+    assert join(client, email(), ip=f"{net}:abcd::2").status_code == 202
+    # A fresh address in the same /64 doesn't get a fresh budget...
+    r = join(client, email(), ip=f"{net}:ffff:ffff:ffff:ffff")
+    assert r.status_code == 429 and r.json()["error"]["code"] == "rate_limited"
+    # ...while the neighbouring /64 does.
+    assert join(client, email(), ip=f"2001:db8:{uuid.uuid4().int % 65535:x}:1::1").status_code == 202
+
+
+def test_signed_in_requests_have_their_own_buckets(client, idp, monkeypatch):
+    with db.tx() as conn:  # this hour's anonymous total so far: exhaust it exactly
+        n = conn.execute("select coalesce(sum(count), 0) as n from rate_counters where kind = 'waitlist_global_per_hour'"
+                         " and window_start = %s", (datetime.now(UTC).replace(minute=0, second=0, microsecond=0),)).fetchone()["n"]
+    set_waitlist(monkeypatch, platform_admins=frozenset({ADMIN}), waitlist_per_ip_per_hour=2, waitlist_per_hour=n,
+                 waitlist_signed_in_per_hour=100000)
+    assert join(client, email(), ip="192.0.2.77").status_code == 429  # the anonymous budget is spent
+    body = {"name": "Ada", "use_case": "dashboards"}
+    addr = email()
+    # Someone already signed in can still ask...
+    assert client.post("/v1/waitlist", json=body, headers=idp(addr)).status_code == 202
+    assert row(addr)["status"] == "pending"
+    # ...but one account can't spend the signed-in budget for everyone (per-account limit, here 2).
+    assert client.post("/v1/waitlist", json=body, headers=idp(addr)).status_code == 202
+    r = client.post("/v1/waitlist", json=body, headers=idp(addr))
+    assert r.status_code == 429 and r.json()["error"]["code"] == "rate_limited"
+    assert client.post("/v1/waitlist", json=body, headers=idp(email())).status_code == 202
+
+
+def test_signed_in_total_is_capped(client, idp, monkeypatch):
+    with db.tx() as conn:
+        n = conn.execute("select coalesce(sum(count), 0) as n from rate_counters where kind = 'waitlist_signed_in_per_hour'"
+                         " and window_start = %s", (datetime.now(UTC).replace(minute=0, second=0, microsecond=0),)).fetchone()["n"]
+    set_waitlist(monkeypatch, platform_admins=frozenset({ADMIN}), waitlist_per_ip_per_hour=1000, waitlist_per_hour=100000,
+                 waitlist_signed_in_per_hour=n + 1)
+    body = {"name": "Ada", "use_case": "dashboards"}
+    assert client.post("/v1/waitlist", json=body, headers=idp(email())).status_code == 202
+    assert client.post("/v1/waitlist", json=body, headers=idp(email())).status_code == 429
+    assert join(client, email(), ip="192.0.2.78").status_code == 202  # anonymous sign-ups are unaffected

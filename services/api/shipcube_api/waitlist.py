@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import random
 import logging
@@ -34,6 +35,7 @@ SIGNUP_TX = {"app.via": "waitlist"}
 ADMIN_TX = {"app.via": "platform_admin"}
 _NS = uuid.UUID("0b8f5c2e-31d4-4f6a-9e7b-5a2c1d0e9f83")
 _GLOBAL = str(uuid.uuid5(_NS, "global"))
+_SIGNED_IN = str(uuid.uuid5(_NS, "signed-in"))
 _APPROVE_LOCK = 0x5C_57A1  # serialises approvals, so the workspace cap can't be passed by two at once
 _COLUMNS = "id, email, name, use_case, status, created_at, decided_at, decided_by, workspace_id"
 
@@ -50,9 +52,23 @@ class Conflict(Exception):
         self.code = code
 
 
-def _ip_key(ip: str) -> str:
-    # Only a keyed digest of the address is stored, never the address itself.
-    return str(uuid.uuid5(_NS, hmac.new(auth._pepper(), f"waitlist-ip:{ip}".encode(), hashlib.sha256).hexdigest()))
+def client_net(ip: str) -> str:
+    """What a client is limited by: an IPv4 address, or an IPv6 address's /64 (one subscriber's whole
+    allocation, so rotating addresses within it doesn't buy more sign-ups)."""
+    try:
+        addr = ipaddress.ip_address(ip.strip())
+    except ValueError:
+        return ip.strip()
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.IPv6Network(f"{addr}/64", strict=False))
+    return str(addr)
+
+
+def _key(kind: str, value: str) -> str:
+    # Only a keyed digest of the address or email is stored, never the value itself.
+    return str(uuid.uuid5(_NS, hmac.new(auth._pepper(), f"waitlist-{kind}:{value}".encode(), hashlib.sha256).hexdigest()))
 
 
 def _count(conn, key: str, kind: str, window: datetime, limit: int) -> bool:
@@ -69,17 +85,24 @@ def _count(conn, key: str, kind: str, window: datetime, limit: int) -> bool:
 
 
 def sign_up(email: str, name: str, use_case: str, honeypot: str, ip: str | None, now: datetime | None = None) -> None:
-    """ip None: a verified console session asked (one entry per Google-verified email), so only the
-    global limit applies."""
+    """ip None: a verified console session asked. Signed-in requests have their own buckets (per account
+    and in total), so an anonymous flood can't lock out people who are already signed in."""
     now = (now or datetime.now(UTC)).astimezone(UTC)
     hour = now.replace(minute=0, second=0, microsecond=0)
     retry = int((hour + timedelta(hours=1) - now).total_seconds()) + 1
     with db.tx(role=db.APP, settings=SIGNUP_TX) as conn:
-        # Per IP first (the narrower limit), so one client's burst doesn't spend the global budget.
-        if ip is not None and not _count(conn, _ip_key(ip), "waitlist_ip_per_hour", hour, settings.waitlist_per_ip_per_hour):
-            raise RateLimited("too many sign-ups from this address; try again later", retry)
-        if not _count(conn, _GLOBAL, "waitlist_global_per_hour", hour, settings.waitlist_per_hour):
-            raise RateLimited("the waitlist is busy; try again later", retry)
+        # The narrower limit first, so one client's burst doesn't spend the shared budget.
+        if ip is None:
+            if not _count(conn, _key("account", email.lower()), "waitlist_account_per_hour", hour,
+                          settings.waitlist_per_ip_per_hour):
+                raise RateLimited("too many requests from this account; try again later", retry)
+            if not _count(conn, _SIGNED_IN, "waitlist_signed_in_per_hour", hour, settings.waitlist_signed_in_per_hour):
+                raise RateLimited("the waitlist is busy; try again later", retry)
+        else:
+            if not _count(conn, _key("ip", client_net(ip)), "waitlist_ip_per_hour", hour, settings.waitlist_per_ip_per_hour):
+                raise RateLimited("too many sign-ups from this address; try again later", retry)
+            if not _count(conn, _GLOBAL, "waitlist_global_per_hour", hour, settings.waitlist_per_hour):
+                raise RateLimited("the waitlist is busy; try again later", retry)
         if random.random() < 0.02:  # past hours' counters, one row per client address, are never read again
             conn.execute("delete from rate_counters where kind like 'waitlist\\_%%' and window_start < %s",
                          (hour - timedelta(hours=1),))
