@@ -162,6 +162,11 @@ def test_exposure_check_logs_public_hosted_services_as_critical(client, caplog):
         Worker(Exposed(), worker_id="w-exposure").check_exposure()
     hits = [r for r in caplog.records if r.levelname == "CRITICAL" and "public" in r.getMessage()]
     assert hits and hits[0].service.endswith("/services/leaky")
+    # The alert matches this exact message (infra/terraform/modules/monitoring/main.tf): keep them equal.
+    import pathlib
+    import re
+    tf = (pathlib.Path(__file__).resolve().parents[3] / "infra/terraform/modules/monitoring/main.tf").read_text()
+    assert hits[0].getMessage() == re.search(r'public_service_message = "([^"]+)"', tf)[1]
     caplog.clear()
     with caplog.at_level("CRITICAL", logger="shipcube.worker"):
         Worker(MockDeployer(), worker_id="w-exposure-2").check_exposure()  # no check on the mock: nothing

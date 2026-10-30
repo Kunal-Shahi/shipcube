@@ -220,3 +220,65 @@ resource "google_monitoring_alert_policy" "sql_cpu" {
     content   = "Cloud SQL `${var.sql_instance}` CPU has been above 80% for 15 minutes. It is shared-core `db-f1-micro`; check Query Insights for the expensive queries before raising `sql_tier`. ${local.runbook}"
   }
 }
+
+# A hosted app callable by anyone (allUsers / allAuthenticatedUsers) bypasses IAP. The worker checks
+# hourly and logs this exact message at CRITICAL (services/api/shipcube_api/worker.py
+# check_exposure); ShipCube never makes such a grant itself (#16).
+locals {
+  public_service_message = "hosted service is public: anyone can call it past IAP"
+}
+
+resource "google_logging_metric" "public_hosted_service" {
+  project     = var.project_id
+  name        = "shipcube/public_hosted_service"
+  description = "Hosted Cloud Run services found callable by allUsers or allAuthenticatedUsers."
+  filter      = "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${var.worker_service}\" AND severity=CRITICAL AND jsonPayload.message=\"${local.public_service_message}\""
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+    labels {
+      key         = "service"
+      value_type  = "STRING"
+      description = "The exposed service's resource name"
+    }
+  }
+  label_extractors = {
+    service = "EXTRACT(jsonPayload.service)"
+  }
+}
+
+resource "google_monitoring_alert_policy" "public_hosted_service" {
+  project               = var.project_id
+  display_name          = "ShipCube hosted app is public"
+  combiner              = "OR"
+  notification_channels = [google_monitoring_notification_channel.email.id]
+
+  conditions {
+    display_name = "Worker found a hosted service callable by anyone"
+    condition_threshold {
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.public_hosted_service.name}\" AND resource.type=\"cloud_run_revision\""
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = "0s"
+      aggregations {
+        alignment_period     = "300s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+        group_by_fields      = ["metric.label.service"]
+      }
+      trigger {
+        count = 1
+      }
+    }
+  }
+
+  alert_strategy {
+    auto_close = "7200s" # the check repeats hourly; an incident left open means it is still public
+  }
+
+  documentation {
+    mime_type = "text/markdown"
+    content   = "A hosted app's Cloud Run service can be called by `allUsers` or `allAuthenticatedUsers`, which skips IAP. The incident's `service` label names it. Remove the binding at once: `gcloud run services remove-iam-policy-binding SERVICE --project shipcube-apps-ks --region REGION --member allUsers --role roles/run.invoker` (or `allAuthenticatedUsers`), then find who added it in the apps project's Admin Activity audit log (`protoPayload.methodName:\"SetIamPolicy\"`). ${local.runbook}"
+  }
+}

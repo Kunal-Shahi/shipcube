@@ -445,7 +445,7 @@ class Worker:
         except Exception:  # noqa: BLE001
             log.exception("exposure check failed")
             return
-        for name in exposed:
+        for name in exposed:  # this exact message feeds an alert (infra/terraform/modules/monitoring)
             log.critical("hosted service is public: anyone can call it past IAP", extra={"service": name})
 
 
