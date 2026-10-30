@@ -610,7 +610,10 @@ def write_grants(conn, workspace_id: str, app_id: Any, add: list[str], remove: l
 
 
 def set_access(caller: Caller, slug: str, add: list[dict[str, Any]], remove: list[str], idem: str | None
-               ) -> tuple[list[dict[str, Any]], Operation | None]:
+               ) -> tuple[list[dict[str, Any]], Operation | None, Operation | None]:
+    """Direct grants and revocations are written and pushed to IAP at once, in their own operation;
+    `domain:` grants wait for approval in another. A rejected or expired domain approval never holds
+    back a revocation made in the same request (#18). Returns (access, domain op, push op)."""
     with db.tx(caller) as conn:
         app = _app_row(conn, caller.workspace_id, slug, lock=True)
         if f"user:{caller.email}".lower() in [r.lower() for r in remove] and \
@@ -623,16 +626,25 @@ def set_access(caller: Caller, slug: str, add: list[dict[str, Any]], remove: lis
         # The domain operation's worker reads only `add`; `with` is there for the hash.
         norm = lambda ps: sorted({p.strip().lower() for p in ps})  # noqa: E731 — as write_grants stores them
         push = {"push_only": True, "add": norm(direct), "remove": norm(remove)}
-        payload = {"add": norm(domain), "with": {"add": push["add"], "remove": push["remove"]}} if domain else push
+        gated = {"add": norm(domain), "with": {"add": push["add"], "remove": push["remove"]}} if domain else None
+        payload = gated or push
         op, idem = replay(conn, caller.workspace_id, "set_access", app["id"], payload, idem)
-        if op is None:  # a new change: write it, then push it
-            write_grants(conn, caller.workspace_id, app["id"], direct, remove, caller.user_id)
-            if domain:
-                reasons = [("domain_grant", f"grant to a whole domain ({p})") for p in domain]
-                op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, payload, idem, reasons)
-            elif (direct or remove) and app["status"] == "running":
-                op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, payload, idem)
-        return _app_view(conn, app)["access"], op
+        push_key = f"{idem}:push" if (idem and domain) else idem
+        if op is not None:  # a genuine retry: the operations it created, nothing written again
+            pushed = conn.execute("select * from operations where workspace_id = %s and idem_key = %s",
+                                  (caller.workspace_id, push_key)).fetchone() if domain and push_key else None
+            if not domain:
+                return _app_view(conn, app)["access"], None, op
+            return _app_view(conn, app)["access"], op, pushed and op_view(pushed, slug)
+        write_grants(conn, caller.workspace_id, app["id"], direct, remove, caller.user_id)
+        pushed = None
+        if (direct or remove) and app["status"] == "running":  # never waits on the domain approval
+            pushed = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, push, push_key)
+        op = None
+        if domain:  # created last, so a retry finds it as the app's latest set_access operation
+            reasons = [("domain_grant", f"grant to a whole domain ({p})") for p in domain]
+            op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, gated, idem, reasons)
+        return _app_view(conn, app)["access"], op, pushed
 
 
 def delete_app(caller: Caller, slug: str, idem: str | None) -> Operation:
