@@ -22,7 +22,8 @@ class Settings:
     backend: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_BACKEND", "mock" if _dev_mode() else "gcp"))
     # Identity Platform project whose ID tokens authenticate console users (approvals, restore).
     idp_project: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_IDP_PROJECT") or None)
-    # Profiler sandbox SA for estimate_load (security's sc-profiler). Unset = static analysis only.
+    # The profiler sandbox job's runtime SA for estimate_load: `profiler-sandbox@<apps project>` from
+    # infra/terraform/modules/profiler (no roles, no secrets). Unset = static analysis only.
     profiler_job: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_PROFILER_JOB") or None)
     worker_id: str = field(default_factory=lambda: os.environ.get("K_REVISION", "") + "/" + os.environ.get("HOSTNAME", "local") + f"/{os.getpid()}")
     # Hosted apps run here (security's `shipcube-apps` project).

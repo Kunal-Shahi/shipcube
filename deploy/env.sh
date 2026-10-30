@@ -10,6 +10,10 @@
 PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
 IMAGES="$REGION-docker.pkg.dev/$PROJECT/$REPO"
 SQL_INSTANCE="$PROJECT:$REGION:shipcube-pg"
+# Extra Cloud SQL instances the data layer may connect to as warehouses (comma-separated
+# connection names), e.g. the demo warehouse. Each is mounted on shipcube-mcp and allow-listed
+# as /cloudsql/<name>; empty means only public warehouse hosts.
+: "${DATA_SQL_INSTANCES:=}"
 BUILD_BUCKET="$PROJECT-platform-builds"
 # Cloud Run URLs are deterministic: https://<service>-<project number>.<region>.run.app
 run_url() { echo "https://$1-$PROJECT_NUMBER.$REGION.run.app"; }
