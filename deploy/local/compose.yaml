@@ -97,6 +97,7 @@ services:
       SHIPCUBE_LOCAL_SECRETS_FILE: /local/secrets.json   # DEV_MODE: where PUT /v1/ai/providers writes keys (PR #35)
       ALLOWED_HOSTS: localhost:*,127.0.0.1:*,api:*
       SHIPCUBE_CONSOLE_URL: http://localhost:3000
+      SHIPCUBE_CONSOLE_ORIGINS: http://localhost:${SHIPCUBE_CONSOLE_PORT:-3000},http://localhost:${SHIPCUBE_WAITLIST_CONSOLE_PORT:-3001}
       # Waitlist: verify the Auth emulator's sessions (DEV_MODE only) so not-yet-members can sign in;
       # the e2e's admin (E2E_ADMIN_EMAIL) reviews the list.
       SHIPCUBE_IDP_PROJECT: demo-shipcube
@@ -185,9 +186,9 @@ services:
       SHIPCUBE_PUBLIC_API_URL: http://localhost:${SHIPCUBE_API_PORT:-18080}   # the browser's waitlist form
       SHIPCUBE_API_TIMEOUT_MS: "30000"
       SHIPCUBE_MCP_URL: http://localhost:${SHIPCUBE_API_PORT:-18080}/mcp
-      # The API verifies the Auth emulator's sessions, so each signed-in person is themselves. Set this only
-      # to make every console user the API's bootstrap user (the waitlist e2e needs it unset).
-      SHIPCUBE_DEV_API_SESSION: ${SHIPCUBE_CONSOLE_DEV_API_SESSION:-}
+      # Every console user acts as the API's bootstrap user (console.spec relies on it). console-waitlist
+      # below runs without it, so each signed-in person is themselves (the API verifies emulator sessions).
+      SHIPCUBE_DEV_API_SESSION: ${SHIPCUBE_DEV_CONSOLE_TOKEN:-}
     env_file:
       - path: .state/seed.env
         required: false
@@ -199,6 +200,15 @@ services:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 3s
       retries: 40
+
+  # The same console without the dev session, for the waitlist e2e: sign-ups, "You're on the list",
+  # admin approval and the first sign-in claim, each as a real (emulator) person.
+  console-waitlist:
+    extends: {service: console}
+    profiles: [console]
+    environment:
+      SHIPCUBE_DEV_API_SESSION: ""
+    ports: !override ["127.0.0.1:${SHIPCUBE_WAITLIST_CONSOLE_PORT:-3001}:3000"]
 
   # Optional local model for the gateway's OpenAI-compatible upstream: LOCAL_LLM=ollama in .env.
   ollama:
