@@ -22,7 +22,8 @@ log = logging.getLogger("shipcube.placement")
 
 def _measured(profile, tr: pl.Traffic) -> dict:
     d = {k: profile.__dict__[k] for k in ("mode", "kind", "wall_s", "cpu_mean_cores", "cpu_p95_cores",
-                                          "mem_peak_gb", "net_calls", "net_blocked", "remote_hosts")}
+                                          "mem_peak_gb", "net_calls", "net_blocked", "remote_hosts",
+                                          "static_reason")}
     d["latency_mean_s"] = tr.latency_s
     return {k: (round(v, 4) if isinstance(v, float) else v) for k, v in d.items()}
 
