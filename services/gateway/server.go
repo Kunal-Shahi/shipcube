@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -41,7 +42,14 @@ type Gateway struct {
 	RequestTimeout time.Duration
 	// Project is the GCP project, for Cloud Logging trace correlation.
 	Project string
+	// MaxOutputTokens bounds every request's output tokens (max_tokens / max_completion_tokens),
+	// whatever the app asks for. 0 means defaultMaxOutputTokens.
+	MaxOutputTokens int64
+	// MetaModels are the models apps may request on the platform key, besides their configured one.
+	MetaModels map[string]bool
 }
+
+const defaultMaxOutputTokens = anthropicDefaultMaxTokens // room for reasoning models (Muse)
 
 func (g *Gateway) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -129,7 +137,27 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	stream, _ := body["stream"].(bool)
 	c := &call{cfg: cfg, model: model, body: body, stream: stream}
+	platform := kind == ProviderMeta
+	if platform {
+		// The platform key pays: only allowlisted models, and only priced ones (spend caps must bind).
+		if model != pc.Model && !g.MetaModels[model] {
+			openAIError(w, http.StatusForbidden, "invalid_request_error", "model_not_allowed",
+				fmt.Sprintf("model %q isn't available on ShipCube's key; use %q or \"default\"", model, pc.Model))
+			return
+		}
+		if _, priced := cost(g.Prices, kind, model, 0, 0); !priced && !g.DevMode {
+			log.Error("platform model has no price; refusing", "model", model)
+			openAIError(w, http.StatusServiceUnavailable, "api_error", "model_not_priced",
+				"this model has no price configured on the gateway yet")
+			return
+		}
+	}
+	if n, ok := body["n"].(float64); ok && n != 1 {
+		openAIError(w, http.StatusBadRequest, "invalid_request_error", "n_not_supported", "only n=1 is supported")
+		return
+	}
 
+	var reservation *Reservation
 	ev := UsageEvent{RequestID: requestID(r.Context()), AppID: cfg.AppID, WorkspaceID: cfg.WorkspaceID, App: cfg.App, Provider: kind, Model: model,
 		Stream: stream, OccurredAt: start.UTC()}
 	defer func() {
@@ -137,13 +165,15 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 		ev.Estimated = c.estimated
 		ev.CostUSD, ev.Priced = cost(g.Prices, kind, model, c.inTok, c.outTok)
 		ev.LatencyMS = time.Since(start).Milliseconds()
-		if ev.CapHit == "" {
-			g.Limiter.Record(cfg, c.inTok+c.outTok, ev.CostUSD)
-		}
+		g.Limiter.Settle(reservation, c.inTok+c.outTok, ev.CostUSD)
 		g.Usage.Record(ev)
 	}()
 
-	remaining, capErr := g.Limiter.Allow(cfg)
+	// Reserve the most this request can use before calling the provider: a prompt estimate (about
+	// 3 bytes per token, generous) plus its output allowance. Settle replaces it with actual usage.
+	wantOut := requestedOutput(body, g.maxOutput())
+	grantedOut, res, capErr := g.Limiter.Admit(cfg, platform, int64(len(raw))/3+1, wantOut)
+	reservation = res
 	if capErr != nil {
 		c.status, ev.CapHit = http.StatusTooManyRequests, capErr.Cap
 		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(time.Until(capErr.ResetsAt).Seconds()))))
@@ -153,7 +183,7 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 		}})
 		return
 	}
-	maxTokens := clampMaxTokens(body, kind, remaining)
+	maxTokens := clampOutput(body, kind, grantedOut)
 
 	// Pick the upstream and its key.
 	ref := pc.SecretRef
@@ -222,26 +252,46 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 		"output_tokens", c.outTok, "upstream_request_id", c.upstream, "ms", time.Since(start).Milliseconds())
 }
 
-// clampMaxTokens caps the request's output tokens at what's left of the daily token cap and
-// returns the value to use for Anthropic (which requires one). remaining < 0 means no cap.
-func clampMaxTokens(body map[string]any, kind string, remaining int64) int64 {
-	field := "max_tokens"
-	if _, ok := body["max_completion_tokens"]; ok || kind == ProviderOpenAI {
-		field = "max_completion_tokens"
+func (g *Gateway) maxOutput() int64 {
+	if g.MaxOutputTokens > 0 {
+		return g.MaxOutputTokens
 	}
-	requested := int64(-1)
-	if v, ok := body[field].(float64); ok && v > 0 {
-		requested = int64(v)
+	return defaultMaxOutputTokens
+}
+
+// requestedOutput is the output tokens a request asks for, through either field (the larger if
+// both are set), bounded by limit; limit when it names none.
+func requestedOutput(body map[string]any, limit int64) int64 {
+	want := int64(-1)
+	for _, f := range []string{"max_tokens", "max_completion_tokens"} {
+		if v, ok := body[f].(float64); ok && v > 0 {
+			want = max(want, int64(v))
+		}
 	}
-	out := requested
-	if remaining >= 0 && (out < 0 || out > remaining) {
-		out = remaining
+	if want < 0 || want > limit {
+		return limit
 	}
-	if out >= 0 && kind != ProviderAnthropic {
-		body[field] = out
+	return want
+}
+
+// clampOutput writes the granted output tokens into the request (both fields when the app set
+// both, else the provider's own) and returns the value for Anthropic, which takes it separately.
+func clampOutput(body map[string]any, kind string, granted int64) int64 {
+	if kind == ProviderAnthropic {
+		return granted
 	}
-	if out < 0 {
-		return anthropicDefaultMaxTokens
+	set := false
+	for _, f := range []string{"max_tokens", "max_completion_tokens"} {
+		if _, ok := body[f]; ok {
+			body[f], set = granted, true
+		}
 	}
-	return out
+	if !set {
+		field := "max_tokens"
+		if kind == ProviderOpenAI {
+			field = "max_completion_tokens"
+		}
+		body[field] = granted
+	}
+	return granted
 }

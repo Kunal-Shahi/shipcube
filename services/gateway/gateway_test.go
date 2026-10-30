@@ -340,11 +340,13 @@ func TestDailyTokenCapClampsThenBlocks(t *testing.T) {
 	defer up.Close()
 	h := newHarness(t, ProviderConfig{Kind: ProviderOpenAICompatible, Model: "m", BaseURL: up.URL}, Caps{AITokensPerDay: 100}, "")
 
-	if s := h.post(t, `{"max_tokens":5000,"messages":[{"role":"user","content":"hi"}]}`).StatusCode; s != 200 {
+	body := `{"max_tokens":5000,"messages":[{"role":"user","content":"hi"}]}`
+	if s := h.post(t, body).StatusCode; s != 200 {
 		t.Fatalf("status %d", s)
 	}
-	if maxTokens != 100 {
-		t.Fatalf("max_tokens not clamped to the remaining cap: %v", maxTokens)
+	// The cap less the prompt's reserved estimate (about 3 bytes per token).
+	if want := float64(100 - (len(body)/3 + 1)); maxTokens != want {
+		t.Fatalf("max_tokens not clamped to the remaining cap: %v, want %v", maxTokens, want)
 	}
 	resp := h.post(t, chatBody)
 	if resp.StatusCode != 429 || readJSON(t, resp.Body)["error"].(map[string]any)["cap"] != "ai_tokens_per_day" {
@@ -355,11 +357,12 @@ func TestDailyTokenCapClampsThenBlocks(t *testing.T) {
 func TestSpendCap(t *testing.T) {
 	l := &Limiter{Now: func() time.Time { return time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC) }}
 	cfg := &AppConfig{AppID: "a", Caps: Caps{SpendUSDPerMonth: 1}, SpentUSDMonth: 0.9}
-	if _, err := l.Allow(cfg); err != nil {
+	_, res, err := l.Admit(cfg, false, 10, 10)
+	if err != nil {
 		t.Fatal(err)
 	}
-	l.Record(cfg, 10, 0.2)
-	_, err := l.Allow(cfg)
+	l.Settle(res, 10, 0.2)
+	_, _, err = l.Admit(cfg, false, 10, 10)
 	if err == nil || err.Cap != "spend_usd_per_month" || !err.ResetsAt.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) {
 		t.Fatalf("got %v", err)
 	}
@@ -572,6 +575,7 @@ func TestModelsEndpoint(t *testing.T) {
 func TestProductionRefusesMock(t *testing.T) {
 	h := newHarness(t, ProviderConfig{Kind: ProviderMeta, Model: "muse-spark-1.3"}, Caps{}, "http://unused")
 	h.g.DevMode = false
+	h.g.Prices = map[string][2]float64{"meta/muse-spark-1.3": {1, 2}}
 	if resp := h.post(t, chatBody); resp.StatusCode != http.StatusFailedDependency {
 		t.Fatalf("meta without a key outside DEV_MODE: status %d, want 424", resp.StatusCode)
 	}

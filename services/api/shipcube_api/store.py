@@ -56,10 +56,14 @@ CAP_KIND = {"max_instances": "max_instances", "concurrency": "concurrency", "cpu
             "timeout_s": "request_timeout_s", "requests_per_minute": "requests_per_minute",
             "monthly_spend_usd": "spend_usd_per_month"}
 KIND_CAP = {v: k for k, v in CAP_KIND.items()}
-CAP_PERIOD = {"requests_per_minute": "minute", "spend_usd_per_month": "month", "deploys_per_day": "day"}
+CAP_PERIOD = {"requests_per_minute": "minute", "spend_usd_per_month": "month", "deploys_per_day": "day",
+              "ai_tokens_per_day": "day"}
 WORKSPACE_DEFAULTS: dict[str, float] = {
     "max_instances": 2, "concurrency": 80, "cpu": 1, "memory_mib": 512, "request_timeout_s": 60,
     "requests_per_minute": 120, "spend_usd_per_month": 5, "max_apps": 3, "deploys_per_day": 20,
+    # AI tokens per day on ShipCube's key, across the workspace's apps (the gateway's
+    # GATEWAY_WORKSPACE_TOKENS_PER_DAY default; each app also gets 200k unless set).
+    "ai_tokens_per_day": 1_000_000,
 }
 ENFORCED_BY = {
     "max_instances": "Cloud Run --max-instances",
