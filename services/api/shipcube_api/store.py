@@ -198,11 +198,13 @@ def me(caller: Caller) -> dict[str, Any]:
         }
 
 
-def _app_row(conn, workspace_id: str, slug: str, include_deleted: bool = False) -> dict[str, Any]:
+def _app_row(conn, workspace_id: str, slug: str, include_deleted: bool = False, lock: bool = False) -> dict[str, Any]:
+    """lock: hold the app row until the transaction ends, so changes to one app run one at a time."""
     q = "select * from apps where workspace_id = %s and slug = %s and purged_at is null"
     if not include_deleted:
         q += " and deleted_at is null"
-    row = conn.execute(q + " order by deleted_at nulls first, created_at desc limit 1", (workspace_id, slug)).fetchone()
+    q += " order by deleted_at nulls first, created_at desc limit 1" + (" for update" if lock else "")
+    row = conn.execute(q, (workspace_id, slug)).fetchone()
     if row is None:
         raise NotFound(f"app {slug} not found")
     return row
@@ -334,7 +336,7 @@ def replay(conn, workspace_id: str, kind: str, app_id: Any, payload: dict[str, A
         return None, idem
     if bytes(prior["request_hash"]) != _request_hash(kind, app_id, payload):
         raise Conflict("idempotency key reused with a different request")
-    # Operations created in the prior's own transaction share its created_at and don't count as later.
+    # Changes to an app hold its row lock (set_access, set_caps) and stamp created_at when written.
     later = conn.execute("select 1 from operations where app_id = %s and kind = %s and created_at > %s limit 1",
                          (app_id, kind, prior["created_at"])).fetchone()
     if later is None:
@@ -359,9 +361,12 @@ def enqueue(conn, caller: Caller | None, workspace_id: str, kind: str, app_id: A
     steps = [{"name": n, "status": "pending"} for n, _ in STEPS[kind]]
     expires = datetime.now(UTC) + APPROVAL_TTL
     row = conn.execute(
+        # created_at is when the row is written (clock_timestamp), not when the transaction began: with
+        # the app row locked, operations on one app are then ordered as they were created (store.replay).
         "insert into operations (id, workspace_id, app_id, kind, target_project, status, step, idem_key, request_hash,"
         " requested_by, token_id, input, steps, progress_message, approval_url, approval_reasons, approval_actions,"
-        " approval_expires_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning *",
+        " approval_expires_at, created_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, clock_timestamp())"
+        " returning *",
         (op_id, workspace_id, app_id, kind, target_project, "awaiting_approval" if waiting else "queued", steps[0]["name"],
          key, request_hash, caller.user_id if caller else None,
          caller.token_id if caller and caller.token_id else None, Jsonb({**payload, **(extra or {})}), Jsonb(steps),
@@ -572,7 +577,7 @@ def start_rollback(caller: Caller, slug: str, to: str, idem: str | None) -> Oper
 
 def set_caps(caller: Caller, slug: str, caps: dict[str, Any], idem: str | None) -> tuple[dict[str, Any], Operation | None]:
     with db.tx(caller) as conn:
-        app = _app_row(conn, caller.workspace_id, slug)
+        app = _app_row(conn, caller.workspace_id, slug, lock=True)
         project = app_ref(conn, app).target.project
         reasons = caps_above_default(conn, caller.workspace_id, caps)
         payload = {"caps": caps} if reasons else {"caps": caps, "push_only": True}
@@ -607,7 +612,7 @@ def write_grants(conn, workspace_id: str, app_id: Any, add: list[str], remove: l
 def set_access(caller: Caller, slug: str, add: list[dict[str, Any]], remove: list[str], idem: str | None
                ) -> tuple[list[dict[str, Any]], Operation | None]:
     with db.tx(caller) as conn:
-        app = _app_row(conn, caller.workspace_id, slug)
+        app = _app_row(conn, caller.workspace_id, slug, lock=True)
         if f"user:{caller.email}".lower() in [r.lower() for r in remove] and \
                 conn.execute("select 1 from users where id = %s and email = %s", (app["created_by"], caller.email)).fetchone():
             raise Conflict("cannot remove the owner")
