@@ -25,9 +25,15 @@ resource "google_monitoring_uptime_check_config" "service" {
   timeout          = "10s"
   selected_regions = ["USA", "EUROPE", "ASIA_PACIFIC"] # the minimum is 3
 
+  # Private services are checked with an OIDC token, which Monitoring only sends to a Cloud Run
+  # resource, not to an arbitrary URL.
   monitored_resource {
-    type = "uptime_url"
-    labels = {
+    type = contains(var.private_services, each.key) ? "cloud_run_revision" : "uptime_url"
+    labels = contains(var.private_services, each.key) ? {
+      project_id   = var.project_id
+      service_name = each.key
+      location     = var.region
+      } : {
       project_id = var.project_id
       host       = "${each.key}-${var.project_number}.${var.region}.run.app"
     }
@@ -61,7 +67,7 @@ resource "google_monitoring_alert_policy" "down" {
   conditions {
     display_name = "Uptime check failing for ${each.key} from 2+ regions"
     condition_threshold {
-      filter          = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND resource.type=\"uptime_url\" AND metric.label.check_id=\"${google_monitoring_uptime_check_config.service[each.key].uptime_check_id}\""
+      filter          = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND metric.label.check_id=\"${google_monitoring_uptime_check_config.service[each.key].uptime_check_id}\""
       comparison      = "COMPARISON_GT"
       threshold_value = 1
       duration        = "300s"
@@ -69,7 +75,7 @@ resource "google_monitoring_alert_policy" "down" {
         alignment_period     = "300s"
         per_series_aligner   = "ALIGN_NEXT_OLDER"
         cross_series_reducer = "REDUCE_COUNT_FALSE"
-        group_by_fields      = ["resource.label.host"]
+        group_by_fields      = ["metric.label.check_id"]
       }
       trigger {
         count = 1
