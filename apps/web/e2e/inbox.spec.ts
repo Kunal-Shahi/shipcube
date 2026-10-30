@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signIn } from "./helpers";
+import { MEMBER_EMAIL, signIn } from "./helpers";
 
 // The approvals inbox and AI providers (BYOK) against the local stack (networking's #35 endpoints).
 // An agent asks to share the app `make smoke` deployed with a whole domain; a person finds it in the
@@ -9,7 +9,7 @@ const API_URL = (process.env.E2E_API_URL ?? "http://127.0.0.1:8080").replace(/\/
 const APP = process.env.E2E_APP ?? "olist-tracker";
 /** The seeded PAT (`make e2e` loads deploy/local/.state/seed.env): requests made as an agent. */
 const PAT = process.env.SHIPCUBE_PAT ?? "";
-const EMAIL = process.env.E2E_EMAIL ?? `e2e-${Date.now()}@example.com`;
+const EMAIL = MEMBER_EMAIL;
 const DOMAIN = `e2e-${Date.now()}.example.org`;
 
 test.describe.configure({ mode: "serial" });
