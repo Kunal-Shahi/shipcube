@@ -66,6 +66,12 @@ class Settings:
     # Google emails, never a workspace role. Approvals stop at max_workspaces workspaces in total.
     platform_admins: frozenset[str] = field(default_factory=lambda: frozenset(
         e.strip().lower() for e in os.environ.get("SHIPCUBE_PLATFORM_ADMINS", "").split(",") if e.strip()))
+    # Browser origins the landing page's waitlist form may post from (CORS): the console's run.app URL
+    # and any other address it's served on (Firebase Hosting). Comma-separated; default the console URL.
+    console_origins: frozenset[str] = field(default_factory=lambda: frozenset(
+        o.strip().rstrip("/") for o in (os.environ.get("SHIPCUBE_CONSOLE_ORIGINS")
+                                        or os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000")).split(",")
+        if o.strip()))
     max_workspaces: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_MAX_WORKSPACES", "50")))
     waitlist_per_ip_per_hour: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_WAITLIST_PER_IP_PER_HOUR", "5")))
     waitlist_per_hour: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_WAITLIST_PER_HOUR", "200")))

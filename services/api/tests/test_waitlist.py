@@ -104,8 +104,12 @@ def test_forwarded_for_uses_the_entry_googles_front_end_appended(client, idp, mo
     assert join(client, email(), ip=f"9.9.9.9, {real}").status_code == 429
 
 
-def test_cors_only_for_the_console_origin(client, idp):
-    origin = app_mod.settings.console_url
+def test_cors_only_for_the_console_origins(client, idp, monkeypatch):
+    monkeypatch.setattr(app_mod, "settings", dataclasses.replace(
+        app_mod.settings, trust_forwarded_for=True, console_origins=frozenset({"https://c.run.app", "https://shipcube.web.app"})))
+    hosting = client.options("/v1/waitlist", headers={"Origin": "https://shipcube.web.app", "Access-Control-Request-Method": "POST"})
+    assert hosting.status_code == 204 and hosting.headers["Access-Control-Allow-Origin"] == "https://shipcube.web.app"
+    origin = "https://c.run.app"
     ok = client.options("/v1/waitlist", headers={"Origin": origin, "Access-Control-Request-Method": "POST"})
     assert ok.status_code == 204 and ok.headers["Access-Control-Allow-Origin"] == origin
     assert client.options("/v1/waitlist", headers={"Origin": "https://evil.example"}).status_code == 403
@@ -131,7 +135,8 @@ def test_admin_routes_refuse_non_admins_and_pats(client, idp):
 def test_approve_then_first_sign_in_claims_the_workspace(client, idp):
     addr = email()
     sub = f"uid-{uuid.uuid4().hex[:8]}"
-    assert client.get("/v1/me", headers=idp(addr, sub)).status_code == 401  # signed in, no workspace
+    me = client.get("/v1/me", headers=idp(addr, sub))  # signed in, no workspace
+    assert me.status_code == 403 and me.json()["error"]["code"] == "no_access" and me.json()["error"]["platform_admin"] is False
     mine = client.get("/v1/waitlist/me", headers=idp(addr, sub)).json()
     assert mine == {"email": addr, "status": "none", "requested_at": None, "platform_admin": False}
     # Signed in, one click: the session's verified email is used, whatever the body says.
@@ -140,10 +145,16 @@ def test_approve_then_first_sign_in_claims_the_workspace(client, idp):
     assert r.status_code == 202
     mine = client.get("/v1/waitlist/me", headers=idp(addr, sub)).json()
     assert mine["status"] == "pending" and mine["requested_at"] and row("someone-else@example.com") is None
+    assert client.get("/v1/me", headers=idp(addr, sub)).json()["error"]["code"] == "waitlisted"
 
     admin = idp(ADMIN)
     assert client.get("/v1/waitlist/me", headers=admin).json()["platform_admin"] is True
-    reqs = client.get("/v1/admin/waitlist", headers=admin).json()["requests"]
+    # An admin without a workspace still learns they're an admin.
+    assert client.get("/v1/me", headers=admin).json()["error"]["platform_admin"] is True
+    listed = client.get("/v1/admin/waitlist", headers=admin).json()
+    assert listed["items"] == listed["requests"]
+    reqs = listed["items"]
+    assert [r["created_at"] for r in reqs] == sorted((r["created_at"] for r in reqs), reverse=True)
     entry = next(i for i in reqs if i["email"] == addr)
     r = client.post(f"/v1/admin/waitlist/{entry['id']}/approve", headers=admin)
     assert r.status_code == 200, r.text
@@ -207,7 +218,8 @@ def test_another_account_with_the_email_unverified_claims_nothing(client, idp):
     join(client, addr)
     entry = next(i for i in waitlist.list_entries("pending", 500)["requests"] if i["email"] == addr)
     assert client.post(f"/v1/admin/waitlist/{entry['id']}:approve", headers=idp(ADMIN)).status_code == 200
-    assert client.get("/v1/me", headers=idp(addr, verified=False)).status_code == 401
+    r = client.get("/v1/me", headers=idp(addr, verified=False))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "no_access"
     with db.worker_tx() as conn:
         assert conn.execute("select firebase_uid from users where email = %s", (addr,)).fetchone()["firebase_uid"] == f"pending:{addr}"
 

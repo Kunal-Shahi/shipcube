@@ -118,7 +118,9 @@ def list_entries(status: str, limit: int) -> dict[str, Any]:
     with db.tx(role=db.APP, settings=ADMIN_TX) as conn:
         rows = conn.execute(q + " order by created_at desc, id limit %s", (*args, limit)).fetchall()
         count = conn.execute("select count(*) as n from workspaces").fetchone()["n"]
-    return {"requests": [_entry(r) for r in rows], "workspaces": {"count": count, "cap": settings.max_workspaces}}
+    entries = [_entry(r) for r in rows]
+    # Both names: the console has read each while the contract settled.
+    return {"items": entries, "requests": entries, "workspaces": {"count": count, "cap": settings.max_workspaces}}
 
 
 def _audit(conn, admin_email: str, admin_user_id: str | None, action: str, entry_id: str, detail: dict) -> None:

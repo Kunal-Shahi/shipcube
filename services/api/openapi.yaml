@@ -20,7 +20,7 @@ paths:
       summary: Current user, workspace, GCP targets, limits and the calling token's scopes (any valid token)
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
-        '401': { description: 'Invalid token, or a console sign-in with no workspace (then GET /v1/waitlist/me)' }
+        '403': { description: 'A console sign-in with no workspace: error.code waitlisted (pending) or no_access; error.platform_admin', content: { application/json: { schema: { type: object, properties: { error: { type: object, properties: { code: { type: string, enum: [waitlisted, no_access] }, message: { type: string }, platform_admin: { type: boolean } } } } } } } }
   /v1/waitlist:
     post:
       summary: >-
@@ -478,9 +478,10 @@ components:
         platform_admin: { type: boolean }
     WaitlistList:
       type: object
-      required: [requests, workspaces]
+      required: [items, requests, workspaces]
       properties:
-        requests: { type: array, items: { $ref: '#/components/schemas/WaitlistEntry' } }
+        items: { type: array, items: { $ref: '#/components/schemas/WaitlistEntry' }, description: Newest first }
+        requests: { type: array, items: { $ref: '#/components/schemas/WaitlistEntry' }, description: The same list as items }
         workspaces: { type: object, properties: { count: { type: integer }, cap: { type: integer } } }
     Token:
       type: object

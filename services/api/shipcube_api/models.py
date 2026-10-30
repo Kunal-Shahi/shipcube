@@ -530,7 +530,8 @@ class WaitlistCount(BaseModel):
 
 
 class WaitlistList(BaseModel):
-    requests: list[WaitlistEntry] = Field(description="Newest first")
+    items: list[WaitlistEntry] = Field(description="Newest first")
+    requests: list[WaitlistEntry] = Field(description="The same list as items")
     workspaces: WaitlistCount
 
 

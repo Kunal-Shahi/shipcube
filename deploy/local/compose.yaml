@@ -97,6 +97,11 @@ services:
       SHIPCUBE_LOCAL_SECRETS_FILE: /local/secrets.json   # DEV_MODE: where PUT /v1/ai/providers writes keys (PR #35)
       ALLOWED_HOSTS: localhost:*,127.0.0.1:*,api:*
       SHIPCUBE_CONSOLE_URL: http://localhost:3000
+      # Waitlist: verify the Auth emulator's sessions (DEV_MODE only) so not-yet-members can sign in;
+      # the e2e's admin (E2E_ADMIN_EMAIL) reviews the list.
+      SHIPCUBE_IDP_PROJECT: demo-shipcube
+      FIREBASE_AUTH_EMULATOR_HOST: auth-emulator:9099
+      SHIPCUBE_PLATFORM_ADMINS: ${SHIPCUBE_PLATFORM_ADMINS:-admin@shipcube.test}
     ports: ["127.0.0.1:${SHIPCUBE_API_PORT:-18080}:8080"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
@@ -176,6 +181,7 @@ services:
       FIREBASE_AUTH_EMULATOR_HOST: auth-emulator:9099
       FIREBASE_AUTH_EMULATOR_PUBLIC_URL: http://localhost:${SHIPCUBE_AUTH_EMULATOR_PORT:-9099}
       SHIPCUBE_API_URL: http://api:8080
+      SHIPCUBE_PUBLIC_API_URL: http://localhost:${SHIPCUBE_API_PORT:-18080}   # the browser's waitlist form
       SHIPCUBE_API_TIMEOUT_MS: "30000"
       SHIPCUBE_MCP_URL: http://localhost:${SHIPCUBE_API_PORT:-18080}/mcp
       SHIPCUBE_DEV_API_SESSION: ${SHIPCUBE_DEV_CONSOLE_TOKEN:-}   # the API can't verify emulator tokens

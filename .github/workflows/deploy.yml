@@ -34,5 +34,6 @@ jobs:
         env:
           DATA_WORKSPACE: ${{ vars.SHIPCUBE_DATA_WORKSPACE }}
           PLATFORM_ADMINS: ${{ vars.SHIPCUBE_PLATFORM_ADMINS }}
+          CONSOLE_ORIGINS: ${{ vars.SHIPCUBE_CONSOLE_ORIGINS }}
           # `terraform output -json profiler`; not secret, stored as a repository variable.
           PROFILER_ENV_JSON: ${{ vars.SHIPCUBE_PROFILER_ENV_JSON }}

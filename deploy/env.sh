@@ -20,6 +20,8 @@ BUILD_BUCKET="$PROJECT-platform-builds"
 # Cloud Run URLs are deterministic: https://<service>-<project number>.<region>.run.app
 run_url() { echo "https://$1-$PROJECT_NUMBER.$REGION.run.app"; }
 CONSOLE_URL="$(run_url shipcube-console)"
+# Where the landing page is served (CORS for its waitlist form); add the Firebase Hosting address, comma-separated.
+: "${CONSOLE_ORIGINS:=$CONSOLE_URL}"
 MCP_URL="$(run_url shipcube-mcp)"
 GATEWAY_URL="$(run_url shipcube-gateway)"
 WORKER_URL="$(run_url shipcube-worker)"
