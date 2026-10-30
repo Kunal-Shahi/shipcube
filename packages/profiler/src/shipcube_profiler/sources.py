@@ -76,7 +76,9 @@ def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) ->
     cmd += ["--", url, str(target)]
     env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(target.parent),
            "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-           "GIT_LFS_SKIP_SMUDGE": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_ASKPASS": "/bin/false"}
+           "GIT_LFS_SKIP_SMUDGE": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_ASKPASS": "/bin/false",
+           # Takes precedence over protocol.* config, so redirects and submodule URLs are held too.
+           "GIT_ALLOW_PROTOCOL": "https:file" if allow_file else "https"}
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             start_new_session=True)
     end = time.monotonic() + GIT_CLONE_TIMEOUT_S

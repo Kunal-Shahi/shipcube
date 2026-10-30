@@ -39,9 +39,17 @@ def clone(repo: Path, dest: Path, **src) -> Path:
 
 def test_tenants_cannot_clone_local_paths(tmp_path):
     repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n"})
-    for url in (f"file://{repo}", str(repo), "ssh://git@example.com/x.git", "git://example.com/x", "ext::sh -c id"):
+    for url in (f"file://{repo}", str(repo), "ssh://git@example.com/x.git", "git@example.com:x.git",
+                "git://example.com/x", "ext::sh -c id", "fd::3", "http://example.com/x.git", "HTTPS://x/../etc"):
         with pytest.raises(SourceError):
             materialize({"kind": "git", "url": url}, tmp_path / "out")
+
+
+def test_transport_allowlist_holds_even_past_the_url_check(tmp_path):
+    """GIT_ALLOW_PROTOCOL=https blocks local transports at git's level too."""
+    repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n"})
+    with pytest.raises(SourceError, match="clone failed"):
+        sources._clone(f"file://{repo}", None, tmp_path / "out" / "repo", allow_file=False)
 
 
 def test_clone_is_shallow_single_branch_without_tags(tmp_path):
@@ -123,4 +131,5 @@ def test_clone_command_flags(tmp_path, monkeypatch):
     assert cmd[-3:] == ["--", "https://example.com/x.git", str(tmp_path / "o" / "repo")]
     assert env["GIT_LFS_SKIP_SMUDGE"] == "1" and env["GIT_NO_LAZY_FETCH"] == "1"
     assert env["GIT_CONFIG_NOSYSTEM"] == "1" and env["GIT_CONFIG_GLOBAL"] == os.devnull
+    assert env["GIT_ALLOW_PROTOCOL"] == "https"
     assert "META_API_KEY" not in env and "GOOGLE_APPLICATION_CREDENTIALS" not in env
