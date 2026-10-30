@@ -33,6 +33,7 @@ from typing import Protocol
 import psutil
 
 from .detect import CodeSummary
+from .errors import STATIC_REASONS
 from .profile import Hints, Profile, RequestStats
 
 SANDBOX_DIR = Path(__file__).parent / "_sandbox"
@@ -52,6 +53,15 @@ class Limits:
     max_processes: int = 32
     max_file_mb: int = 512
     sample_interval_s: float = 0.1
+    # Set by the agent inside the sandbox only. RLIMIT_NPROC counts every process and
+    # thread of the uid, and the disk check watches whole filesystems, so neither makes
+    # sense for an in-process run on a developer's machine.
+    max_nproc: int | None = None
+    max_disk_mb: int | None = None
+    # Inside the sandbox the agent is root and runs the app as this uid (no capabilities
+    # left after setuid): the app can't signal, ptrace or read the agent.
+    app_uid: int | None = None
+    stderr_tail_bytes: int = 64 * 1024
 
 
 def _free_port() -> int:
@@ -60,8 +70,21 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+PR_SET_NO_NEW_PRIVS = 38
+
+
+def _no_new_privs() -> None:
+    """Linux: execve can never grant this process (or its children) privileges, so a
+    setuid binary runs without them. Cloud Run has no no-new-privileges flag of its
+    own; the image also has its setuid bits stripped (gcp_runner.render_dockerfile)."""
+    if sys.platform.startswith("linux"):
+        if ctypes.CDLL(None, use_errno=True).prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_NO_NEW_PRIVS) failed")
+
+
 def _preexec(limits: Limits):
     def fn():
+        _no_new_privs()   # before the app's execve; Popen has already dropped to app_uid
         os.setsid()
         cpu = int(limits.timeout_s * 4) + 5
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
@@ -70,6 +93,8 @@ def _preexec(limits: Limits):
         if sys.platform.startswith("linux"):  # macOS doesn't enforce RLIMIT_AS
             mem = limits.memory_mb * 2**20 * 2
             resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
+            if limits.max_nproc:
+                resource.setrlimit(resource.RLIMIT_NPROC, (limits.max_nproc, limits.max_nproc))
     return fn
 
 
@@ -102,7 +127,7 @@ def _darwin_disk_io():
 class _Sampler(threading.Thread):
     """Samples CPU, RSS, I/O and process count of a process tree."""
 
-    def __init__(self, pid: int, limits: Limits):
+    def __init__(self, pid: int, limits: Limits, writable: list[Path] | None = None):
         super().__init__(daemon=True)
         self.root = psutil.Process(pid)
         self.limits = limits
@@ -116,6 +141,7 @@ class _Sampler(threading.Thread):
         self.kill_reason: str | None = None
         self.window: tuple[int, int] | None = None   # sample indices of the active window
         self._halt = threading.Event()
+        self.disk = _DiskWatch(writable or []) if limits.max_disk_mb else None
 
     def mark(self) -> int:
         return len(self.cpu)
@@ -137,6 +163,8 @@ class _Sampler(threading.Thread):
         return out
 
     def run(self):
+        if self.limits.app_uid is not None:
+            _set_thread_fsuid(self.limits.app_uid)
         while not self._halt.is_set():
             tree = self._tree()
             if not tree:
@@ -159,10 +187,14 @@ class _Sampler(threading.Thread):
             self.cpu.append(cpu)
             self.rss.append(rss)
             self.nprocs = max(self.nprocs, len(tree))
-            if rss > self.limits.memory_mb * 2**20:
-                self.kill_reason = f"memory over {self.limits.memory_mb} MB"
-            elif len(tree) > self.limits.max_processes:
+            # Processes first: forked children share pages, so a fork storm's summed RSS
+            # passes the memory limit too, and "processes" is the accurate reason.
+            if len(tree) > self.limits.max_processes:
                 self.kill_reason = f"more than {self.limits.max_processes} processes"
+            elif rss > self.limits.memory_mb * 2**20:
+                self.kill_reason = f"memory over {self.limits.memory_mb} MB"
+            elif self.disk and self.disk.written() > self.limits.max_disk_mb * 2**20:
+                self.kill_reason = f"disk: more than {self.limits.max_disk_mb} MB written"
             if self.kill_reason:
                 _killpg(self.root.pid)
                 break
@@ -170,6 +202,63 @@ class _Sampler(threading.Thread):
 
     def stop(self):
         self._halt.set()
+
+
+def _set_thread_fsuid(uid: int) -> None:
+    """Linux: this thread reads /proc as `uid` (and gid). A root agent with no CAP_SYS_PTRACE can't
+    read another uid's /proc/<pid>/io, but the app's own uid can (it's dumpable), and
+    setfsuid is per-thread, so only the sampler changes. Needs CAP_SETUID, which the
+    agent has to start the app anyway."""
+    if sys.platform.startswith("linux"):
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.setfsgid(uid)   # the kernel matches gid as well as uid (app gid == uid here)
+            libc.setfsuid(uid)
+        except (OSError, AttributeError):
+            pass
+
+
+class _DiskWatch:
+    """Bytes added to the writable filesystems since the run started. Inside the
+    sandbox these are in-memory (Cloud Run) or tmpfs (Docker), so this also guards
+    memory that RSS doesn't show."""
+
+    def __init__(self, paths: list[Path]):
+        self.devs: dict[int, Path] = {}
+        for p in paths:
+            try:
+                self.devs.setdefault(os.stat(p).st_dev, p)
+            except OSError:
+                continue
+        self.base = {d: shutil.disk_usage(p).used for d, p in self.devs.items()}
+
+    def written(self) -> int:
+        total = 0
+        for d, p in self.devs.items():
+            try:
+                total += max(0, shutil.disk_usage(p).used - self.base[d])
+            except OSError:
+                continue
+        return total
+
+
+class _Tail(threading.Thread):
+    """Keeps the last `limit` bytes of a pipe. Reading continuously means a chatty app
+    can't fill the pipe and stall, and the agent's memory stays bounded."""
+
+    def __init__(self, stream, limit: int):
+        super().__init__(daemon=True)
+        self.stream, self.limit, self.buf, self.total = stream, limit, bytearray(), 0
+
+    def run(self):
+        for chunk in iter(lambda: self.stream.read1(65536), b""):
+            self.total += len(chunk)
+            self.buf += chunk
+            if len(self.buf) > self.limit:
+                del self.buf[:len(self.buf) - self.limit]
+
+    def text(self) -> str:
+        return self.buf.decode(errors="replace")
 
 
 CV_BUCKET_S = 1.0
@@ -199,10 +288,22 @@ def _allocation_refused(returncode: int | None, stderr: str, limits: Limits) -> 
     return None
 
 
+_NPROC = re.compile(r"BlockingIOError|Resource temporarily unavailable|can't start new thread|EAGAIN")
+
+
+def _nproc_refused(returncode: int | None, stderr: str, limits: Limits) -> str | None:
+    """RLIMIT_NPROC makes fork/clone fail with EAGAIN instead of killing anything."""
+    if limits.max_nproc and returncode not in (0, None) and _NPROC.search(stderr[-4000:]):
+        return f"more than {limits.max_nproc} processes (fork refused by RLIMIT_NPROC)"
+    return None
+
+
 def _killpg(pid: int, sig=signal.SIGKILL):
+    # PermissionError isn't swallowed: an agent that can't stop the app must fail loudly
+    # (e.g. a root agent without CAP_KILL), not leave it running unwatched.
     try:
         os.killpg(pid, sig)
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError:
         pass
 
 
@@ -213,7 +314,12 @@ def _sandbox_env(app_dir: Path, home: Path, stats_file: Path, hints: Hints, port
         "HOME": str(home),
         "TMPDIR": str(home),
         "LANG": "C.UTF-8",
-        "PYTHONPATH": f"{SANDBOX_DIR}{os.pathsep}{app_dir}",
+        # The instrumentation's sitecustomize first, then the app, then the app's deps
+        # (installed with --target outside any site dir; see gcp_runner.render_dockerfile).
+        "PYTHONPATH": os.pathsep.join(
+            [str(SANDBOX_DIR), str(app_dir)] + ([os.environ["SHIPCUBE_APP_DEPS"]]
+                                                 if os.environ.get("SHIPCUBE_APP_DEPS") else [])),
+        "PYTHONNOUSERSITE": "1",   # no usercustomize to undo the instrumentation
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1",
         "SHIPCUBE_PROFILE": "1",
@@ -312,12 +418,27 @@ class LocalRunner:
         port = _free_port() if summary.kind == "web" else None
         stats_file = work / "netstats"
         env = _sandbox_env(app_dir, work, stats_file, hints, port)
+        env["SHIPCUBE_GUARD_PIDS"] = ",".join(sorted({str(os.getpid()), "1"}))
         cmd = _command(self.python, app_dir, summary, port)
+        as_user = {}
+        if self.limits.app_uid is not None:
+            uid = self.limits.app_uid
+            if os.geteuid() != 0 or uid == 0:
+                raise RuntimeError("app_uid needs a root agent and a non-root app uid")
+            # The app's HOME/TMPDIR, where it also writes its netstats. 0755 so the agent
+            # (root, but without CAP_DAC_OVERRIDE) can still list and read it.
+            os.chmod(work, 0o755)
+            os.chown(work, uid, uid)
+            as_user = dict(user=uid, group=uid, extra_groups=[])
         ru0 = resource.getrusage(resource.RUSAGE_CHILDREN)
         t0 = time.monotonic()
+        # Popen sets the uid before preexec_fn runs, so the rlimits apply to the app's uid.
         proc = subprocess.Popen(cmd, cwd=app_dir, env=env, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.PIPE, preexec_fn=_preexec(self.limits))
-        sampler = _Sampler(proc.pid, self.limits)
+                                stderr=subprocess.PIPE, preexec_fn=_preexec(self.limits), **as_user)
+        tail = _Tail(proc.stderr, self.limits.stderr_tail_bytes)
+        tail.start()
+        writable = [work, Path(tempfile.gettempdir()), Path("/tmp"), Path("/var/tmp"), Path("/dev/shm")]
+        sampler = _Sampler(proc.pid, self.limits, writable)
         sampler.start()
         prof = Profile(mode="measured", runner=self.name, kind=summary.kind)
         win_start = 0
@@ -350,7 +471,8 @@ class LocalRunner:
         finally:
             sampler.stop()
             sampler.join(timeout=2)
-            stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
+            tail.join(timeout=2)
+            stderr = tail.text()
         wall = time.monotonic() - t0
         ru1 = resource.getrusage(resource.RUSAGE_CHILDREN)
 
@@ -358,7 +480,8 @@ class LocalRunner:
         if summary.kind != "web":
             prof.active_s = wall
         prof.exit_code = proc.returncode
-        prof.killed_reason = sampler.kill_reason or _allocation_refused(proc.returncode, stderr, self.limits)
+        prof.killed_reason = (sampler.kill_reason or _allocation_refused(proc.returncode, stderr, self.limits)
+                              or _nproc_refused(proc.returncode, stderr, self.limits))
         prof.processes_max = sampler.nprocs
         cpu = sampler.cpu[win_start:] or sampler.cpu
         rss = sampler.rss[win_start:] or sampler.rss
@@ -401,7 +524,9 @@ class LocalRunner:
             prof.net_calls += s["connect_attempts"]
             prof.net_blocked += s["blocked"]
             prof.net_bytes += s["bytes_sent"] + s["bytes_recv"]
+            prof.tamper_attempts += s.get("tamper_attempts", 0)
             prof.remote_hosts = sorted(set(prof.remote_hosts) | set(s["remote_hosts"]))[:20]
+            prof.remote_ports = sorted(set(prof.remote_ports) | set(s.get("remote_ports", [])))[:20]
         if prof.net_blocked:
             prof.notes.append(f"{prof.net_blocked} outbound connection(s) blocked (no egress while profiling)")
         if prof.timed_out:
@@ -448,12 +573,21 @@ def default_runner() -> Runner:
 
 class StaticRunner:
     """No execution: typical numbers by app shape. Used for images, code that fails to
-    start, or when the caller only has hints. Results are marked mode="static"."""
+    start, or when the caller only has hints. Results are marked mode="static" with a
+    `static_reason` code from errors.STATIC_REASONS; the control plane passes
+    StaticRunner(reason="quota" | "budget" | ...) when it decides not to profile."""
 
     name = "static"
 
+    def __init__(self, reason: str | None = None):
+        if reason is not None and reason not in STATIC_REASONS:
+            raise ValueError(f"unknown static reason {reason!r}; one of {', '.join(STATIC_REASONS)}")
+        self.reason = reason
+
     def run(self, app_dir: Path | None, summary: CodeSummary, hints: Hints) -> Profile:
-        p = Profile(mode="static", runner=self.name, kind=summary.kind)
+        p = Profile(mode="static", runner=self.name, kind=summary.kind, static_reason=self.reason)
+        if self.reason:
+            p.notes.append(STATIC_REASONS[self.reason])
         if summary.kind == "web":
             p.cpu_mean_cores, p.cpu_p95_cores, p.cpu_peak_cores, p.cpu_cv = 0.05, 0.4, 0.6, 2.5
             p.mem_mean_gb = p.mem_peak_gb = 0.15 + (0.25 if summary.uses_data_libs else 0)

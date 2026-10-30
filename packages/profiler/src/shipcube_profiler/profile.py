@@ -69,6 +69,8 @@ class Profile:
     net_calls: int = 0               # outbound connection attempts (non-loopback)
     net_blocked: int = 0
     remote_hosts: list[str] = field(default_factory=list)
+    remote_ports: list[int] = field(default_factory=list)
+    tamper_attempts: int = 0         # signals the app aimed at the agent (all refused by the kernel)
     processes_max: int = 1
     samples: int = 0
     exit_code: int | None = None
@@ -76,6 +78,8 @@ class Profile:
     killed_reason: str | None = None
     requests: RequestStats | None = None
     notes: list[str] = field(default_factory=list)
+    static_reason: str | None = None  # errors.STATIC_REASONS code when mode == "static"
+    abuse_signals: list[str] = field(default_factory=list)  # abuse.abuse_signals, set by the control plane side
 
     def to_dict(self) -> dict:
         return asdict(self)
