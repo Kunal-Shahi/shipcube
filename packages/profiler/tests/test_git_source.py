@@ -186,7 +186,7 @@ def test_exact_size_check_catches_repeated_blobs_before_checkout(tmp_path, monke
     monkeypatch.setattr(sources, "GIT_MAX_BYTES", 5 * 2**20)
     seen = []
     real = sources._run_git
-    monkeypatch.setattr(sources, "_run_git", lambda step, *a: seen.append(step) or real(step, *a))
+    monkeypatch.setattr(sources, "_run_git", lambda step, *a, **kw: seen.append(step) or real(step, *a, **kw))
     with pytest.raises(SourceError, match="checkout would be 10 MiB"):
         clone(repo, tmp_path / "out")
     assert seen == ["clone", "ls-tree"]              # never reached the checkout
@@ -197,9 +197,11 @@ def test_clone_does_not_check_out_before_the_size_check(tmp_path, monkeypatch):
     repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n"})
     seen = []
     real = sources._run_git
-    monkeypatch.setattr(sources, "_run_git", lambda step, args, *a: seen.append((step, list(args))) or real(step, args, *a))
+    monkeypatch.setattr(sources, "_run_git",
+                        lambda step, args, *a, **kw: seen.append((step, list(args))) or real(step, args, *a, **kw))
     clone(repo, tmp_path / "out")
-    assert [st for st, _ in seen] == ["clone", "ls-tree", "checkout"]
+    steps = [st for st, _ in seen]
+    assert steps[:2] == ["clone", "ls-tree"] and set(steps[2:]) == {"checkout"}
     assert "--no-checkout" in seen[0][1] and "core.symlinks=false" in seen[0][1]
     assert all("core.symlinks=false" in args for _, args in seen)
 
@@ -218,3 +220,61 @@ def test_upload_symlinks_are_removed(tmp_path):
         tar.addfile(link)
     root = materialize({"kind": "upload", "upload_id": "u"}, tmp_path / "out", fetch_upload=lambda _: tgz)
     assert (root / "main.py").is_file() and not (root / "alias.py").is_symlink()
+
+
+def _blob(repo: Path, path: str) -> bytes:
+    return subprocess.run(["git", "-C", str(repo), "show", f"HEAD:{path}"], check=True, capture_output=True,
+                          env=ENV).stdout
+
+
+def test_repo_attributes_cannot_inflate_the_checkout(tmp_path, monkeypatch):
+    """Red team repro: working-tree-encoding=UTF-32LE made a 4 MB tree check out as 16 MB,
+    past what ls-tree counted. Attributes (top-level and nested), eol and text conversion
+    from the repo are ignored, so the checkout writes exactly the blob bytes."""
+    text = b"a" * (1 * 2**20)
+    repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n", "big.txt": text, "sub/inner.txt": text,
+                                      "crlf.txt": b"x\n" * 1000})
+    # Attributes arrive in a later commit, so the stored blobs are plain UTF-8.
+    (repo / ".gitattributes").write_bytes(b"*.txt working-tree-encoding=UTF-32LE\ncrlf.txt text eol=crlf\n")
+    (repo / "sub" / ".gitattributes").write_bytes(b"*.txt working-tree-encoding=UTF-32BE\n")
+    git(repo, "add", ".gitattributes", "sub/.gitattributes")
+    git(repo, "commit", "-qm", "attributes")
+    # Sanity: with its attributes, a plain checkout of this repo really is ~4x bigger.
+    plain = tmp_path / "plain"
+    subprocess.run(["git", "-c", "protocol.file.allow=always", "clone", "-q", f"file://{repo}", str(plain)],
+                   check=True, env=ENV)
+    assert (plain / "big.txt").stat().st_size >= 4 * len(text)
+
+    monkeypatch.setattr(sources, "GIT_MAX_BYTES", 3 * 2**20)   # tree is ~2 MiB; UTF-32 would be ~8 MiB
+    root = clone(repo, tmp_path / "out")
+    for path in ("big.txt", "sub/inner.txt", "crlf.txt"):
+        assert (root / path).read_bytes() == _blob(repo, path), path
+    assert not (root / ".gitattributes").exists() and not (root / "sub" / ".gitattributes").exists()
+    assert (root / "big.txt").stat().st_size < 2 * len(text)
+
+
+def test_attribute_settings_cannot_come_from_config_or_info(tmp_path, monkeypatch):
+    attrs = tmp_path / "attrs"
+    attrs.write_text("*.txt working-tree-encoding=UTF-32LE\n")
+    gc = tmp_path / "gitconfig"
+    gc.write_text(f"[core]\n\tattributesFile = {attrs}\n\tautocrlf = true\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gc))   # the worker's own config is ignored too
+    repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n", "a.txt": b"hello\n"})
+    root = clone(repo, tmp_path / "out")
+    assert (root / "a.txt").read_bytes() == _blob(repo, "a.txt")
+    cfg = sources._git_config(False)
+    assert f"core.attributesFile={os.devnull}" in cfg and "core.autocrlf=false" in cfg
+    assert sources._git_env(tmp_path, False)["GIT_ATTR_SOURCE"] == sources.EMPTY_TREE
+
+
+def test_older_git_fallback_alone_also_ignores_attributes(tmp_path, monkeypatch):
+    """Without GIT_ATTR_SOURCE (git < 2.40), dropping .gitattributes from the index before
+    checkout-index is enough on its own."""
+    real_env = sources._git_env
+    monkeypatch.setattr(sources, "_git_env", lambda *a: {k: v for k, v in real_env(*a).items() if k != "GIT_ATTR_SOURCE"})
+    repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n", "big.txt": b"a" * 2**16})
+    (repo / ".gitattributes").write_bytes(b"*.txt working-tree-encoding=UTF-32LE\n")
+    git(repo, "add", ".gitattributes")
+    git(repo, "commit", "-qm", "attributes")
+    root = clone(repo, tmp_path / "out")
+    assert (root / "big.txt").read_bytes() == _blob(repo, "big.txt")

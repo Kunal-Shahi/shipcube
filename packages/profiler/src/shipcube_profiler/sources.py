@@ -26,6 +26,7 @@ UNPACKED_MAX_BYTES = 1 * 2**30   # outright, beyond that the estimate is static 
 GIT_MAX_BYTES = 256 * 2**20      # whole clone, .git included (matches the API's unpack budget)
 GIT_MAX_BLOB_BYTES = 50 * 2**20  # any single file; larger blobs aren't fetched
 GIT_CLONE_TIMEOUT_S = 120.0
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 class SourceError(ValueError):
@@ -58,7 +59,10 @@ def _git_env(home: Path, allow_file: bool) -> dict:
             "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_LFS_SKIP_SMUDGE": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_ASKPASS": "/bin/false",
             # Takes precedence over protocol.* config, so redirects and submodule URLs are held too.
-            "GIT_ALLOW_PROTOCOL": "https:file" if allow_file else "https"}
+            "GIT_ALLOW_PROTOCOL": "https:file" if allow_file else "https",
+            # git >= 2.40 (the worker image has Debian's 2.47): read attributes from the empty
+            # tree, so the repo's .gitattributes can't change what the checkout writes.
+            "GIT_ATTR_SOURCE": EMPTY_TREE}
 
 
 def _git_config(allow_file: bool) -> list[str]:
@@ -68,15 +72,21 @@ def _git_config(allow_file: bool) -> list[str]:
         protocols += ["-c", "protocol.file.allow=always"]
     return [*protocols, "-c", "core.symlinks=false", "-c", "submodule.recurse=false",
             "-c", "core.hooksPath=/dev/null", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=",
-            "-c", "filter.lfs.required=false"]
+            "-c", "filter.lfs.required=false", "-c", f"core.attributesFile={os.devnull}",
+            "-c", "core.autocrlf=false", "-c", "core.eol=lf"]
 
 
-def _run_git(step: str, args: list[str], env: dict, deadline: float, watch: Path | None) -> tuple[int, str, str]:
+def _run_git(step: str, args: list[str], env: dict, deadline: float, watch: Path | None,
+             stdin: str | None = None) -> tuple[int, str, str]:
     """Run git under the deadline; while it runs, kill it once `watch` passes
     GIT_MAX_BYTES (a backstop: the exact check is the tree listing). Returns
     (returncode, stdout, why-it-was-killed)."""
     proc = subprocess.Popen(["git", *args], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                             start_new_session=True)
+    if stdin is not None:
+        proc.stdin.write(stdin.encode())
+        proc.stdin.close()
     out: list[bytes] = []
     reader = threading.Thread(target=lambda: out.append(proc.stdout.read()), daemon=True)
     reader.start()
@@ -133,8 +143,11 @@ def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) ->
     2. `ls-tree -r -l`: the exact size and file count the checkout would write. Over
        GIT_MAX_BYTES or UNPACKED_MAX_FILES is refused before writing anything (a polling
        watchdog alone can overshoot by GBs on one zero-filled blob repeated many times).
-    3. Checkout with `core.symlinks=false`, so links become small plain files holding
-       their target path; any link left afterwards is refused.
+    3. Checkout that writes exactly what ls-tree counted: the repo's .gitattributes are
+       ignored (GIT_ATTR_SOURCE = the empty tree, and on older git they're dropped from
+       the index first), so `working-tree-encoding`, `eol` or filters can't inflate it
+       (UTF-32 turned 4 MB into 16 MB). `core.symlinks=false`: links become small plain
+       files holding their target path; any link left afterwards is refused.
 
     Every step shares one GIT_CLONE_TIMEOUT_S deadline and a size watchdog as a backstop.
     No submodules, no LFS, no hooks, no system or user git config, https only (plus
@@ -160,8 +173,7 @@ def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) ->
                 elif files > UNPACKED_MAX_FILES:
                     why = f"the checkout has {files} files; the limit is {UNPACKED_MAX_FILES}"
         if not why:
-            code, _, why = _run_git("checkout", [*cfg, "-C", str(target), "reset", "--hard", "--quiet", "HEAD"],
-                                    env, deadline, target)
+            why = _checkout(target, cfg, env, deadline)
         if not why and _tree_bytes(target)[0] > GIT_MAX_BYTES:
             why = f"git clone is over {GIT_MAX_BYTES // 2**20} MiB"
         if not why:
@@ -173,6 +185,23 @@ def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) ->
         shutil.rmtree(target, ignore_errors=True)
         raise SourceError(why)
     return target
+
+
+def _checkout(target: Path, cfg: list[str], env: dict, deadline: float) -> str:
+    """Write HEAD's files without the repo's attributes (see _clone step 3)."""
+    git = [*cfg, "-C", str(target)]
+    (target / ".git" / "info" / "attributes").unlink(missing_ok=True)   # never from the remote; just in case
+    _, _, why = _run_git("checkout", [*git, "read-tree", "HEAD"], env, deadline, None)
+    if why:
+        return why
+    _, listing, why = _run_git("checkout", [*git, "ls-files", "-z"], env, deadline, None)
+    attrs = [f for f in listing.split("\0") if f and f.rsplit("/", 1)[-1] == ".gitattributes"]
+    if not why and attrs:
+        _, _, why = _run_git("checkout", [*git, "update-index", "--force-remove", "-z", "--stdin"],
+                             env, deadline, None, stdin="\0".join(attrs))
+    if not why:
+        _, _, why = _run_git("checkout", [*git, "checkout-index", "-a", "-f"], env, deadline, target)
+    return why
 
 
 def _inside(root: Path, rel: str) -> Path:

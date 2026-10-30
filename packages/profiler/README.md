@@ -48,7 +48,7 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
   - Three steps:
     1. clone `--no-checkout`;
     2. sum the blob sizes from `git ls-tree -r -l` and refuse past 256 MiB or 20,000 files *before* anything is written;
-    3. check out with `core.symlinks=false`, so links become small plain files holding their target path. Any link left over is refused.
+    3. check out exactly those bytes: the repo's `.gitattributes` are ignored (`GIT_ATTR_SOURCE` set to the empty tree, and also dropped from the index for git < 2.40), along with `core.attributesFile`, autocrlf and eol, so `working-tree-encoding` can't inflate it. `core.symlinks=false` makes links small plain files holding their target path, and any link left over is refused.
   - Files over 50 MiB aren't fetched (`--filter=blob:limit` plus `GIT_NO_LAZY_FETCH`).
   - One 120 s deadline covers all three steps, a size watchdog stays as a backstop, and a partial clone is removed.
   - `subdir` must resolve inside the checkout without passing through a link.
