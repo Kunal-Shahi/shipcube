@@ -271,6 +271,19 @@ class GcpDeployer:
                 time.sleep(min(2 ** i, 8))
         raise AssertionError("unreachable")
 
+    @staticmethod
+    def _retry_act_as(fn: Callable[[], Any], tries: int = 9) -> Any:
+        """The hosted deployer's actAs on a new runtime SA (_ensure_runtime_sa) can take a minute to
+        apply; until then Cloud Run answers 403 on iam.serviceaccounts.actAs."""
+        for i in range(tries):
+            try:
+                return fn()
+            except DeployError as e:
+                if e.code != "permission_denied" or "actas" not in str(e).lower() or i == tries - 1:
+                    raise
+                time.sleep(min(2 ** (i + 1), 15))
+        raise AssertionError("unreachable")
+
     # --- build --------------------------------------------------------------------------
 
     def _repo(self, app: AppRef) -> str:
@@ -344,20 +357,30 @@ class GcpDeployer:
     # --- deploy -------------------------------------------------------------------------
 
     def _ensure_runtime_sa(self, sess: AuthorizedSession, app: AppRef) -> str:
+        """The app's own runtime SA. In the hosted project it is created by the provisioner, which
+        lets the hosted deployer act as this SA only (#16): the deployer has no project-wide
+        actAs or SA admin. In a linked project the user's grants to the deployer cover it."""
         sa = app.runtime_sa
         if app.target.shared_runtime_sa:
             return sa
+        hosted = app.target.kind == "shipcube"
+        creator = self._session(self.s.provisioner_sa) if hosted else sess
         account_id = sa.split("@")[0]
-        self._call(sess, "POST", f"{IAM}/projects/{app.target.project}/serviceAccounts", ok=(200, 409),
+        self._call(creator, "POST", f"{IAM}/projects/{app.target.project}/serviceAccounts", ok=(200, 409),
                    json={"accountId": account_id,
                          "serviceAccount": {"displayName": f"ShipCube app {app.name}"[:100],
                                             "description": f"Runtime for {app.service}; no project roles"}})
         # A just-created SA can take a few seconds to become usable by Cloud Run.
         for _ in range(10):
-            r = sess.get(f"{IAM}/projects/{app.target.project}/serviceAccounts/{sa}", timeout=30)
+            r = creator.get(f"{IAM}/projects/{app.target.project}/serviceAccounts/{sa}", timeout=30)
             if r.status_code == 200:
                 break
             time.sleep(2)
+        if hosted and self.s.hosted_deployer_sa:
+            sa_url = f"{IAM}/projects/{app.target.project}/serviceAccounts/{sa}"
+            policy = self._retry_new(lambda: self._call(creator, "POST", f"{sa_url}:getIamPolicy", json={}))
+            if _add_binding(policy, "roles/iam.serviceAccountUser", f"serviceAccount:{self.s.hosted_deployer_sa}"):
+                self._retry_new(lambda: self._call(creator, "POST", f"{sa_url}:setIamPolicy", json={"policy": policy}))
         return sa
 
     def _iap_agent(self, sess: AuthorizedSession, project: str) -> str:
@@ -404,7 +427,7 @@ class GcpDeployer:
         sess = self._for(app)
         sa = self._ensure_runtime_sa(sess, app)
         body = self._service_body(app, image, caps, env, sa)
-        op = self._call(sess, "PATCH", f"{self._service_url(app)}?allowMissing=true", json=body)
+        op = self._retry_act_as(lambda: self._call(sess, "PATCH", f"{self._service_url(app)}?allowMissing=true", json=body))
         svc = self._wait_op(sess, RUN, op)
         self._grant_iap_invoker(sess, app)
         return Deployed(url=svc.get("uri", ""), revision=svc.get("latestReadyRevision", "").rsplit("/", 1)[-1],
@@ -520,8 +543,9 @@ class GcpDeployer:
         except DeployError as e:
             if e.code != "not_found":
                 raise
-        if not app.target.shared_runtime_sa:
-            self._call(sess, "DELETE", f"{IAM}/projects/{app.target.project}/serviceAccounts/{app.runtime_sa}", ok=(200, 404))
+        if not app.target.shared_runtime_sa:  # hosted runtime SAs belong to the provisioner (#16)
+            owner = self._session(self.s.provisioner_sa) if app.target.kind == "shipcube" else sess
+            self._call(owner, "DELETE", f"{IAM}/projects/{app.target.project}/serviceAccounts/{app.runtime_sa}", ok=(200, 404))
         repos = [self._repo(app)] + ([self.s.repo] if app.target.kind == "shipcube" else [])  # + the pre-isolation repo
         for repo in repos:
             pkg = f"{AR}/projects/{app.target.project}/locations/{app.region}/repositories/{repo}/packages/{app.service}"
@@ -533,26 +557,37 @@ class GcpDeployer:
         log.info("purged %s in %s", app.service, app.target.project)
 
 
+    def public_services(self, regions: list[str]) -> tuple[list[str], int]:
+        """Hosted services whose IAM policy names allUsers or allAuthenticatedUsers (anyone could call
+        them past IAP), and how many services were checked. Runs as the worker's own identity
+        (run.developer in the apps project)."""
+        sess, out, checked = self._session(None), [], 0
+        for region in sorted(set(regions)):
+            base = f"{RUN}/projects/{self.s.apps_project}/locations/{region}/services"
+            page: str | None = ""
+            while page is not None:
+                r = self._call(sess, "GET", base, params={"pageToken": page} if page else None)
+                for svc in r.get("services", []):
+                    checked += 1
+                    policy = self._call(sess, "GET", f"{RUN}/{svc['name']}:getIamPolicy")
+                    if any(m in ("allUsers", "allAuthenticatedUsers") for b in policy.get("bindings", []) for m in b.get("members", [])):
+                        out.append(svc["name"])
+                page = r.get("nextPageToken") or None
+        return out, checked
+
     def ensure_link_deployer(self, workspace_id: str, deployer_sa: str) -> None:
-        """Create ws-<id>-deployer in the control project before the user runs link-project.sh (which
-        fails on an unknown member), and let the API (verify) and worker (deploy) impersonate it. It
-        holds no roles of its own; the user's grants in their project are all it can use. Runs as the
-        API's ADC, which has iam.serviceAccountAdmin on the control project (infra/terraform/iam.tf)."""
+        """Create ws-<id>-deployer before the user runs link-project.sh (which fails on an unknown
+        member). It lives in the links project (infra/terraform/links.tf), where the API and worker
+        may act as any SA, so creating it is all there is to do: the API holds no IAM admin role
+        anywhere (#15). It has no roles of its own; the user's grants in their project are all it
+        can use."""
         if deployer_sa in self._link_deployers:
             return
-        sess = self._session(None)
         project = deployer_sa.split("@")[1].removesuffix(".iam.gserviceaccount.com")
-        self._call(sess, "POST", f"{IAM}/projects/{project}/serviceAccounts", ok=(200, 409),
+        self._call(self._session(None), "POST", f"{IAM}/projects/{project}/serviceAccounts", ok=(200, 409),
                    json={"accountId": deployer_sa.split("@")[0],
                          "serviceAccount": {"displayName": f"ShipCube deployer for workspace {workspace_id}"[:100],
                                             "description": "Granted roles in the workspace's linked GCP projects"}})
-        sa_url = f"{IAM}/projects/{project}/serviceAccounts/{deployer_sa}"
-        policy = self._retry_new(lambda: self._call(sess, "POST", f"{sa_url}:getIamPolicy", json={}))
-        changed = False
-        for sa in (self.s.api_sa, self.s.worker_sa):
-            changed |= _add_binding(policy, "roles/iam.serviceAccountTokenCreator", f"serviceAccount:{sa}")
-        if changed:
-            self._retry_new(lambda: self._call(sess, "POST", f"{sa_url}:setIamPolicy", json={"policy": policy}))
         self._link_deployers.add(deployer_sa)
         log.info("link deployer ready", extra={"workspace_id": workspace_id, "deployer_sa": deployer_sa})
 

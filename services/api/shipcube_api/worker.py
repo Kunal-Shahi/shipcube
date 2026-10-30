@@ -73,6 +73,7 @@ class Worker:
         self.id = worker_id or f"{settings.worker_id}/{lane}/{uuid.uuid4().hex[:6]}"
         self._stop = threading.Event()
         self._last_housekeeping = 0.0
+        self._last_exposure_check = 0.0
 
     # --- loop ---------------------------------------------------------------------------
 
@@ -426,6 +427,27 @@ class Worker:
                 self.janitor.sweep()
             except Exception:  # noqa: BLE001 — a cloud error must not stop the rest of housekeeping
                 log.exception("profiler janitor failed")
+        if time.monotonic() - self._last_exposure_check > 3600:
+            self._last_exposure_check = time.monotonic()
+            self.check_exposure()
+
+    def check_exposure(self) -> None:
+        """Hourly: no hosted app may be callable by anyone (allUsers / allAuthenticatedUsers), which
+        would bypass IAP. Logged CRITICAL for alerting; ShipCube never makes such a grant itself."""
+        check = getattr(self.d, "public_services", None)
+        if check is None:
+            return
+        with db.worker_tx() as conn:
+            regions = [r["region"] for r in conn.execute(
+                "select distinct region from apps where gcp_link_id is null and deleted_at is null")]
+        try:
+            exposed, checked = check(regions or [settings.region])
+        except Exception:  # noqa: BLE001
+            log.exception("exposure check failed")  # no heartbeat: the absence alert fires after 3 h
+            return
+        for name in exposed:  # these exact messages feed alerts (infra/terraform/modules/monitoring)
+            log.critical("hosted service is public: anyone can call it past IAP", extra={"service": name})
+        log.info("exposure check ran", extra={"services_checked": checked, "public": len(exposed)})
 
 
 def current_deployment_exists(app_id: Any) -> bool:

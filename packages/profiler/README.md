@@ -44,6 +44,7 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
 - **Abuse signals:** `profile.measurements.abuse_signals`, computed host-side by `abuse_signals(profile)`, for the control plane's strikes.
 - **Git sources:**
   - `https://` only. `file://`, ssh, `git://` and `ext::` are refused; `materialize(..., allow_file_urls=True)` exists for tests.
+  - The host must be public. It's resolved once, every address must be public (no private, loopback, link-local/metadata, CGNAT or reserved ranges), and git then connects to that checked address (`http.curloptResolve`) with redirects off, so DNS rebinding or a redirect can't reach an internal host.
   - Clones are shallow: `--depth 1 --single-branch --no-tags`.
   - Three steps:
     1. clone `--no-checkout`;

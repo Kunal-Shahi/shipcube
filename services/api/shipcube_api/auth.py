@@ -150,6 +150,21 @@ def _verify_console_jwt(token: str, project: str, id_token: Any, request: Any) -
         return claims
 
 
+def _claim_pending_user(conn: Any, claims: dict[str, Any]) -> dict | None:
+    """A person added by email (admin bootstrap, before their first sign-in) is stored with
+    firebase_uid 'pending:<email>'. Their first console sign-in, with that email verified by
+    Identity Platform, binds the row to their uid. Nothing else is created here."""
+    email = claims.get("email")
+    if not email or claims.get("email_verified") is not True:
+        return None
+    u = conn.execute("update users set firebase_uid = %s, email_verified = true"
+                     " where firebase_uid = 'pending:' || email and lower(email) = lower(%s) and disabled_at is null"
+                     " returning id", (claims["sub"], email)).fetchone()
+    if u:
+        log.info("pending user claimed by first sign-in", extra={"user_id": str(u["id"])})
+    return u
+
+
 def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
     user_id = None
     workspace_id = workspace_hint
@@ -167,6 +182,8 @@ def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
         with db.tx(role=db.APP) as conn:
             u = conn.execute("select id from users where firebase_uid = %s and disabled_at is null",
                              (claims["sub"],)).fetchone()
+            if u is None:
+                u = _claim_pending_user(conn, claims)
         user_id = str(u["id"]) if u else None
     if user_id is None:
         return None
