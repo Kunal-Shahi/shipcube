@@ -36,9 +36,16 @@ class UploadSource(_Model):
 
 class GitSource(_Model):
     kind: Literal["git"]
-    url: str
-    ref: str | None = None
-    subdir: str | None = None
+    url: str = Field(pattern=r"^https://[^\s]+$", max_length=2048,
+                     description="https:// only; cloned shallow, one branch or tag, no submodules or LFS")
+    ref: str | None = Field(None, pattern=r"^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$", description="Branch or tag")
+    subdir: str | None = Field(None, pattern=r"^[A-Za-z0-9._ -][A-Za-z0-9._/ -]{0,499}$")
+
+    @model_validator(mode="after")
+    def _subdir_inside(self) -> "GitSource":
+        if self.subdir and ".." in self.subdir.split("/"):
+            raise ValueError("subdir must stay inside the repository")
+        return self
 
 
 class ImageSource(_Model):
