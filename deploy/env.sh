@@ -19,9 +19,12 @@ SQL_INSTANCE="$PROJECT:$REGION:shipcube-pg"
 BUILD_BUCKET="$PROJECT-platform-builds"
 # Cloud Run URLs are deterministic: https://<service>-<project number>.<region>.run.app
 run_url() { echo "https://$1-$PROJECT_NUMBER.$REGION.run.app"; }
-CONSOLE_URL="$(run_url shipcube-console)"
-# Where the landing page is served (CORS for its waitlist form); add the Firebase Hosting address, comma-separated.
-: "${CONSOLE_ORIGINS:=$CONSOLE_URL}"
+CONSOLE_RUN_URL="$(run_url shipcube-console)"
+# The console's public address (Firebase Hosting in front of the Cloud Run service): used in approval
+# links, the setup guide and sign-in. Override with CONSOLE_URL=... (e.g. the run.app URL above).
+: "${CONSOLE_URL:=https://shipcube.web.app}"
+# Where the landing page is served (CORS for its waitlist form): the public address and the run.app URL.
+: "${CONSOLE_ORIGINS:=$CONSOLE_URL,$CONSOLE_RUN_URL}"
 MCP_URL="$(run_url shipcube-mcp)"
 GATEWAY_URL="$(run_url shipcube-gateway)"
 WORKER_URL="$(run_url shipcube-worker)"
