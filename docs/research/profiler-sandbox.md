@@ -56,17 +56,17 @@ This is the short list asked for. "Enforced" means in code or in Terraform on `m
 | Non-root (uid 10001), read-only `/app` | **Enforced** in the image; the root filesystem is writable in Cloud Run (no `--read-only` equivalent) | `DOCKERFILE` |
 | Inline source ≤ 2 MB / 100 files; upload ≤ 100 MiB | **Enforced** | `models.py`, `deploy/gcp.py` |
 | Billing kill switch (unlinks billing at INR 24,000 gross) | **Enforced**, but it's account-wide and lags by hours | `infra/budget-killswitch`, `budget.tf` |
-| Build step without arbitrary code or egress | **Missing**: `pip install -r requirements.txt` as root, with internet, 900 s | `DOCKERFILE`, `build_spec` |
+| Build step without arbitrary code or egress | **Phase 1**: wheels-only from pypi.org, sanitized requirements, so no package code runs. The build still has internet egress (phase 2) | `policy.py`, `DOCKERFILE` |
 | Build identity scoped per tenant | **Missing**: one `profiler-build` SA reads all of `profiler-src/` | module `main.tf` |
-| Image-size, dependency-count and build-time caps tighter than 900 s | **Missing** | none |
+| Image-size, dependency-count and build-time caps | **Phase 1**: 2 GiB image (`size-check` build step), 60 requirements, 500 MiB / 10,000 source files, 300 s build | `policy.py`, `build_spec` |
 | Per-workspace and global profiler concurrency and rate limits | **Missing** | none; the claim query has no per-kind or per-workspace limit |
 | Estimates kept off the deploy path | **Missing**: one serial worker; a profiled estimate can hold it for about 25 min | `worker.py` |
 | Profiler spend ledger / soft budget stop | **Missing** | none |
-| Abuse signals → auto-suspend | **Missing** (signals are measured, nothing acts on them) | `Profile.net_blocked`, `processes_max`, `killed_reason` exist |
+| Abuse signals → auto-suspend | **Phase 1, profiler side**: `profile.abuse_signals` is computed per run. Strikes and suspension belong to Platform | `abuse.py` |
 | Janitor for orphaned jobs and builds | **Missing** (cleanup happens only in the runner's own `finally`) | none |
 | Separate project or quota for the profiler | **Missing**: shares regional Cloud Run, Cloud Build and Logging quotas with hosted apps | none |
 
-**Naming:** `infra/README.md` and `settings.py` call the runtime SA `sc-profiler`, but Terraform creates `profiler-sandbox@`. The env var should name whichever exists. I suggest renaming the README's mention to match Terraform.
+**Naming:** the runtime SA is `profiler-sandbox@` (Terraform). `infra/README.md` now says so. Phase 1 fixed the README, which used to call it `sc-profiler`. A comment in `services/api/shipcube_api/settings.py` still uses the old name; that file is Platform's.
 
 ## 3. Blast radius: where a run can reach
 
@@ -121,7 +121,7 @@ Design:
      - keep plain `name[extras] <specifier>` lines,
      - drop or deny options lines (`-i`, `--extra-index-url`, `--trusted-host`, `-f`, `-e`, `-r`, `-c`) and URL or VCS requirements.
    - The Dockerfile runs `pip install --only-binary=:all: --no-cache-dir -r requirements.lock`. Installing a wheel executes no package code, so nothing user-controlled runs at build time.
-   - A dependency without a wheel for `manylinux`/py3.12 fails the build. The estimate then falls back to static, noted as `profile.mode=static, reason=build_requires_sdist`.
+   - A dependency without a wheel for `manylinux`/py3.12 fails the build. The estimate then falls back to static, noted as `profile.mode=static, static_reason=build_failed`.
    - Deny-list by default; an allow-list per organisation is a later option.
 2. **Caps.**
 
@@ -138,7 +138,11 @@ Design:
    - Reuse the C-1 pattern that hosted builds already use (`sc-build-<id>`): each workspace gets `profiler-build-<ws>`.
    - Its bucket read is scoped to the `profiler-src/<ws>/` prefix, and the runner uploads there. It gets AR write on `profiler` limited to the `prof-<ws>-*` image prefix through a tag condition, or one AR repo per workspace if conditions on AR don't allow it.
    - Until then, the shared `profiler-build` SA can read any tenant's `profiler-src/` tarball for up to one day. That's acceptable only while build steps run no user code, so (1) must ship first.
-5. **The Dockerfile stays generated.** User files are copied to `/app` and never interpreted as a Dockerfile; this is already true. A user `Dockerfile` in the upload is ignored.
+5. **The agent's interpreter stays pristine.** Added after the red team's review of #57. Wheels-only stops code running at build time, but a wheel from PyPI could still ship a `.pth` file, overwrite stdlib files through `.data`, or shadow psutil, and so take over the agent at run time. So:
+   - the app's deps install as an unprivileged user with `--target /opt/appdeps`, on the app's `PYTHONPATH` only;
+   - the agent runs `python -S -P` with `WORKDIR /` from a read-only `/opt/shipcube` that bundles psutil.
+6. **The agent and the app run as different users.** Added after the red team's review of #57. The agent is root in the container and starts the app as uid 10001, which keeps no capabilities, so the app can't stop, kill, ptrace or read the agent. Signals the app aims at the agent are counted and raise `agent_tamper`.
+7. **The Dockerfile stays generated.** User files are copied to `/app` and never interpreted as a Dockerfile; this is already true. A user `Dockerfile` in the upload is ignored.
 
 ## 5. Hard caps per run
 
@@ -258,8 +262,12 @@ These sources are never run. They get a static estimate with `profile.mode=stati
 |---|---|
 | `image` sources: we didn't build them and can't vouch for what's inside | `image_source` |
 | GPU libraries detected (torch with CUDA, etc.): the sandbox has no GPU, and a CPU run would mislead | `gpu` |
-| Not Python; the agent profiles Python only | `unsupported_language` |
-| A requirement with no wheel, or a disallowed requirements line (URL, VCS, custom index) | `build_requires_sdist` / `requirements_policy` |
+| No entrypoint found (including non-Python code, since the agent profiles Python only) | `no_entrypoint` |
+| A requirement with no wheel, or the build over 300 s | `build_failed` |
+| A disallowed requirements line (URL, VCS, path, option, custom index, non-PEP 508 marker) | `requirements_policy` |
+| A script that exits with an error | `app_failed` |
+| A result line without this run's nonce (tampering; also abuse signal `result_forged`) | `result_rejected` |
+| GCP or logging failure in the profiler itself | `profiler_error` |
 | Image > 2 GiB, more than 60 requirements, unpacked source > 500 MiB | `too_large` |
 | Workspace over its daily quota, over its spend share, or suspended | `quota` / `budget` / `suspended` |
 | Global ledger over the daily cap, or the profiler switched off | `budget` / `disabled` |
@@ -267,6 +275,15 @@ These sources are never run. They get a static estimate with `profile.mode=stati
 | Web app didn't open its port in 20 s (often it needs a DB or secret it can't have in the sandbox) | `did_not_start` (the run happened; its numbers aren't used) |
 
 Apps that need network access at run time (a database, an external API) still run. Their blocked calls are counted and named in the reasoning, as the sample batch job's webhook is today. Their measured numbers describe the app without those dependencies, and the estimate says so.
+
+### Phase 1 interface (implemented)
+
+- **Where it shows.** `EstimateResult.profile["measurements"]` carries:
+  - `mode`: `measured` or `static`
+  - `static_reason`: a code from the table above, or null
+  - `abuse_signals`: a subset of `egress_flood`, `mining_pool`, `fork_bomb`, `disk_flood`, `cpu_pinned`, `result_forged`
+- **Profiler codes.** The profiler sets them itself. The constants are in `shipcube_profiler.STATIC_REASONS`.
+- **Control-plane codes.** For quota, budget, suspended, busy and disabled, the control plane passes `runner=StaticRunner(reason=<code>)` to `estimate()`.
 
 ## 10. Rollout
 

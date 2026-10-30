@@ -346,3 +346,72 @@ def test_estimate_through_the_local_docker_sandbox(monkeypatch):
     assert m["net_blocked"] >= 1
     assert r.workload_class == "batch_cron" and r.tier == "T2"
     assert r.explained_by == "rules" and r.profile["explainer_fallback_reason"].startswith("not_configured")
+
+
+# --- static reasons (docs/research/profiler-sandbox.md §9) ----------------------------------
+
+def _reason(r) -> str | None:
+    return r.profile["measurements"]["static_reason"]
+
+
+class _Raises:
+    name = "fake"
+
+    def __init__(self, err):
+        self.err = err
+
+    def run(self, *a):
+        raise self.err
+
+
+class _Measured:
+    name = "fake"
+
+    def __init__(self, profile):
+        self.profile = profile
+
+    def run(self, *a):
+        return self.profile
+
+
+
+def _batch_src():
+    return inline(SAMPLES / "nightly_batch")
+
+
+def test_static_reasons_are_reported():
+    from shipcube_profiler import ProfilerError, StaticRunner
+    img = estimate({"kind": "image", "uri": "us-docker.pkg.dev/p/r/a@sha256:1"}, {}, explainer=RuleExplainer())
+    assert _reason(img) == "image_source"
+    for err, reason in ((ProfilerError("policy", "x", reason="requirements_policy"), "requirements_policy"),
+                        (ProfilerError("build", "x", reason="too_large"), "too_large"),
+                        (ProfilerError("logs", "x"), "profiler_error")):
+        r = estimate(_batch_src(), {}, runner=_Raises(err), explainer=RuleExplainer())
+        assert r.profile["measurements"]["mode"] == "static" and _reason(r) == reason
+    rejected = estimate(_batch_src(), {}, runner=_Raises(ProfilerError("run", "x", reason="result_rejected")),
+                        explainer=RuleExplainer())
+    assert rejected.profile["measurements"]["abuse_signals"] == ["result_forged"]
+    # The control plane's own decisions pass straight through.
+    q = estimate(_batch_src(), {}, runner=StaticRunner(reason="quota"), explainer=RuleExplainer())
+    assert _reason(q) == "quota"
+
+
+def test_gpu_apps_are_not_run():
+    src = {"kind": "inline", "files": [{"path": "main.py", "content": "import torch\nprint(torch.cuda.is_available())\n"}]}
+    r = estimate(src, {}, runner=_Raises(AssertionError("must not run")), explainer=RuleExplainer())
+    assert _reason(r) == "gpu"
+
+
+def test_failed_runs_keep_their_abuse_signals():
+    crashed = Profile(mode="measured", runner="fake", kind="script", exit_code=1, net_blocked=80,
+                      abuse_signals=["egress_flood"])
+    r = estimate(_batch_src(), {}, runner=_Measured(crashed), explainer=RuleExplainer())
+    m = r.profile["measurements"]
+    assert m["mode"] == "static" and m["static_reason"] == "app_failed" and m["abuse_signals"] == ["egress_flood"]
+    dash = inline(SAMPLES / "dashboard")
+    silent = Profile(mode="measured", runner="fake", kind="web", requests=RequestStats(sent=120, ok=0))
+    assert _reason(estimate(dash, {}, runner=_Measured(silent), explainer=RuleExplainer())) == "did_not_start"
+
+
+def test_measured_estimates_have_no_reason(batch_rules):
+    assert _reason(batch_rules) is None

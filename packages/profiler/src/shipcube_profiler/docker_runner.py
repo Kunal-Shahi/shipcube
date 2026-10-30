@@ -10,7 +10,9 @@ job (gcp_runner.py) so a local estimate exercises the same code path:
 - **Same isolation, enforced by Docker:**
   - `--network none` (no interfaces but loopback, no DNS)
   - `--read-only` root with a size-capped, nosuid, nodev `/tmp` tmpfs
-  - `--user 10001:10001`, `--cap-drop ALL`, `--security-opt no-new-privileges`
+  - the agent as root with `--cap-drop ALL` plus SETUID, SETGID, CHOWN and KILL, used only to start
+    and stop
+    the app as uid 10001 (no capabilities left); `--security-opt no-new-privileges`
   - `--cpus`, `--memory` (swap disabled), `--pids-limit`, and a wall-clock timeout that kills the container
   - no environment from the host except the hints
 - **Same measurements.** The agent (`python -m shipcube_profiler.agent`) runs the app
@@ -25,7 +27,8 @@ Configuration (environment, all optional):
   SHIPCUBE_PROFILER_PIDS         default 256
   SHIPCUBE_PROFILER_TIMEOUT_S    default 600     (Cloud Run job: 600 s)
   SHIPCUBE_PROFILER_TMPFS_MB     default 512
-  SHIPCUBE_PROFILER_BUILD_TIMEOUT_S  default 900
+  SHIPCUBE_PROFILER_DISK_MB      default 512     (agent kills the app past this much written)
+  SHIPCUBE_PROFILER_BUILD_TIMEOUT_S  default 300
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import uuid
@@ -43,9 +47,12 @@ from pathlib import Path
 
 from shipcube_classifier import obs
 
-from .agent import RESULT_PREFIX
+from .abuse import abuse_signals
+from .agent import NONCE_ENV, parse_result
 from .detect import CodeSummary
-from .gcp_runner import SANDBOX_UID, ProfilerError, _package
+from .errors import ProfilerError
+from .gcp_runner import SANDBOX_UID, _package
+from .policy import BUILD_TIMEOUT_S, check_image_size
 from .profile import Hints, Profile
 
 log = logging.getLogger("shipcube.profiler")
@@ -62,7 +69,8 @@ class DockerSandboxConfig:
     pids: int = 256
     timeout_s: int = 600
     tmpfs_mb: int = 512
-    build_timeout_s: int = 900
+    disk_mb: int = 512
+    build_timeout_s: int = BUILD_TIMEOUT_S
 
     @classmethod
     def from_env(cls, env: dict | None = None) -> "DockerSandboxConfig":
@@ -75,12 +83,13 @@ class DockerSandboxConfig:
                        pids=int(e.get("SHIPCUBE_PROFILER_PIDS", d.pids)),
                        timeout_s=int(e.get("SHIPCUBE_PROFILER_TIMEOUT_S", d.timeout_s)),
                        tmpfs_mb=int(e.get("SHIPCUBE_PROFILER_TMPFS_MB", d.tmpfs_mb)),
+                       disk_mb=int(e.get("SHIPCUBE_PROFILER_DISK_MB", d.disk_mb)),
                        build_timeout_s=int(e.get("SHIPCUBE_PROFILER_BUILD_TIMEOUT_S", d.build_timeout_s)))
         except ValueError as err:
             raise ProfilerError("config", f"bad SHIPCUBE_PROFILER_* value: {err}") from err
 
 
-def run_args(cfg: DockerSandboxConfig, image: str, name: str, hints: Hints) -> list[str]:
+def run_args(cfg: DockerSandboxConfig, image: str, name: str, hints: Hints, nonce: str = "") -> list[str]:
     """The `docker run` command line: the sandbox's isolation lives here."""
     h = {k: v for k, v in hints.__dict__.items() if v is not None and k != "sample_input"}
     # The agent keeps the app under the container's limits, so it can measure and
@@ -88,17 +97,27 @@ def run_args(cfg: DockerSandboxConfig, image: str, name: str, hints: Hints) -> l
     agent_timeout = max(10, cfg.timeout_s - 30)
     agent_memory = int(cfg.memory_mb * 0.9)
     return [
-        cfg.docker, "run", "--rm", "--name", name, "--label", LABEL,
+        # --init: a tiny init is PID 1, so the agent doesn't get PID 1's immunity to
+        # signals; its protection from the app must come from the uid split (and the
+        # tests prove that). It also reaps the app's orphans.
+        cfg.docker, "run", "--rm", "--init", "--name", name, "--label", LABEL,
         "--network", "none",
         "--read-only", "--tmpfs", f"/tmp:rw,nosuid,nodev,size={cfg.tmpfs_mb}m",
-        "--user", f"{SANDBOX_UID}:{SANDBOX_UID}",
-        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        # The agent is root in the container with only SETUID/SETGID (to start the app as
+        # SANDBOX_UID), CHOWN (to hand it its work dir) and KILL (to stop it); the app
+        # keeps no capabilities.
+        "--user", "0:0", "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID",
+        "--cap-add", "CHOWN", "--cap-add", "KILL",
+        "--security-opt", "no-new-privileges",
         "--cpus", cfg.cpus, "--memory", f"{cfg.memory_mb}m", "--memory-swap", f"{cfg.memory_mb}m",
         "--pids-limit", str(cfg.pids), "--ulimit", "nofile=1024:1024",
         "--env", f"SHIPCUBE_HINTS={json.dumps(h)}",
         "--env", "SHIPCUBE_RUNNER_NAME=docker",
         "--env", f"SHIPCUBE_AGENT_TIMEOUT_S={agent_timeout}",
         "--env", f"SHIPCUBE_AGENT_MEMORY_MB={agent_memory}",
+        "--env", f"SHIPCUBE_AGENT_NPROC={cfg.pids}",
+        "--env", f"SHIPCUBE_AGENT_DISK_MB={cfg.disk_mb}",
+        "--env", f"{NONCE_ENV}={nonce}",
         image,
     ]
 
@@ -122,29 +141,54 @@ class DockerRunner:
         except (ProfilerError, subprocess.TimeoutExpired):
             return False
 
-    def build(self, app_dir: Path) -> str:
-        """Build (or reuse) the sandbox image for this code; returns its tag."""
-        context = _package(app_dir, compress=False)
+    def build(self, app_dir: Path, context: bytes | None = None) -> str:
+        """Build (or reuse) the sandbox image for this code; returns its tag. `context`
+        replaces the packaged app (tests that install a local wheel)."""
+        context = context or _package(app_dir, compress=False)
         image = f"{IMAGE_REPO}:{hashlib.sha256(context).hexdigest()[:16]}"
         if self._docker("image", "inspect", image, timeout=30).returncode == 0:
             obs.event(log, "profile.docker_image", image=image, cached=True)
-            return image
+        else:
+            try:
+                r = self._docker("build", "--quiet", "--label", LABEL, "-t", image, "-",
+                                 stdin=context, timeout=self.config.build_timeout_s)
+            except subprocess.TimeoutExpired as e:
+                raise ProfilerError("build", f"docker build timed out after {self.config.build_timeout_s}s",
+                                    reason="build_failed") from e
+            if r.returncode != 0:
+                raise ProfilerError("build", _tail(r.stderr), reason="build_failed")
+            obs.event(log, "profile.docker_image", image=image, cached=False)
+        size = self._docker("image", "inspect", "-f", "{{.Size}}", image, timeout=30).stdout.strip()
+        try:
+            check_image_size(int(size or 0))
+        except ProfilerError:
+            self._docker("image", "rm", "-f", image, timeout=60)
+            raise
+        return image
         try:
             r = self._docker("build", "--quiet", "--label", LABEL, "-t", image, "-",
                              stdin=context, timeout=self.config.build_timeout_s)
         except subprocess.TimeoutExpired as e:
-            raise ProfilerError("build", f"docker build timed out after {self.config.build_timeout_s}s") from e
+            raise ProfilerError("build", f"docker build timed out after {self.config.build_timeout_s}s",
+                                reason="build_failed") from e
         if r.returncode != 0:
-            raise ProfilerError("build", _tail(r.stderr))
-        obs.event(log, "profile.docker_image", image=image, cached=False)
+            raise ProfilerError("build", _tail(r.stderr), reason="build_failed")
+        size = self._docker("image", "inspect", "-f", "{{.Size}}", image, timeout=30).stdout.strip()
+        try:
+            check_image_size(int(size or 0))
+        except ProfilerError:
+            self._docker("image", "rm", "-f", image, timeout=60)
+            raise
+        obs.event(log, "profile.docker_image", image=image, cached=False, size=int(size or 0))
         return image
 
-    def run(self, app_dir: Path, summary: CodeSummary, hints: Hints) -> Profile:
+    def run(self, app_dir: Path, summary: CodeSummary, hints: Hints, *, image: str | None = None) -> Profile:
         run_id = obs.context().get("estimate_id", f"r{uuid.uuid4().hex[:12]}")
         name = "prof-" + re.sub(r"[^a-z0-9-]", "-", run_id.lower())[:40].strip("-")
+        nonce = secrets.token_hex(16)
         with obs.timed(log, "profile.docker", run_id=run_id) as extra:
-            image = self.build(app_dir)
-            args = run_args(self.config, image, name, hints)
+            image = image or self.build(app_dir)
+            args = run_args(self.config, image, name, hints, nonce)
             try:
                 r = subprocess.run(args, capture_output=True, timeout=self.config.timeout_s + 30)
             except subprocess.TimeoutExpired as e:
@@ -154,13 +198,13 @@ class DockerRunner:
                 # --rm removes it on exit; this covers a killed or orphaned container.
                 self._docker("rm", "-f", name, timeout=30)
             extra.update(image=image, exit_code=r.returncode)
-        out = r.stdout.decode(errors="replace")
-        line = next((ln for ln in out.splitlines() if ln.startswith(RESULT_PREFIX)), None)
-        if line is None:
+        result = parse_result(r.stdout.decode(errors="replace").splitlines(), nonce)
+        if result is None:
             why = "out of memory (container killed)" if r.returncode == 137 else _tail(r.stderr)
             raise ProfilerError("run", f"no result from the sandbox (exit {r.returncode}): {why}")
-        profile = Profile.from_dict(json.loads(line[len(RESULT_PREFIX):])["profile"])
+        profile = Profile.from_dict(result["profile"])
         profile.runner = self.name
+        profile.abuse_signals = abuse_signals(profile)
         return profile
 
 
