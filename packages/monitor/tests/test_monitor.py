@@ -267,3 +267,11 @@ def test_provider_allows_gcp_on_cloud_run(monkeypatch, env):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     assert provider_from_env() == "gcp-monitor"
+
+
+def test_mock_takes_shipcube_dev_mode_locally(monkeypatch):
+    for k in ("K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB", "DEV_MODE"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SHIPCUBE_MONITOR", "mock")
+    monkeypatch.setenv("SHIPCUBE_DEV_MODE", "1")
+    assert isinstance(provider_from_env(), MockMonitor)

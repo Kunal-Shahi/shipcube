@@ -61,7 +61,11 @@ function isPublicHttps(raw: string): boolean {
 export function config(): Config {
   if (cached) return cached;
   const env = process.env;
-  const devMode = env.DEV_MODE === "1" || env.DEV_MODE === "true";
+  // SHIPCUBE_DEV_MODE is the one switch name (#29); DEV_MODE still works, with a warning.
+  const devMode = [env.SHIPCUBE_DEV_MODE, env.DEV_MODE].some((v) => v === "1" || v === "true");
+  if (devMode && !(env.SHIPCUBE_DEV_MODE === "1" || env.SHIPCUBE_DEV_MODE === "true")) {
+    console.warn("DEV_MODE=1 is deprecated; use SHIPCUBE_DEV_MODE=1");
+  }
   const onCloudRun = CLOUD_RUN_VARS.some((k) => Boolean(env[k]));
   const auth = (env.AUTH_PROVIDER || (devMode ? "mock" : "identity-platform")) as AuthProviderId;
   if (!PROVIDERS.includes(auth)) throw new Error(`Unknown AUTH_PROVIDER "${auth}".`);
@@ -86,10 +90,6 @@ export function config(): Config {
     throw new Error(`DEV_MODE and AUTH_PROVIDER=${c.auth} are refused on Cloud Run (K_SERVICE is set).`);
   }
   if (onCloudRun) {
-    // The API's switch name too (#29): one setting must never turn dev mode on anywhere.
-    if (env.SHIPCUBE_DEV_MODE === "1" || env.SHIPCUBE_DEV_MODE === "true") {
-      throw new Error("SHIPCUBE_DEV_MODE is refused on Cloud Run.");
-    }
     if (c.devApiSession) throw new Error("SHIPCUBE_DEV_API_SESSION (a local console session) is refused on Cloud Run.");
     for (const [name, value] of [["SHIPCUBE_API_URL", c.apiUrl], ["SHIPCUBE_MCP_URL", c.mcpUrl]] as const) {
       if (value && !isPublicHttps(value)) throw new Error(`${name} "${value}" must be a public https URL on Cloud Run.`);

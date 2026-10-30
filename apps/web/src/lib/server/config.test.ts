@@ -91,9 +91,9 @@ describe("config()", () => {
     }
   });
 
-  it("refuses the API's dev switch and a local console session on Cloud Run", () => {
+  it("refuses SHIPCUBE_DEV_MODE and a local console session on Cloud Run", () => {
     withEnv({ ...LIVE, SHIPCUBE_DEV_MODE: "1" });
-    expect(() => config()).toThrow(/SHIPCUBE_DEV_MODE is refused/);
+    expect(() => config()).toThrow(/refused on Cloud Run/);
     withEnv({ ...LIVE, SHIPCUBE_DEV_API_SESSION: "sc_ses_abcdefgh_x" });
     expect(() => config()).toThrow(/SHIPCUBE_DEV_API_SESSION/);
   });
@@ -109,5 +109,15 @@ describe("config()", () => {
       withEnv({ ...LIVE, [k]: v });
       expect(() => config()).toThrow(new RegExp(`${k} .* must be a public https URL on Cloud Run`));
     }
+  });
+
+  it("takes SHIPCUBE_DEV_MODE as the switch locally, with DEV_MODE as a deprecated alias", () => {
+    withEnv({ SHIPCUBE_DEV_MODE: "1" });
+    expect(config().devMode).toBe(true);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    withEnv({ DEV_MODE: "1" });
+    expect(config().devMode).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/DEV_MODE=1 is deprecated/));
+    warn.mockRestore();
   });
 });

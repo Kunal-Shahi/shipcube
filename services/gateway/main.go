@@ -87,7 +87,11 @@ func run(log *slog.Logger) error {
 		}
 	}
 
-	dev := os.Getenv("DEV_MODE") == "1"
+	// SHIPCUBE_DEV_MODE is the one switch name (#29); DEV_MODE still works, with a warning.
+	dev := os.Getenv("SHIPCUBE_DEV_MODE") == "1" || os.Getenv("DEV_MODE") == "1"
+	if os.Getenv("DEV_MODE") == "1" && os.Getenv("SHIPCUBE_DEV_MODE") != "1" {
+		log.Warn("DEV_MODE=1 is deprecated; use SHIPCUBE_DEV_MODE=1")
+	}
 	headerTimeout, err := durationEnv("GATEWAY_UPSTREAM_HEADER_TIMEOUT", 300*time.Second)
 	if err != nil {
 		return err
