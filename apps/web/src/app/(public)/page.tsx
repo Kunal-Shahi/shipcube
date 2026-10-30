@@ -80,10 +80,11 @@ const H2 = "font-display text-[32px] leading-[1.1] font-extrabold tracking-[-0.0
 export default async function Landing() {
   const session = await auth.getSession().catch(() => null);
   const c = config();
-  // The API accepts the form's cross-origin POST from the console's canonical origin only. On any
-  // other host (a Firebase Hosting address), anonymous visitors are sent there to request access.
+  // The API accepts the form's cross-origin POST only from the listed console origins. On a host
+  // that isn't listed, anonymous visitors are sent to the canonical one to request access.
   const origin = await requestOrigin();
-  const formElsewhere = !session && c.consoleOrigin && c.consoleOrigin !== origin ? `${c.consoleOrigin}/#request-access` : null;
+  const formElsewhere =
+    !session && c.consoleOrigins.length && !c.consoleOrigins.includes(origin) ? `${c.consoleOrigins[0]}/#request-access` : null;
 
   return (
     <div className={`landing ${display.variable} min-h-dvh`}>

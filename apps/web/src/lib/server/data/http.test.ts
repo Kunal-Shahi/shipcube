@@ -248,6 +248,12 @@ describe("accountStatusFrom", () => {
     expect(await accountStatusFrom(refuse("unauthenticated", 401), admin)).toMatchObject({ member: false, platformAdmin: true, waitlist: "none" });
   });
 
+  it("reads /v1/me's 403 refusals the same way, falling back to their code", async () => {
+    expect(await accountStatusFrom(refuse("waitlisted", 403), onList)).toMatchObject({ member: false, waitlist: "pending" });
+    expect(await accountStatusFrom(refuse("waitlisted", 403), refuse("not_found", 404))).toEqual({ member: false, platformAdmin: false, waitlist: "pending" });
+    expect(await accountStatusFrom(refuse("no_access", 403), refuse("not_found", 404))).toEqual({ member: false, platformAdmin: false, waitlist: "none" });
+  });
+
   it("never sends a member to the waitlist because the API failed", async () => {
     await expect(accountStatusFrom(refuse("unavailable", 503), onList)).rejects.toThrow("unavailable");
     await expect(accountStatusFrom(refuse("permission_denied", 403), onList)).rejects.toThrow("permission_denied");

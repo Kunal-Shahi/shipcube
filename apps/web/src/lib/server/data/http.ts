@@ -327,26 +327,31 @@ export const waitlistFromApi = (r: ApiWaitlistRequest): WaitlistRequest => ({
 type ApiWaitlistMe = { email: string; status: WaitlistState; requested_at: string | null; platform_admin: boolean };
 
 /**
- * /v1/me answers 401 for a verified console session that has no workspace; /v1/waitlist/me then
- * says where its request stands (and whether it's a platform admin anyway). Anything else is the
- * API failing, and is thrown: a member must never be sent to the waitlist because the API blipped.
+ * A verified console session without a workspace is refused by /v1/me: 403 `waitlisted` or
+ * `no_access` (older APIs: 401). /v1/waitlist/me then gives the whole state and whether the person
+ * is a platform admin anyway. Anything else is the API failing, and is thrown: a member must never
+ * be sent to the waitlist because the API blipped.
  */
 export async function accountStatusFrom(
   me: () => Promise<{ platform_admin?: boolean }>,
   waitlistMe: () => Promise<ApiWaitlistMe>,
 ): Promise<AccountStatus> {
+  let refusal: string;
   try {
     const m = await me();
     return { member: true, platformAdmin: m.platform_admin === true };
   } catch (e) {
-    if (!(e instanceof ApiError && e.code === "unauthenticated")) throw e;
+    if (!(e instanceof ApiError && ["unauthenticated", "waitlisted", "no_access"].includes(e.code))) throw e;
+    refusal = e.code;
   }
   try {
     const w = await waitlistMe();
     return { member: false, platformAdmin: w.platform_admin === true, waitlist: w.status, requestedAt: w.requested_at ?? undefined };
   } catch (e) {
-    // An API without the waitlist yet: the person simply hasn't asked.
-    if (e instanceof ApiError && e.code === "not_found") return { member: false, platformAdmin: false, waitlist: "none" };
+    // No /v1/waitlist/me: the refusal itself says enough.
+    if (e instanceof ApiError && e.code === "not_found") {
+      return { member: false, platformAdmin: false, waitlist: refusal === "waitlisted" ? "pending" : "none" };
+    }
     throw e;
   }
 }

@@ -14,8 +14,11 @@ export interface Config {
   apiUrl: string | null;
   /** The API as browsers reach it, for the landing page's waitlist form (defaults to apiUrl). */
   publicApiUrl: string | null;
-  /** The console's canonical origin. The API accepts the waitlist form's cross-origin POST from it only. */
-  consoleOrigin: string | null;
+  /**
+   * Origins the API accepts the waitlist form's cross-origin POST from (the API's own
+   * SHIPCUBE_CONSOLE_ORIGINS, else SHIPCUBE_CONSOLE_URL). The first is canonical. Empty: unknown.
+   */
+  consoleOrigins: string[];
   /** The MCP endpoint users paste into their agent, e.g. https://shipcube-mcp-<n>.<region>.run.app/mcp. */
   mcpUrl: string;
   /** Per-request timeout for API calls. */
@@ -73,7 +76,10 @@ export function config(): Config {
     devMode,
     apiUrl: env.SHIPCUBE_API_URL?.replace(/\/+$/, "") || null,
     publicApiUrl: publicApiUrl(env),
-    consoleOrigin: originOf(env.SHIPCUBE_CONSOLE_URL),
+    consoleOrigins: (env.SHIPCUBE_CONSOLE_ORIGINS || env.SHIPCUBE_CONSOLE_URL || "")
+      .split(",")
+      .map((o) => originOf(o.trim()))
+      .filter((o): o is string => Boolean(o)),
     mcpUrl: env.SHIPCUBE_MCP_URL?.trim() || (devMode ? DEV_MCP_URL : ""),
     apiTimeoutMs: Number(env.SHIPCUBE_API_TIMEOUT_MS ?? 10_000),
     auth,
