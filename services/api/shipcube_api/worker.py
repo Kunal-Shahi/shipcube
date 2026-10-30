@@ -296,7 +296,8 @@ class Worker:
                 with db.worker_tx() as conn:
                     conn.execute("update deployments set status = 'deploying' where id = %s", (dep_id,))
                     caps = {**self._app_caps(conn, app), **{k: v for k, v in (inp.get("caps") or {}).items() if v is not None}}
-                isolation.check_image(settings, ref.workspace_id, state["image"])  # every deployer, before Cloud Run
+                isolation.check_image(settings, ref.workspace_id, state["image"],  # every deployer, before Cloud Run
+                                      linked=ref.target.kind == "linked")
                 d = self.d.deploy(ref, state["image"], caps, inp.get("env") or {})
                 state.update(url=d.url, revision=d.revision, caps=caps)
 

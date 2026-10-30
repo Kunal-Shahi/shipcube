@@ -208,11 +208,64 @@ def test_update_caps_refuses_a_service_still_on_a_shared_repo_tag(deployer):
     assert e.value.code == "permission_denied" and not any(c[0] == "PATCH" for c in sess.calls)
 
 
-def test_public_and_linked_project_images_are_the_users_choice(deployer):
+PIN = "@sha256:" + "a" * 64
+
+
+@pytest.mark.parametrize("image", [
+    "nginx:1.27", "nginx" + PIN, "docker.io/xmrig/xmrig:latest", "ghcr.io/evil/miner" + PIN,
+    "europe-docker.pkg.dev/user-proj/r/app:v1", "europe-docker.pkg.dev/user-proj/r/app" + PIN,
+    "us-docker.pkg.dev/cloudrun/containerx/hello" + PIN,          # a prefix look-alike
+])
+def test_hosted_apps_refuse_public_and_foreign_images(deployer, image):
+    """Red-team A-1 (#21): a hosted app runs on ShipCube's credit, so no arbitrary images."""
+    from shipcube_api.deploy import isolation
+
+    with pytest.raises(DeployError) as e:
+        isolation.check_image(deployer.s, WS, image)
+    assert e.value.code == "permission_denied"
+
+
+def test_hosted_apps_may_run_allowlisted_images_pinned_by_digest(deployer, monkeypatch):
+    from shipcube_api.deploy import isolation
+
+    isolation.check_image(deployer.s, WS, "us-docker.pkg.dev/cloudrun/container/hello" + PIN)
+    with pytest.raises(DeployError) as e:                           # a tag can be moved; a digest can't
+        isolation.check_image(deployer.s, WS, "us-docker.pkg.dev/cloudrun/container/hello")
+    assert e.value.code == "invalid_argument"
+    monkeypatch.setenv("SHIPCUBE_IMAGE_ALLOWLIST", "europe-docker.pkg.dev/samples/demo")
+    isolation.check_image(deployer.s, WS, "europe-docker.pkg.dev/samples/demo/app" + PIN)
+    with pytest.raises(DeployError):                                # the default is replaced, not extended
+        isolation.check_image(deployer.s, WS, "us-docker.pkg.dev/cloudrun/container/hello" + PIN)
+    monkeypatch.setenv("SHIPCUBE_IMAGE_ALLOWLIST", "")
+    with pytest.raises(DeployError):                                # empty: workspace images only
+        isolation.check_image(deployer.s, WS, "us-docker.pkg.dev/cloudrun/container/hello" + PIN)
+
+
+def test_workspace_images_must_be_its_own_and_pinned(deployer):
+    from shipcube_api.deploy import isolation
+
+    own = isolation.image_prefix(deployer.s, WS) + "app-123456"
+    isolation.check_image(deployer.s, WS, own + PIN)
+    for image, code in ((own + ":latest", "invalid_argument"),
+                        (isolation.image_prefix(deployer.s, OTHER_WS) + "app-123456" + PIN, "permission_denied"),
+                        (own.replace("/app-123456", "/../shared/app") + PIN, "invalid_argument"),
+                        (own + PIN + " ", None), (" " + own + PIN, None)):
+        if code is None:
+            isolation.check_image(deployer.s, WS, image)            # surrounding whitespace is trimmed
+            continue
+        with pytest.raises(DeployError) as e:
+            isolation.check_image(deployer.s, WS, image)
+        assert e.value.code == code, image
+
+
+def test_linked_projects_may_run_any_outside_image_but_never_shipcubes(deployer):
+    """Linked apps run in the user's project, on their bill: their choice, as before."""
     from shipcube_api.deploy import isolation
 
     for image in ("nginx:1.27", "us-docker.pkg.dev/cloudrun/container/hello", "europe-docker.pkg.dev/user-proj/r/app:v1"):
-        isolation.check_image(deployer.s, WS, image)
+        isolation.check_image(deployer.s, WS, image, linked=True)
+    with pytest.raises(DeployError):
+        isolation.check_image(deployer.s, WS, isolation.image_prefix(deployer.s, OTHER_WS) + "app" + PIN, linked=True)
 
 
 def test_deploy_is_private_gen2_scale_to_zero_with_iap(deployer):
