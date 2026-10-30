@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEV_MCP_URL, config, mockDataEnabled, resetConfig } from "./config";
 
 function withEnv(env: Record<string, string>) {
-  for (const k of ["DEV_MODE", "AUTH_PROVIDER", "K_SERVICE", "SHIPCUBE_API_URL", "IDENTITY_PLATFORM_PROJECT", "NEXT_PUBLIC_FIREBASE_PROJECT_ID", "SHIPCUBE_MCP_URL", "FIREBASE_AUTH_EMULATOR_HOST"]) vi.stubEnv(k, "");
+  for (const k of ["DEV_MODE", "AUTH_PROVIDER", "K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB", "SHIPCUBE_DEV_MODE", "SHIPCUBE_DEV_API_SESSION", "SHIPCUBE_API_URL", "IDENTITY_PLATFORM_PROJECT", "NEXT_PUBLIC_FIREBASE_PROJECT_ID", "SHIPCUBE_MCP_URL", "FIREBASE_AUTH_EMULATOR_HOST"]) vi.stubEnv(k, "");
   for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
   resetConfig();
 }
@@ -68,5 +68,46 @@ describe("config()", () => {
     expect(mockDataEnabled()).toBe(true);
     withEnv({ DEV_MODE: "1", SHIPCUBE_API_URL: "http://127.0.0.1:8080" });
     expect(mockDataEnabled()).toBe(false);
+  });
+
+  // #29: what the deployed console sets today (deploy/services/console.yaml, live Oct 31) must start.
+  const LIVE = {
+    K_SERVICE: "shipcube-console",
+    SHIPCUBE_API_URL: "https://shipcube-mcp-340481939948.asia-south1.run.app",
+    SHIPCUBE_API_TIMEOUT_MS: "30000",
+    SHIPCUBE_MCP_URL: "https://shipcube-mcp-340481939948.asia-south1.run.app/mcp",
+    IDENTITY_PLATFORM_PROJECT: "shipcube-control-ks",
+  };
+
+  it("starts with the live console's settings", () => {
+    withEnv(LIVE);
+    expect(config()).toMatchObject({ onCloudRun: true, devMode: false, auth: "identity-platform" });
+  });
+
+  it("treats any Cloud Run variable as Cloud Run", () => {
+    for (const k of ["K_REVISION", "CLOUD_RUN_JOB"]) {
+      withEnv({ ...LIVE, K_SERVICE: "", [k]: "x", DEV_MODE: "1" });
+      expect(() => config()).toThrow(/refused on Cloud Run/);
+    }
+  });
+
+  it("refuses the API's dev switch and a local console session on Cloud Run", () => {
+    withEnv({ ...LIVE, SHIPCUBE_DEV_MODE: "1" });
+    expect(() => config()).toThrow(/SHIPCUBE_DEV_MODE is refused/);
+    withEnv({ ...LIVE, SHIPCUBE_DEV_API_SESSION: "sc_ses_abcdefgh_x" });
+    expect(() => config()).toThrow(/SHIPCUBE_DEV_API_SESSION/);
+  });
+
+  it("refuses local or plain-http API and MCP URLs on Cloud Run, whatever NODE_ENV says", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    for (const [k, v] of [
+      ["SHIPCUBE_API_URL", "http://127.0.0.1:8080"],
+      ["SHIPCUBE_API_URL", "https://localhost"],
+      ["SHIPCUBE_MCP_URL", "http://shipcube-mcp.example.com/mcp"],
+      ["SHIPCUBE_MCP_URL", "https://web.localhost/mcp"],
+    ]) {
+      withEnv({ ...LIVE, [k]: v });
+      expect(() => config()).toThrow(new RegExp(`${k} .* must be a public https URL on Cloud Run`));
+    }
   });
 });

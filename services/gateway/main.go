@@ -56,6 +56,9 @@ func main() {
 			switch a.Key {
 			case slog.LevelKey:
 				a.Key = "severity"
+				if lv, ok := a.Value.Any().(slog.Level); ok && lv >= levelCritical {
+					a.Value = slog.StringValue("CRITICAL")
+				}
 			case slog.MessageKey:
 				a.Key = "message"
 			}
@@ -68,9 +71,21 @@ func main() {
 	}
 }
 
+// levelCritical is logged as Cloud Logging's CRITICAL severity.
+const levelCritical = slog.LevelError + 4
+
 func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
 	defer stop()
+
+	if onCloudRun(os.Getenv) {
+		if problems := productionProblems(os.Getenv); len(problems) > 0 {
+			for _, p := range problems {
+				log.Log(ctx, levelCritical, "refusing to start on Cloud Run", "problem", p)
+			}
+			return errors.New("refusing to start on Cloud Run: " + strings.Join(problems, "; "))
+		}
+	}
 
 	dev := os.Getenv("DEV_MODE") == "1"
 	headerTimeout, err := durationEnv("GATEWAY_UPSTREAM_HEADER_TIMEOUT", 300*time.Second)

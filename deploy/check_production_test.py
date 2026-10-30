@@ -26,6 +26,11 @@ BAD = [
     '            - {name: SHIPCUBE_PROFILER, value: "local"}',
     '            - {name: SHIPCUBE_MONITOR, value: mock}',
     '  --set-env-vars "^|^SHIPCUBE_MONITOR=local"',
+    '            - {name: GATEWAY_ALLOW_PRIVATE_UPSTREAM, value: "1"}',
+    '            - {name: AUTH_PROVIDER, value: mock}',
+    '            - {name: AUTH_PROVIDER, value: "firebase-emulator"}',
+    '            - {name: SHIPCUBE_DEV_API_SESSION, value: "sc_ses_abcdefgh_x"}',
+    '            - {name: FIREBASE_AUTH_EMULATOR_HOST, value: "auth:9099"}',
 ]
 GOOD = [
     '            - {name: SHIPCUBE_EMBEDDED_WORKER, value: "0"}',
@@ -35,6 +40,8 @@ GOOD = [
     'CONSOLE_URL="https://console.example.com"',
     '            - {name: SHIPCUBE_MONITOR, value: gcp}',
     '            - {name: SHIPCUBE_PROFILER, value: "gcp"}',
+    '            - {name: AUTH_PROVIDER, value: identity-platform}',
+    '            - {name: GATEWAY_ALLOW_PRIVATE_UPSTREAM, value: "0"}',
 ]
 
 

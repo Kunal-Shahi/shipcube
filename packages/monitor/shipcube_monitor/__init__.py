@@ -33,6 +33,12 @@ def provider_from_env(usage: UsageSource | None = None) -> MonitorProvider:
     silent fallback.
     """
     mode = os.environ.get("SHIPCUBE_MONITOR", "gcp")
+    # On Cloud Run only Cloud Monitoring, never Docker stats or canned data, and never dev mode (#29).
+    if any(os.environ.get(k) for k in ("K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB")):
+        dev = any(os.environ.get(k) in ("1", "true") for k in ("DEV_MODE", "SHIPCUBE_DEV_MODE"))
+        if mode != "gcp" or dev:
+            raise RuntimeError(f"refusing SHIPCUBE_MONITOR={mode}{' with dev mode' if dev else ''} on Cloud Run: "
+                               "production reads only Cloud Monitoring")
     if mode == "gcp":
         from .gcp import GcpMonitor
 
