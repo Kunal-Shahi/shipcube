@@ -37,6 +37,18 @@ func durationEnv(k string, def time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
+func intEnv(k string, def int64) (int64, error) {
+	v := os.Getenv(k)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return 0, errors.New(k + " must be a non-negative integer")
+	}
+	return n, nil
+}
+
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		// Cloud Logging reads "severity" and "message".
@@ -137,8 +149,36 @@ func run(log *slog.Logger) error {
 	if os.Getenv("META_SECRET_REF") == "" && !dev {
 		return errors.New("META_SECRET_REF is required (the mock provider is only available with DEV_MODE=1)")
 	}
+	// Caps on the platform key (#20): defaults for apps without their own, and per workspace.
+	var lim [5]int64
+	for i, kv := range []struct {
+		k   string
+		def int64
+	}{{"GATEWAY_DEFAULT_TOKENS_PER_DAY", 200_000}, {"GATEWAY_DEFAULT_REQUESTS_PER_MINUTE", 60},
+		{"GATEWAY_WORKSPACE_TOKENS_PER_DAY", 1_000_000}, {"GATEWAY_WORKSPACE_REQUESTS_PER_MINUTE", 300},
+		{"GATEWAY_MAX_OUTPUT_TOKENS", defaultMaxOutputTokens}} {
+		if lim[i], err = intEnv(kv.k, kv.def); err != nil {
+			return err
+		}
+	}
+	metaModels := map[string]bool{}
+	for _, m := range strings.Split(os.Getenv("GATEWAY_META_MODELS"), ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			metaModels[m] = true
+		}
+	}
+	limiter := &Limiter{DefaultTokensPerDay: lim[0], DefaultRequestsPerMin: int(lim[1]),
+		WorkspaceTokensPerDay: lim[2], WorkspaceRequestsPerMin: int(lim[3])}
+	// Shared caps through the control-plane API (#20). Without it, each instance counts on its own.
+	var shared *SharedLimiter
+	if u := os.Getenv("GATEWAY_COUNTERS_URL"); u != "" {
+		shared = &SharedLimiter{URL: u, Client: plain, Token: meta.get, Local: limiter, Log: log}
+	} else if !dev {
+		log.Warn("GATEWAY_COUNTERS_URL is not set: caps are per instance and restart with it")
+	}
 	g := &Gateway{
-		Auth: auth, Registry: reg, Secrets: secrets, Limiter: &Limiter{}, Usage: sinks,
+		Auth: auth, Registry: reg, Secrets: secrets, Limiter: limiter, Shared: shared, Usage: sinks,
+		MaxOutputTokens: lim[4], MetaModels: metaModels,
 		Upstream: guardedClient(allowPrivate, headerTimeout), Prices: prices, Log: log,
 		MetaBaseURL:      env("META_BASE_URL", "https://api.meta.ai/v1"),
 		OpenAIBaseURL:    env("OPENAI_BASE_URL", "https://api.openai.com/v1"),

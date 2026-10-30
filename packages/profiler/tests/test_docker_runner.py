@@ -59,12 +59,12 @@ def test_runner_switch(monkeypatch):
         runner_from_env({"SHIPCUBE_PROFILER": "gcp"})
     assert e.value.stage == "config"
     cfg = {"SHIPCUBE_PROFILER_" + k: "x" for k in ("PROJECT", "REGION", "BUCKET", "REPOSITORY", "NETWORK",
-                                                   "SUBNET", "SERVICE_ACCOUNT")}
+                                                   "SUBNET", "SERVICE_ACCOUNT", "BUILD_SERVICE_ACCOUNT")}
     assert isinstance(runner_from_env({"SHIPCUBE_PROFILER": "gcp", **cfg}), CloudRunJobRunner)
 
 
 def test_cloud_run_runner_accepts_field_overrides(monkeypatch):
-    for k in ("REGION", "BUCKET", "REPOSITORY", "NETWORK", "SUBNET"):
+    for k in ("REGION", "BUCKET", "REPOSITORY", "NETWORK", "SUBNET", "BUILD_SERVICE_ACCOUNT"):
         monkeypatch.setenv(f"SHIPCUBE_PROFILER_{k}", "x")
     r = CloudRunJobRunner(project="shipcube-apps-ks", service_account="sandbox@x")
     assert r.config.project == "shipcube-apps-ks" and r.config.service_account == "sandbox@x"
@@ -450,3 +450,59 @@ def test_image_has_no_setuid_or_setgid_files(tmp_path):
     base = subprocess.run(["docker", "run", "--rm", "--network", "none", "--entrypoint", "find", "python:3.12-slim",
                            "/", "-xdev", "-perm", "/6000", "-type", "f"], capture_output=True, text=True)
     assert "/su" in base.stdout
+
+
+# --- phase 2 offline build (#22), emulating the Cloud Build steps locally -------------------
+
+def _offline_context(tmp_path, root):
+    import io
+    import tarfile
+    from shipcube_profiler.gcp_runner import _package, offline_dockerfile
+    ctx = tmp_path / "ctx"
+    ctx.mkdir()
+    data = _package(root, compress=False, dockerfile=offline_dockerfile(),
+                    extra_files={"wheels/.keep": b"", "agent-wheels/.keep": b""})
+    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+        tar.extractall(ctx, filter="data")
+    return ctx
+
+
+@needs_docker
+def test_offline_build_installs_only_fetched_wheels_and_profiles(tmp_path):
+    from shipcube_profiler.gcp_runner import FETCH_SCRIPT, PYPI_INDEX, REQUIREMENTS_FILE
+    (tmp_path / "app").mkdir()
+    root, s = _app(tmp_path / "app", "import tomli_w\nprint(tomli_w.dumps({'a': 1}))\n")
+    (root / "requirements.txt").write_text("tomli-w==1.0.0\n")
+    ctx = _offline_context(tmp_path, root)
+    script = FETCH_SCRIPT.format(index=PYPI_INDEX, requirements=REQUIREMENTS_FILE)
+    # docker cp, not a bind mount: works whatever the daemon can see of this filesystem.
+    cid = subprocess.run(["docker", "create", "-w", "/workspace", "python:3.12-slim", "bash", "-c", script],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    try:
+        subprocess.run(["docker", "cp", f"{ctx}/.", f"{cid}:/workspace"], check=True, capture_output=True)
+        fetch = subprocess.run(["docker", "start", "-a", cid], capture_output=True, text=True, timeout=300)
+        if fetch.returncode != 0 and ("onnection" in fetch.stderr or "resolution" in fetch.stderr):
+            pytest.skip(f"no network to PyPI for the fetch step: {fetch.stderr[-200:]}")
+        assert fetch.returncode == 0, fetch.stderr[-2000:]
+        for d in ("wheels", "agent-wheels"):
+            subprocess.run(["docker", "cp", f"{cid}:/workspace/{d}/.", str(ctx / d)], check=True, capture_output=True)
+    finally:
+        subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
+    assert any(p.name.startswith("tomli_w") for p in (ctx / "wheels").iterdir())
+    tag = "shipcube-profiler-offline-test:latest"
+    build = subprocess.run(["docker", "build", "--network=none", "--label", "dev.shipcube.role=profiler", "-q",
+                            "-t", tag, str(ctx)], capture_output=True, text=True, timeout=600)
+    assert build.returncode == 0, build.stderr[-2000:]
+    p = DockerRunner().run(root, s, Hints(), image=tag)
+    assert p.mode == "measured" and p.exit_code == 0, p.notes
+
+
+@needs_docker
+def test_offline_build_has_no_network_without_fetched_wheels(tmp_path):
+    (tmp_path / "app").mkdir()
+    root, s = _app(tmp_path / "app", "import tomli_w\n")
+    (root / "requirements.txt").write_text("tomli-w==1.0.0\n")
+    ctx = _offline_context(tmp_path, root)                   # the fetch step never ran: no wheels
+    build = subprocess.run(["docker", "build", "--network=none", "-q", "-t", "shipcube-profiler-offline-neg:latest",
+                            str(ctx)], capture_output=True, text=True, timeout=600)
+    assert build.returncode != 0                             # nothing to install from, and no index to reach

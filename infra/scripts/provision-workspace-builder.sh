@@ -107,6 +107,14 @@ for m in "$WORKER" "$DEPLOYER"; do
   retry "${G[@]}" iam service-accounts add-iam-policy-binding "$SA" --project "$APPS_PROJECT" \
     --member "$m" --role roles/iam.serviceAccountUser
 done
+# Profiler builds (#22) also run as this SA, offline, and read only the PyPI and Docker Hub
+# mirrors (infra/terraform/modules/profiler/build.tf, when offline_builds is on).
+for mirror in pypi-remote dockerhub-remote; do
+  if "${G[@]}" artifacts repositories describe "$mirror" --project "$APPS_PROJECT" --location "$REGION" >/dev/null 2>&1; then
+    retry "${G[@]}" artifacts repositories add-iam-policy-binding "$mirror" --project "$APPS_PROJECT" \
+      --location "$REGION" --member "serviceAccount:${SA}" --role roles/artifactregistry.reader
+  fi
+done
 if [[ -n "${EXTRA_IMPERSONATOR:-}" ]]; then
   retry "${G[@]}" iam service-accounts add-iam-policy-binding "$SA" --project "$APPS_PROJECT" \
     --member "$EXTRA_IMPERSONATOR" --role roles/iam.serviceAccountTokenCreator
