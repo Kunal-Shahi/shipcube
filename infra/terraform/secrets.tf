@@ -34,8 +34,9 @@ resource "google_secret_manager_secret_iam_member" "platform_accessor" {
 # any other name is unusable to the API (no versions, no reads).
 locals {
   workspace_secrets_prefix = "projects/${data.google_project.control.number}/secrets/ws-"
-  # AI keys only (workspace.py names them ws-ai-<workspace>-<uuid>). Warehouse credentials are
-  # ws-<workspace>-warehouse_credential-<uuid>; a workspace uuid is hex, so never "ai-".
+  # AI keys only: ws-ai-<workspace>-<uuid>, the canonical name (the API creates it and the gateway
+  # checks it; #61). Warehouse credentials are ws-<workspace>-warehouse_credential-<uuid>; a
+  # workspace uuid is hex, so never "ai-".
   ai_key_secrets_prefix = "projects/${data.google_project.control.number}/secrets/ws-ai-"
 }
 
