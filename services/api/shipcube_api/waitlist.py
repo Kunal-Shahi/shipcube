@@ -41,9 +41,13 @@ _COLUMNS = "id, email, name, use_case, status, created_at, decided_at, decided_b
 
 
 class RateLimited(Exception):
-    def __init__(self, message: str, retry_after_s: int) -> None:
+    """code: rate_limited (this client or account), or waitlist_busy (all anonymous sign-ups this hour:
+    the form then offers signing in with Google, which has its own budget)."""
+
+    def __init__(self, message: str, retry_after_s: int, code: str = "rate_limited") -> None:
         super().__init__(message)
         self.retry_after_s = retry_after_s
+        self.code = code
 
 
 class Conflict(Exception):
@@ -102,7 +106,7 @@ def sign_up(email: str, name: str, use_case: str, honeypot: str, ip: str | None,
             if not _count(conn, _key("ip", client_net(ip)), "waitlist_ip_per_hour", hour, settings.waitlist_per_ip_per_hour):
                 raise RateLimited("too many sign-ups from this address; try again later", retry)
             if not _count(conn, _GLOBAL, "waitlist_global_per_hour", hour, settings.waitlist_per_hour):
-                raise RateLimited("the waitlist is busy; try again later", retry)
+                raise RateLimited("the waitlist is busy; sign in with Google to request access", retry, "waitlist_busy")
         if random.random() < 0.02:  # past hours' counters, one row per client address, are never read again
             conn.execute("delete from rate_counters where kind like 'waitlist\\_%%' and window_start < %s",
                          (hour - timedelta(hours=1),))

@@ -303,7 +303,7 @@ def platform_admin(authorization: Annotated[str | None, Header()] = None) -> aut
 
 @app.exception_handler(waitlist.RateLimited)
 async def _waitlist_rate_limited(_: Request, exc: waitlist.RateLimited) -> JSONResponse:
-    return JSONResponse({"error": {"code": "rate_limited", "message": str(exc), "retry_after": exc.retry_after_s}},
+    return JSONResponse({"error": {"code": exc.code, "message": str(exc), "retry_after": exc.retry_after_s}},
                         status_code=429, headers={"Retry-After": str(exc.retry_after_s)})
 
 

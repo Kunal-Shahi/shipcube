@@ -93,7 +93,9 @@ def test_rate_limit_global(client, idp, monkeypatch):
     set_waitlist(monkeypatch, platform_admins=frozenset({ADMIN}), waitlist_per_ip_per_hour=1000, waitlist_per_hour=n + 2)
     assert join(client, email(), ip="192.0.2.1").status_code == 202
     assert join(client, email(), ip="192.0.2.2").status_code == 202
-    assert join(client, email(), ip="192.0.2.3").status_code == 429
+    r = join(client, email(), ip="192.0.2.3")
+    # Its own code (not the per-client rate_limited), so the form offers signing in with Google instead.
+    assert r.status_code == 429 and r.json()["error"]["code"] == "waitlist_busy" and int(r.headers["Retry-After"]) > 0
 
 
 def test_forwarded_for_uses_the_entry_googles_front_end_appended(client, idp, monkeypatch):
@@ -287,7 +289,7 @@ def test_signed_in_requests_have_their_own_buckets(client, idp, monkeypatch):
                          " and window_start = %s", (datetime.now(UTC).replace(minute=0, second=0, microsecond=0),)).fetchone()["n"]
     set_waitlist(monkeypatch, platform_admins=frozenset({ADMIN}), waitlist_per_ip_per_hour=2, waitlist_per_hour=n,
                  waitlist_signed_in_per_hour=100000)
-    assert join(client, email(), ip="192.0.2.77").status_code == 429  # the anonymous budget is spent
+    assert join(client, email(), ip="192.0.2.77").json()["error"]["code"] == "waitlist_busy"  # the anonymous budget is spent
     body = {"name": "Ada", "use_case": "dashboards"}
     addr = email()
     # Someone already signed in can still ask...

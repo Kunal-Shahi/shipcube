@@ -24,7 +24,8 @@ paths:
   /v1/waitlist:
     post:
       summary: >-
-        Join the waitlist. Anonymous (from the browser; CORS from the console origin, rate-limited per IP and in total),
+        Join the waitlist. Anonymous (from the browser; CORS from the console origins; 429 rate_limited per client,
+        IPv4 or IPv6 /64, and 429 waitlist_busy when all anonymous sign-ups this hour are used: offer signing in instead),
         or with a verified console session, whose email is used instead of the body's. Always 202 for a well-formed request
       security: []
       requestBody:
