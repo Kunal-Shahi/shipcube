@@ -92,3 +92,34 @@ def test_the_same_key_with_different_removals_alongside_a_domain_grant_is_a_conf
     same = client.patch("/v1/apps/s4-domain/access", headers=key,
                         json={"remove": ["user:bob@example.com"], "add": [{"principal": "domain:acme.com"}]})
     assert same.status_code == 200 and same.json()["operation"]["id"] == first.json()["operation"]["id"]
+
+
+def test_changes_to_one_app_wait_for_each_other_and_are_ordered_by_when_they_ran(client, ws):
+    import threading
+    import time
+
+    _running(client, ws, "s4-lock")
+    with db.tx() as conn:
+        app_id = conn.execute("select id from apps where workspace_id = %s and slug = 's4-lock'",
+                              (ws["workspace_id"],)).fetchone()["id"]
+    done = {}
+
+    def second():
+        r = client.patch("/v1/apps/s4-lock/access", json={"add": [{"principal": "user:dan@example.com"}]},
+                         headers={**ws["agent"], "Idempotency-Key": "add-dan"})
+        done["op"] = r.json()["operation"]["id"]
+
+    with db.worker_tx() as conn:  # an overlapping change that holds the app
+        conn.execute("select 1 from apps where id = %s for update", (app_id,))
+        t = threading.Thread(target=second)
+        t.start()
+        time.sleep(0.5)
+        assert t.is_alive(), "set_access must wait for the app row"
+        first = conn.execute("insert into operations (id, workspace_id, app_id, kind, target_project, status, idem_key,"
+                             " request_hash, input, created_at) values (gen_random_uuid(), %s, %s, 'set_access', 'p',"
+                             " 'cancelled', 'held', '\\x00', '{}', clock_timestamp()) returning created_at",
+                             (ws["workspace_id"], app_id)).fetchone()["created_at"]
+    t.join(10)
+    with db.tx() as conn:
+        later = conn.execute("select created_at from operations where id = %s", (done["op"],)).fetchone()["created_at"]
+    assert later > first  # the waiting request's operation sorts after the one it waited for
