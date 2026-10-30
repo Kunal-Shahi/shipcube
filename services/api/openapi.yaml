@@ -20,6 +20,65 @@ paths:
       summary: Current user, workspace, GCP targets, limits and the calling token's scopes (any valid token)
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Me' } } } }
+        '401': { description: 'Invalid token, or a console sign-in with no workspace (then GET /v1/waitlist/me)' }
+  /v1/waitlist:
+    post:
+      summary: >-
+        Join the waitlist. Anonymous (from the browser; CORS from the console origins; 429 rate_limited per client,
+        IPv4 or IPv6 /64, and 429 waitlist_busy when all anonymous sign-ups this hour are used: offer signing in instead),
+        or with a verified console session, whose email is used instead of the body's. Always 202 for a well-formed request
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, use_case]
+              additionalProperties: false
+              properties:
+                email: { type: string, maxLength: 254, description: Required unless signed in }
+                name: { type: string, minLength: 1, maxLength: 100 }
+                use_case: { type: string, minLength: 1, maxLength: 500 }
+                website: { type: string, description: 'Honeypot: leave empty' }
+      responses:
+        '202': { description: Received, content: { application/json: { schema: { type: object, properties: { status: { type: string, enum: [received] } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+  /v1/waitlist/me:
+    get:
+      summary: Where the signed-in person's own request stands (verified console session; no workspace needed)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/WaitlistMe' } } } }
+        '401': { $ref: '#/components/responses/Error' }
+  /v1/admin/waitlist:
+    get:
+      summary: Waitlist requests, newest first (platform admins, console session only)
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, approved, rejected, all], default: pending } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/WaitlistList' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+  /v1/admin/waitlist/{entry_id}/approve:
+    post:
+      summary: Approve a request; creates the requester's workspace with them as pending owner (platform admins). Repeating it returns the same result
+      parameters: [{ name: entry_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/WaitlistEntry' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+  /v1/admin/waitlist/{entry_id}/reject:
+    post:
+      summary: Reject an entry (platform admins)
+      parameters: [{ name: entry_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/WaitlistEntry' } } } }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
   /v1/uploads:
     post:
       summary: Create a signed URL for a source tarball upload
@@ -397,6 +456,34 @@ components:
         application/json:
           schema: { type: object, properties: { error: { type: object, properties: { code: { type: string }, message: { type: string } } } } }
   schemas:
+    WaitlistEntry:
+      type: object
+      required: [id, email, name, use_case, status, created_at, decided_at, decided_by, workspace_id]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        name: { type: string }
+        use_case: { type: string }
+        status: { type: string, enum: [pending, approved, rejected] }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: [string, 'null'], format: date-time }
+        decided_by: { type: [string, 'null'], description: The platform admin's email }
+        workspace_id: { type: [string, 'null'], format: uuid }
+    WaitlistMe:
+      type: object
+      required: [email, status, requested_at, platform_admin]
+      properties:
+        email: { type: string }
+        status: { type: string, enum: [none, pending, approved, rejected] }
+        requested_at: { type: [string, 'null'], format: date-time }
+        platform_admin: { type: boolean }
+    WaitlistList:
+      type: object
+      required: [items, requests, workspaces]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/WaitlistEntry' }, description: Newest first }
+        requests: { type: array, items: { $ref: '#/components/schemas/WaitlistEntry' }, description: The same list as items }
+        workspaces: { type: object, properties: { count: { type: integer }, cap: { type: integer } } }
     Token:
       type: object
       required: [id, name, prefix, scopes, created_at, expires_at, last_used_at]
@@ -478,6 +565,7 @@ components:
         limits: { type: object, properties: { max_apps: { type: integer }, monthly_spend_usd: { type: number } } }
         token: { type: object, properties: { id: { type: string }, scopes: { type: array, items: { type: string } }, expires_at: { type: integer } } }
         deployer_sa: { type: string, description: 'Grant this service account roles in a GCP project to link it' }
+        platform_admin: { type: boolean, description: 'May review the waitlist' }
     AppSummary:
       type: object
       properties:
