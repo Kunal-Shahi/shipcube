@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEV_MCP_URL, config, mockDataEnabled, resetConfig } from "./config";
 
 function withEnv(env: Record<string, string>) {
-  for (const k of ["DEV_MODE", "AUTH_PROVIDER", "K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB", "SHIPCUBE_DEV_MODE", "SHIPCUBE_DEV_API_SESSION", "SHIPCUBE_API_URL", "IDENTITY_PLATFORM_PROJECT", "NEXT_PUBLIC_FIREBASE_PROJECT_ID", "SHIPCUBE_MCP_URL", "FIREBASE_AUTH_EMULATOR_HOST"]) vi.stubEnv(k, "");
+  for (const k of ["DEV_MODE", "AUTH_PROVIDER", "K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB", "SHIPCUBE_DEV_MODE", "SHIPCUBE_DEV_API_SESSION", "SHIPCUBE_API_URL", "IDENTITY_PLATFORM_PROJECT", "NEXT_PUBLIC_FIREBASE_PROJECT_ID", "SHIPCUBE_MCP_URL", "FIREBASE_AUTH_EMULATOR_HOST", "SHIPCUBE_CONSOLE_ORIGINS", "SHIPCUBE_CONSOLE_URL"]) vi.stubEnv(k, "");
   for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
   resetConfig();
 }
@@ -50,6 +50,13 @@ describe("config()", () => {
   it("refuses FIREBASE_AUTH_EMULATOR_HOST outside DEV_MODE, whatever the provider", () => {
     withEnv({ SHIPCUBE_API_URL: "https://api", SHIPCUBE_MCP_URL: "https://mcp/mcp", IDENTITY_PLATFORM_PROJECT: "p", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9099" });
     expect(() => config()).toThrow(/unsigned tokens/);
+  });
+
+  it("reads the console origins the API accepts the waitlist form from", () => {
+    withEnv({ DEV_MODE: "1", SHIPCUBE_CONSOLE_URL: "https://shipcube-console-x.run.app/" });
+    expect(config().consoleOrigins).toEqual(["https://shipcube-console-x.run.app"]);
+    withEnv({ DEV_MODE: "1", SHIPCUBE_CONSOLE_URL: "https://a.run.app", SHIPCUBE_CONSOLE_ORIGINS: "https://a.run.app, https://shipcube.web.app/,not a url" });
+    expect(config().consoleOrigins).toEqual(["https://a.run.app", "https://shipcube.web.app"]);
   });
 
   it("refuses the mock sign-in outside DEV_MODE", () => {

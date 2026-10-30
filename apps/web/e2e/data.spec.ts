@@ -1,11 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signIn } from "./helpers";
+import { MEMBER_EMAIL, signIn } from "./helpers";
 
 // The Data section against the local stack (shipcube-data's /v1/data router, PR #36): the demo
 // warehouse, the cubes, the applied model migrations, and a person deciding on an agent's proposal.
 // `make smoke` runs `shipcube-data smoke --mcp` first, which leaves one proposed migration.
 
-const EMAIL = process.env.E2E_EMAIL ?? `e2e-data-${Date.now()}@example.com`;
+const EMAIL = MEMBER_EMAIL;
 
 test.describe.configure({ mode: "serial" });
 

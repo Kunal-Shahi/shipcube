@@ -2,6 +2,7 @@ import "server-only";
 
 import type {
   AccessGrant,
+  AccountStatus,
   ApiToken,
   AppDetail,
   AppSummary,
@@ -14,6 +15,9 @@ import type {
   ProviderConfig,
   Role,
   Warehouse,
+  WaitlistPage,
+  WaitlistRequest,
+  WaitlistState,
   WarehouseKind,
 } from "@/lib/types";
 
@@ -25,7 +29,7 @@ export type WarehouseInput =
 export type DemoState = "empty" | "error" | undefined;
 
 /** Parts of the console whose control-plane endpoints don't exist yet. */
-export type Feature = "approvals_inbox" | "tokens" | "providers" | "billing" | "gcp_link" | "data" | "deleted_apps";
+export type Feature = "approvals_inbox" | "tokens" | "providers" | "billing" | "gcp_link" | "data" | "deleted_apps" | "waitlist";
 
 export const FEATURE_ENDPOINT: Record<Feature, { name: string; endpoint: string }> = {
   approvals_inbox: { name: "The approvals inbox", endpoint: "GET /v1/operations?status=awaiting_approval" },
@@ -35,6 +39,7 @@ export const FEATURE_ENDPOINT: Record<Feature, { name: string; endpoint: string 
   gcp_link: { name: "GCP project linking", endpoint: "GET and POST /v1/gcp-targets" },
   data: { name: "The data model", endpoint: "the data-layer endpoints (/v1/data/…)" },
   deleted_apps: { name: "Recently deleted apps", endpoint: "GET /v1/apps?include_deleted=true" },
+  waitlist: { name: "Early-access requests", endpoint: "POST /v1/waitlist, GET /v1/waitlist/me and /v1/admin/waitlist" },
 };
 
 /** An action that the API parked for a person to approve. */
@@ -96,4 +101,13 @@ export interface ConsoleData {
   listMigrations(state?: DemoState): Promise<Migration[]>;
   getMigration(id: string): Promise<Migration | null>;
   decideMigration(id: string, decision: "apply" | "reject", opts: { allowBreaking: boolean; note?: string }): Promise<Migration>;
+
+  // Early access. Requests come from the landing page's form, which posts from the browser
+  // straight to the API (POST /v1/waitlist); the console reads status and decides.
+  /** Signed in without a workspace: request access for the session's own (verified) email. */
+  requestAccessSignedIn(input: { name: string; useCase: string }): Promise<void>;
+  /** Member, or where the signed-in person's access request stands. Throws only when the API fails. */
+  accountStatus(): Promise<AccountStatus>;
+  listWaitlist(status: WaitlistState | "all"): Promise<WaitlistPage>;
+  decideWaitlist(id: string, decision: "approve" | "reject"): Promise<WaitlistRequest>;
 }

@@ -11,7 +11,7 @@ export function AuthCard({ intent, returnTo }: { intent: "sign-in" | "sign-up"; 
       </h1>
       <p className="mt-1.5 text-fg-muted">
         {signUp
-          ? "ShipCube deploys the apps you build in Claude Code, Cursor or Muse Code, and keeps them private to the people you choose. Sign-up is by invite for now."
+          ? "ShipCube deploys the apps you build in Claude Code, Cursor or Muse Code, and keeps them private to the people you choose. ShipCube is in early access: request access first, and once you're approved, sign up with the same Google account."
           : "Use the Google account your apps are shared with."}
       </p>
 
@@ -33,15 +33,15 @@ export function AuthCard({ intent, returnTo }: { intent: "sign-in" | "sign-up"; 
         {signUp ? (
           <>
             Already have an account?{" "}
-            <Link href="/sign-in" className="text-accent hover:underline">
+            <Link href="/sign-in" className="text-accent underline underline-offset-2">
               Sign in
             </Link>
           </>
         ) : (
           <>
             New to ShipCube?{" "}
-            <Link href="/sign-up" className="text-accent hover:underline">
-              Create an account
+            <Link href="/#request-access" className="text-accent underline underline-offset-2">
+              Request access
             </Link>
           </>
         )}

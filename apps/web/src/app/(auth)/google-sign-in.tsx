@@ -31,7 +31,7 @@ function messageFor(code: string, raw: string): string | null {
   if (code === "auth/popup-blocked") return "Your browser blocked the Google sign-in window. Allow pop-ups for this site and try again.";
   if (code === "auth/network-request-failed") return "Couldn't reach Google. Check your connection and try again.";
   if (raw.includes("BLOCKING_FUNCTION") || code === "auth/admin-restricted-operation" || code === "not_invited") {
-    return "ShipCube is invite-only for now, and this Google account isn't on the list. Use the account your invite was sent to, or ask the person who invited you.";
+    return "ShipCube is in early access, and this Google account isn't approved yet. Use the account you requested access with, or request access from the home page.";
   }
   if (code === "auth/unauthorized-domain") return "Sign-in isn't set up for this address yet. An operator needs to add it to Identity Platform's authorized domains.";
   return "Google sign-in didn't complete. Try again.";

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signIn } from "./helpers";
+import { MEMBER_EMAIL, signIn } from "./helpers";
 
 // Linking a GCP project against the local stack. The local backend simulates the permission check
 // (deploy/local.py): broken-* projects report a missing permission, any other project passes. The
@@ -7,7 +7,7 @@ import { signIn } from "./helpers";
 
 const API_URL = (process.env.E2E_API_URL ?? "http://127.0.0.1:8080").replace(/\/+$/, "");
 const PAT = process.env.SHIPCUBE_PAT ?? "";
-const EMAIL = process.env.E2E_EMAIL ?? `e2e-${Date.now()}@example.com`;
+const EMAIL = MEMBER_EMAIL;
 // Fixed names: linking the same project again updates its link, so reruns deploy the same app to the same target.
 const PROJECT = "e2e-linked-proj";
 const APP = "e2e-linked-app";
