@@ -19,14 +19,6 @@ resource "google_storage_bucket_iam_member" "uploads_signer" {
   member = google_service_account.api.member
 }
 
-# Legacy shared builder: reads every workspace's uploads (C-1). Removed by legacy_shared_builder=false.
-resource "google_storage_bucket_iam_member" "uploads_builder" {
-  count  = var.legacy_shared_builder ? 1 : 0
-  bucket = google_storage_bucket.uploads.name
-  role   = "roles/storage.objectViewer"
-  member = google_service_account.builder.member
-}
-
 # Deploys run in the worker: it checks uploaded sources exist and writes inline sources as tarballs.
 resource "google_storage_bucket_iam_member" "uploads_worker" {
   for_each = toset(["roles/storage.objectViewer", "roles/storage.objectCreator"])

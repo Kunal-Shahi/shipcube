@@ -29,11 +29,6 @@ import {
 }
 
 import {
-  to = google_service_account.builder
-  id = "projects/${var.apps_project_id}/serviceAccounts/sc-builder@${var.apps_project_id}.iam.gserviceaccount.com"
-}
-
-import {
   to = google_artifact_registry_repository.apps
   id = "projects/${var.apps_project_id}/locations/${var.region}/repositories/shipcube"
 }
