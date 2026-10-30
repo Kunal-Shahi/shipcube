@@ -44,7 +44,7 @@ class PlacementEstimator:
             # (shipcube_profiler.STATIC_REASONS).
             try:
                 runner = StaticRunner(reason=static_reason)
-            except TypeError:  # a shipcube_profiler from before the reason codes; with_static_reason adds it below
+            except TypeError:  # shipcube_profiler before #57 has no reason codes: still static, just unlabelled
                 runner = StaticRunner()
         elif os.environ.get("SHIPCUBE_PROFILER"):
             # Explicit sandbox choice (e.g. `local`: docker run --network none on the local stack);
@@ -64,7 +64,7 @@ class PlacementEstimator:
         res = estimate(source, {k: v for k, v in hints.items() if v is not None}, runner=runner, fetch_upload=fetch_upload)
         out = res.model_dump(mode="json") if hasattr(res, "model_dump") else dict(res.__dict__)
         out.setdefault("estimate_id", f"est_{op_id.replace('-', '')[:12]}")
-        return with_static_reason(out, static_reason)
+        return out
 
 
 class UnavailableEstimator:
@@ -99,9 +99,8 @@ def measurements(result: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def with_static_reason(result: dict[str, Any], reason: str | None) -> dict[str, Any]:
-    """Say why an estimate wasn't profiled, machine-readably: `profile.measurements.static_reason`
-    (docs/research/profiler-sandbox.md §9). Recent shipcube_profiler builds set it through
-    StaticRunner(reason=...); this fills it in for older ones and never overwrites it."""
+    """DevEstimator only: label a canned static estimate the way StaticRunner(reason=...) labels a real one,
+    in `profile.measurements.static_reason`. The real estimator's field belongs to shipcube_profiler."""
     if reason:
         m = {"mode": "static", **measurements(result)}
         if not m.get("static_reason"):
