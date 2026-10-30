@@ -206,6 +206,8 @@ jobs:
         run: terraform -chdir=infra/terraform fmt -check -recursive
       - name: terraform validate
         run: terraform -chdir=infra/terraform init -backend=false -input=false && terraform -chdir=infra/terraform validate
+      - name: IAM guard (no broad project-level grants)
+        run: python3 infra/tests/iam_guard.py
       - name: shellcheck
         run: shellcheck -x infra/scripts/*.sh infra/tests/*.sh infra/db/*.sh infra/db/checks/*.sh infra/budget-killswitch/*.sh infra/local/*.sh
 

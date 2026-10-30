@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from shipcube_api.deploy import gcp
+from shipcube_api.deploy import gcp, isolation
 from shipcube_api.deploy.base import AppRef, DeployError, Target, normalize_caps
 from shipcube_api.settings import Settings
 
@@ -139,24 +139,17 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
     assert all("managedFolders" not in u and "repositories?" not in u for _, u, _, _ in deployer._sessions.get(None, FakeSession({})).calls)
 
 
-def test_ensure_link_deployer_creates_the_sa_and_lets_only_api_and_worker_use_it(deployer):
-    sa = "ws-3c1d5e2a7b4f-deployer@shipcube-control-ks.iam.gserviceaccount.com"
-    adc = FakeSession({
-        ("POST", ":getIamPolicy"): (200, {"etag": "e", "bindings": [
-            {"role": "roles/iam.serviceAccountTokenCreator", "members": [f"serviceAccount:{deployer.s.worker_sa}"]}]}),
-        ("POST", ":setIamPolicy"): (200, {}),
-        ("POST", "/serviceAccounts"): (409, {"error": {"message": "exists"}}),  # a retry: already created
-    })
+def test_ensure_link_deployer_only_creates_the_sa_in_the_links_project(deployer):
+    sa = isolation.link_deployer_sa(deployer.s, WS)
+    assert sa == f"ws-{WS.replace('-', '')[:12]}-deployer@shipcube-links-ks.iam.gserviceaccount.com"
+    adc = FakeSession({("POST", "/serviceAccounts"): (409, {"error": {"message": "exists"}})})  # a retry
     deployer._sessions[None] = adc
     deployer.ensure_link_deployer(WS, sa)
-    deployer.ensure_link_deployer(WS, sa)  # cached: no second round of calls
+    deployer.ensure_link_deployer(WS, sa)  # cached: no second call
     calls = [(m, u.split("/v1/")[-1], b) for m, u, b, _ in adc.calls]
-    assert calls[0][0:2] == ("POST", "projects/shipcube-control-ks/serviceAccounts")
-    assert calls[0][2]["accountId"] == "ws-3c1d5e2a7b4f-deployer"
-    assert calls[2][1] == f"projects/shipcube-control-ks/serviceAccounts/{sa}:setIamPolicy"
-    assert calls[2][2]["policy"] == {"etag": "e", "bindings": [{"role": "roles/iam.serviceAccountTokenCreator", "members": [
-        f"serviceAccount:{deployer.s.worker_sa}", f"serviceAccount:{deployer.s.api_sa}"]}]}
-    assert len(adc.calls) == 3
+    # One create, nothing else: no getIamPolicy/setIamPolicy, which the API may no longer call (#15).
+    assert [c[0:2] for c in calls] == [("POST", "projects/shipcube-links-ks/serviceAccounts")]
+    assert calls[0][2]["accountId"] == f"ws-{WS.replace('-', '')[:12]}-deployer"
 
 
 @pytest.mark.parametrize("bucket,obj", [
