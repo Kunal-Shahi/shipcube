@@ -254,7 +254,10 @@ class AccessList(BaseModel):
 
 
 class AccessResult(AccessList):
-    operation: Operation | None = Field(None, description="Set when some changes (domain: grants) await approval")
+    operation: Operation | None = Field(
+        None, description="The change's operation: the domain: grants awaiting approval when there are any, else the push to IAP")
+    applied: Operation | None = Field(
+        None, description="With domain: grants: the separate push of this request's direct grants and removals, which never waits for the approval")
 
 
 class AiConfig(BaseModel):

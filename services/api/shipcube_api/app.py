@@ -340,8 +340,8 @@ def set_caps(app: AppName, body: Caps, c: Annotated[Caller, Depends(scope("caps:
 @app.patch("/v1/apps/{app}/access", response_model=AccessResult)
 def set_access(app: AppName, body: AccessChange, c: Annotated[Caller, Depends(scope("access:write"))],
                idem: IdemKey = None):
-    access, op = store.set_access(c, app, [g.model_dump() for g in body.add], body.remove, idem)
-    return {"access": access, "operation": op}
+    access, gated, pushed = store.set_access(c, app, [g.model_dump() for g in body.add], body.remove, idem)
+    return {"access": access, "operation": gated or pushed, "applied": pushed if gated else None}
 
 
 @app.put("/v1/apps/{app}/ai", response_model=AiConfigResult)

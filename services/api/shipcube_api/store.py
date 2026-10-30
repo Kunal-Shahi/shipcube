@@ -198,11 +198,13 @@ def me(caller: Caller) -> dict[str, Any]:
         }
 
 
-def _app_row(conn, workspace_id: str, slug: str, include_deleted: bool = False) -> dict[str, Any]:
+def _app_row(conn, workspace_id: str, slug: str, include_deleted: bool = False, lock: bool = False) -> dict[str, Any]:
+    """lock: hold the app row until the transaction ends, so changes to one app run one at a time."""
     q = "select * from apps where workspace_id = %s and slug = %s and purged_at is null"
     if not include_deleted:
         q += " and deleted_at is null"
-    row = conn.execute(q + " order by deleted_at nulls first, created_at desc limit 1", (workspace_id, slug)).fetchone()
+    q += " order by deleted_at nulls first, created_at desc limit 1" + (" for update" if lock else "")
+    row = conn.execute(q, (workspace_id, slug)).fetchone()
     if row is None:
         raise NotFound(f"app {slug} not found")
     return row
@@ -314,13 +316,40 @@ def _slug(conn, app_id: Any) -> str | None:
     return r["slug"] if r else None
 
 
+def _request_hash(kind: str, app_id: Any, payload: dict[str, Any]) -> bytes:
+    return hashlib.sha256(json.dumps([kind, str(app_id) if app_id else None, payload], sort_keys=True, default=str).encode()).digest()
+
+
+def replay(conn, workspace_id: str, kind: str, app_id: Any, payload: dict[str, Any], idem: str | None
+           ) -> tuple[Operation | None, str | None]:
+    """Idempotency for operations that change an app's state (set_access, set_caps): (operation, key).
+
+    A retry with the same key and body returns its operation, but only while that operation is still
+    the app's latest of this kind. Once a later change has run (remove, add, remove again with the same
+    derived key), the old operation describes a state the app no longer has, so the request is applied
+    again as a new operation (key None) instead of returning a stale result (#19). The same key with a
+    different body is a conflict, as in enqueue."""
+    if idem is None:
+        return None, None
+    prior = conn.execute("select * from operations where workspace_id = %s and idem_key = %s", (workspace_id, idem)).fetchone()
+    if prior is None:
+        return None, idem
+    if bytes(prior["request_hash"]) != _request_hash(kind, app_id, payload):
+        raise Conflict("idempotency key reused with a different request")
+    # Changes to an app hold its row lock (set_access, set_caps) and stamp created_at when written.
+    later = conn.execute("select 1 from operations where app_id = %s and kind = %s and created_at > %s limit 1",
+                         (app_id, kind, prior["created_at"])).fetchone()
+    if later is None:
+        return op_view(prior, _slug(conn, prior["app_id"])), idem
+    return None, None
+
+
 def enqueue(conn, caller: Caller | None, workspace_id: str, kind: str, app_id: Any, target_project: str,
             payload: dict[str, Any], idem_key: str | None, approvals: list[tuple[str, str]] | None = None,
             summary: str | None = None, extra: dict[str, Any] | None = None) -> Operation:
     """Insert an operation (and its approval) in the caller's transaction. Same key + same body
     returns the existing operation; same key + different body is a conflict."""
-    body = json.dumps([kind, str(app_id) if app_id else None, payload], sort_keys=True, default=str).encode()
-    request_hash = hashlib.sha256(body).digest()
+    request_hash = _request_hash(kind, app_id, payload)
     key = idem_key or f"auto:{uuid.uuid4().hex}"
     prior = conn.execute("select * from operations where workspace_id = %s and idem_key = %s", (workspace_id, key)).fetchone()
     if prior is not None:
@@ -332,9 +361,12 @@ def enqueue(conn, caller: Caller | None, workspace_id: str, kind: str, app_id: A
     steps = [{"name": n, "status": "pending"} for n, _ in STEPS[kind]]
     expires = datetime.now(UTC) + APPROVAL_TTL
     row = conn.execute(
+        # created_at is when the row is written (clock_timestamp), not when the transaction began: with
+        # the app row locked, operations on one app are then ordered as they were created (store.replay).
         "insert into operations (id, workspace_id, app_id, kind, target_project, status, step, idem_key, request_hash,"
         " requested_by, token_id, input, steps, progress_message, approval_url, approval_reasons, approval_actions,"
-        " approval_expires_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning *",
+        " approval_expires_at, created_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, clock_timestamp())"
+        " returning *",
         (op_id, workspace_id, app_id, kind, target_project, "awaiting_approval" if waiting else "queued", steps[0]["name"],
          key, request_hash, caller.user_id if caller else None,
          caller.token_id if caller and caller.token_id else None, Jsonb({**payload, **(extra or {})}), Jsonb(steps),
@@ -545,15 +577,18 @@ def start_rollback(caller: Caller, slug: str, to: str, idem: str | None) -> Oper
 
 def set_caps(caller: Caller, slug: str, caps: dict[str, Any], idem: str | None) -> tuple[dict[str, Any], Operation | None]:
     with db.tx(caller) as conn:
-        app = _app_row(conn, caller.workspace_id, slug)
+        app = _app_row(conn, caller.workspace_id, slug, lock=True)
         project = app_ref(conn, app).target.project
         reasons = caps_above_default(conn, caller.workspace_id, caps)
-        if reasons:  # the whole change waits for approval, so it never half-applies
-            op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, {"caps": caps}, idem, reasons)
-        else:
-            write_app_caps(conn, caller.workspace_id, app["id"], caps, caller.user_id)
-            op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, {"caps": caps, "push_only": True}, idem) \
-                if app["status"] == "running" else None
+        payload = {"caps": caps} if reasons else {"caps": caps, "push_only": True}
+        op, idem = replay(conn, caller.workspace_id, "set_caps", app["id"], payload, idem)
+        if op is None:  # a new change: write (unless it waits for approval) and push it
+            if reasons:  # the whole change waits for approval, so it never half-applies
+                op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, payload, idem, reasons)
+            else:
+                write_app_caps(conn, caller.workspace_id, app["id"], caps, caller.user_id)
+                op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, payload, idem) \
+                    if app["status"] == "running" else None
         return app_caps(conn, caller.workspace_id, app["id"]), op
 
 
@@ -575,23 +610,41 @@ def write_grants(conn, workspace_id: str, app_id: Any, add: list[str], remove: l
 
 
 def set_access(caller: Caller, slug: str, add: list[dict[str, Any]], remove: list[str], idem: str | None
-               ) -> tuple[list[dict[str, Any]], Operation | None]:
+               ) -> tuple[list[dict[str, Any]], Operation | None, Operation | None]:
+    """Direct grants and revocations are written and pushed to IAP at once, in their own operation;
+    `domain:` grants wait for approval in another. A rejected or expired domain approval never holds
+    back a revocation made in the same request (#18). Returns (access, domain op, push op)."""
     with db.tx(caller) as conn:
-        app = _app_row(conn, caller.workspace_id, slug)
+        app = _app_row(conn, caller.workspace_id, slug, lock=True)
         if f"user:{caller.email}".lower() in [r.lower() for r in remove] and \
                 conn.execute("select 1 from users where id = %s and email = %s", (app["created_by"], caller.email)).fetchone():
             raise Conflict("cannot remove the owner")
         project = app_ref(conn, app).target.project
         domain = [g["principal"] for g in add if g["principal"].startswith("domain:")]
         direct = [g["principal"] for g in add if not g["principal"].startswith("domain:")]
+        # The whole change is part of the request hash, so different changes never share an operation.
+        # The domain operation's worker reads only `add`; `with` is there for the hash.
+        norm = lambda ps: sorted({p.strip().lower() for p in ps})  # noqa: E731 — as write_grants stores them
+        push = {"push_only": True, "add": norm(direct), "remove": norm(remove)}
+        gated = {"add": norm(domain), "with": {"add": push["add"], "remove": push["remove"]}} if domain else None
+        payload = gated or push
+        op, idem = replay(conn, caller.workspace_id, "set_access", app["id"], payload, idem)
+        push_key = f"{idem}:push" if (idem and domain) else idem
+        if op is not None:  # a genuine retry: the operations it created, nothing written again
+            pushed = conn.execute("select * from operations where workspace_id = %s and idem_key = %s",
+                                  (caller.workspace_id, push_key)).fetchone() if domain and push_key else None
+            if not domain:
+                return _app_view(conn, app)["access"], None, op
+            return _app_view(conn, app)["access"], op, pushed and op_view(pushed, slug)
         write_grants(conn, caller.workspace_id, app["id"], direct, remove, caller.user_id)
+        pushed = None
+        if (direct or remove) and app["status"] == "running":  # never waits on the domain approval
+            pushed = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, push, push_key)
         op = None
-        if domain:
+        if domain:  # created last, so a retry finds it as the app's latest set_access operation
             reasons = [("domain_grant", f"grant to a whole domain ({p})") for p in domain]
-            op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, {"add": domain}, idem, reasons)
-        elif (direct or remove) and app["status"] == "running":
-            op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, {"push_only": True}, idem)
-        return _app_view(conn, app)["access"], op
+            op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, gated, idem, reasons)
+        return _app_view(conn, app)["access"], op, pushed
 
 
 def delete_app(caller: Caller, slug: str, idem: str | None) -> Operation:
