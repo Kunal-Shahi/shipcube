@@ -26,6 +26,14 @@ FORBIDDEN = {
 ACT_AS = {"roles/iam.serviceAccountUser", "roles/iam.serviceAccountTokenCreator"}
 ACT_AS_ALLOWED_FILES = {"links.tf"}
 
+# Project-level roles that read secret values: always under a resource-name condition, and for the
+# gateway only on AI keys (ws-ai-*), never warehouse credentials (#15).
+SECRET_READ_ROLES = {"roles/secretmanager.secretAccessor", "roles/secretmanager.secretVersionManager",
+                     "roles/secretmanager.admin"}
+SECRET_READ_CUSTOM = ("workspace_secrets",)  # custom roles (by resource name) that include versions.access
+GATEWAY_MEMBER = "google_service_account.gateway.member"
+AI_KEY_PREFIX = ("ai_key_secrets_prefix", "/secrets/ws-ai-")
+
 # Known exceptions, each tied to the issue that removes it. Delete the entry with the grant.
 KNOWN = {
     ("google_project_iam_member.hosted_deployer", "roles/iam.serviceAccountUser"): "#16",
@@ -52,12 +60,28 @@ def roles_in(body: str) -> set[str]:
     return found
 
 
+def secret_problems(where: str, body: str) -> list[str]:
+    role = re.search(r"role\s*=\s*([^\n]+)", body)
+    role = role[1].strip() if role else ""
+    reads = role.strip('"') in SECRET_READ_ROLES or any(c in role for c in SECRET_READ_CUSTOM)
+    if not reads:
+        return []
+    cond = re.search(r"condition\s*\{(.*?)\n\s*\}", body, re.S)
+    if not cond:
+        return [f"{where} reads secrets project-wide without a resource-name condition"]
+    if GATEWAY_MEMBER in body and not any(p in cond[1] for p in AI_KEY_PREFIX):
+        return [f"{where} lets the gateway read secrets other than AI keys (condition on ws-ai-* only)"]
+    return []
+
+
 def check(root: Path) -> list[str]:
     problems = []
     for f in sorted(root.rglob("*.tf")):
         if ".terraform" in f.parts:
             continue
         for kind, name, body in blocks(f.read_text()):
+            if kind == "google_project_iam_member":
+                problems += secret_problems(f"{f.relative_to(root)}: {kind}.{name}", body)
             for role in roles_in(body):
                 if (f"{kind}.{name}", role) in KNOWN:
                     continue

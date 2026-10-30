@@ -65,6 +65,7 @@ def test_byok_keys_are_stored_in_the_secret_store_and_never_returned(client, ws)
                            " and destroyed_at is null", (ws["workspace_id"],)).fetchone()
     assert KEY.encode() not in json.dumps({k: str(v) for k, v in ref.items()}).encode()
     secret_id = ref["resource_name"].rsplit("/", 1)[-1]
+    assert secret_id.startswith(f"ws-ai-{ws['workspace_id']}-")  # the only prefix the gateway may read (#15)
     assert secrets_file()[secret_id] == KEY
 
     # A new key replaces the old one, which is destroyed in the store.

@@ -34,6 +34,9 @@ resource "google_secret_manager_secret_iam_member" "platform_accessor" {
 # any other name is unusable to the API (no versions, no reads).
 locals {
   workspace_secrets_prefix = "projects/${data.google_project.control.number}/secrets/ws-"
+  # AI keys only (workspace.py names them ws-ai-<workspace>-<uuid>). Warehouse credentials are
+  # ws-<workspace>-warehouse_credential-<uuid>; a workspace uuid is hex, so never "ai-".
+  ai_key_secrets_prefix = "projects/${data.google_project.control.number}/secrets/ws-ai-"
 }
 
 resource "google_project_iam_custom_role" "secret_creator" {
@@ -75,14 +78,15 @@ resource "google_project_iam_member" "api_workspace_secrets" {
   }
 }
 
-# The gateway reads a workspace's AI key by reference at request time.
-resource "google_project_iam_member" "gateway_workspace_secrets" {
+# The gateway reads a workspace's AI key by reference at request time, and nothing else: not
+# warehouse credentials, which share the ws- prefix.
+resource "google_project_iam_member" "gateway_ai_keys" {
   project = var.control_project_id
   role    = "roles/secretmanager.secretAccessor"
   member  = google_service_account.gateway.member
   condition {
-    title       = "workspace secrets only"
-    description = "ws-<workspace>-* secrets and their versions"
-    expression  = "resource.name.startsWith(\"${local.workspace_secrets_prefix}\")"
+    title       = "workspace AI keys only"
+    description = "ws-ai-<workspace>-* secrets and their versions"
+    expression  = "resource.name.startsWith(\"${local.ai_key_secrets_prefix}\")"
   }
 }
