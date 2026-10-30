@@ -114,3 +114,10 @@ def test_api_callers_cannot_read_counters(client):
                     via="mcp", role="admin")
     with db.tx(caller) as conn:
         assert conn.execute("select count(*) as n from rate_counters").fetchone()["n"] == 0
+
+
+def test_counters_survive_a_crash(client):
+    # UNLOGGED tables are emptied on crash recovery; the monthly spend counter must not be.
+    with db.tx() as conn:
+        persistence = conn.execute("select relpersistence from pg_class where oid = 'rate_counters'::regclass").fetchone()
+    assert persistence["relpersistence"] == "p"  # permanent (WAL-logged), not 'u'

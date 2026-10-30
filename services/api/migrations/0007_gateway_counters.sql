@@ -6,6 +6,10 @@
 -- rate_counters (0003) gains the kinds the gateway needs: workspace-wide counters (keyed by the
 -- workspace's id in app_id) and spend in micro-dollars per month.
 
+-- 0003 made it UNLOGGED; it now holds the monthly spend the spend cap protects, which a crash must
+-- not reset. A few small row updates per gateway request is well within a logged table's write rate.
+alter table rate_counters set logged;
+
 alter table rate_counters drop constraint rate_counters_kind_check;
 alter table rate_counters add constraint rate_counters_kind_check check (kind in (
   'requests_per_minute', 'ai_tokens_per_day', 'spend_microusd_per_month',
