@@ -3,8 +3,8 @@
 
 Fails on:
   - any *DEV_MODE* variable set to a true value
-  - SHIPCUBE_BACKEND other than gcp, SHIPCUBE_SECRET_STORE=local, SHIPCUBE_EMBEDDED_WORKER=1,
-    SHIPCUBE_ESTIMATOR=dev, SHIPCUBE_ENV=local
+  - SHIPCUBE_BACKEND, SHIPCUBE_PROFILER or SHIPCUBE_MONITOR other than gcp, SHIPCUBE_SECRET_STORE=local,
+    SHIPCUBE_EMBEDDED_WORKER=1, SHIPCUBE_ESTIMATOR=dev, SHIPCUBE_ENV=local
   - a URL pointing at localhost, 127.0.0.1, 0.0.0.0, ::1, host.docker.internal or *.localhost
   - a locally generated secret (sclocal_..., infra/local/localsecrets.py)
 
@@ -30,6 +30,8 @@ RULES = [
     (re.compile(rf"\bSHIPCUBE_EMBEDDED_WORKER[\"']?\s*(?:[:=]|,\s*value:)\s*[\"']?{TRUE}\b", re.I), "embedded worker"),
     (re.compile(r"\bSHIPCUBE_ESTIMATOR[\"']?\s*(?:[:=]|,\s*value:)\s*[\"']?dev\b", re.I), "dev estimator"),
     (re.compile(r"\bSHIPCUBE_ENV[\"']?\s*(?:[:=]|,\s*value:)\s*[\"']?local\b", re.I), "SHIPCUBE_ENV=local"),
+    (re.compile(r"\bSHIPCUBE_PROFILER[\"']?\s*(?:[:=]|,\s*value:)\s*[\"']?(?!gcp\b)[a-z]+", re.I), "SHIPCUBE_PROFILER other than gcp"),
+    (re.compile(r"\bSHIPCUBE_MONITOR[\"']?\s*(?:[:=]|,\s*value:)\s*[\"']?(?!gcp\b)[a-z]+", re.I), "SHIPCUBE_MONITOR other than gcp"),
     (re.compile(r"\b[a-z][a-z0-9+.-]*://(?:[^/\s\"'@]*@)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal|[a-z0-9.-]+\.localhost)\b", re.I),
      "local URL"),
     (re.compile(r"\bsclocal_[A-Za-z0-9_-]+"), "locally generated secret"),

@@ -129,6 +129,14 @@ def production_problems(s: Settings, env: Mapping[str, str] = os.environ) -> lis
     for name, bad in (("SHIPCUBE_EMBEDDED_WORKER", "1"), ("SHIPCUBE_ESTIMATOR", "dev"), ("SHIPCUBE_ENV", "local")):
         if env.get(name) == bad:
             out.append(f"{name}={bad} is for local development only")
+    # Profiler: empty (no profiling) or gcp (the sandboxed Cloud Run job); `local` runs tenant code
+    # in-process. Monitor: unset resolves to gcp in shipcube_monitor; local/mock read Docker or fake data.
+    profiler = (env.get("SHIPCUBE_PROFILER") or "").strip().lower()
+    if profiler not in ("", "gcp"):
+        out.append(f"SHIPCUBE_PROFILER={profiler}; production profiles only in the gcp sandbox")
+    monitor = (env.get("SHIPCUBE_MONITOR") or "gcp").strip().lower()
+    if monitor != "gcp":
+        out.append(f"SHIPCUBE_MONITOR={monitor}; production reads only Cloud Monitoring")
     if (env.get("SHIPCUBE_TOKEN_PEPPER") or "").startswith("sclocal_"):
         out.append("SHIPCUBE_TOKEN_PEPPER is a local value (infra/local/localsecrets.py)")
     # Approval links, the MCP OAuth issuer and the gateway URL handed to apps must be real.

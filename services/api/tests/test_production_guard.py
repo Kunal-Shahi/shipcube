@@ -17,6 +17,7 @@ PROD = {
     "SHIPCUBE_TOKEN_PEPPER": "a-real-pepper-from-secret-manager",
 }
 SWITCHES = ("SHIPCUBE_DEV_MODE", "DEV_MODE", "SHIPCUBE_BACKEND", "SHIPCUBE_SECRET_STORE", "SHIPCUBE_EMBEDDED_WORKER",
+            "SHIPCUBE_PROFILER", "SHIPCUBE_MONITOR",
             "SHIPCUBE_ESTIMATOR", "SHIPCUBE_ENV", "SHIPCUBE_CONSOLE_URL", "SHIPCUBE_AI_GATEWAY_URL", "SHIPCUBE_TOKEN_PEPPER",
             *("K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB"))
 
@@ -42,6 +43,10 @@ def test_a_correct_production_service_has_no_problems(monkeypatch):
     ({"SHIPCUBE_EMBEDDED_WORKER": "1"}, "SHIPCUBE_EMBEDDED_WORKER"),
     ({"SHIPCUBE_ESTIMATOR": "dev"}, "SHIPCUBE_ESTIMATOR"),
     ({"SHIPCUBE_ENV": "local"}, "SHIPCUBE_ENV"),
+    ({"SHIPCUBE_PROFILER": "local"}, "SHIPCUBE_PROFILER=local"),
+    ({"SHIPCUBE_PROFILER": "dev"}, "SHIPCUBE_PROFILER=dev"),
+    ({"SHIPCUBE_MONITOR": "local"}, "SHIPCUBE_MONITOR=local"),
+    ({"SHIPCUBE_MONITOR": "mock"}, "SHIPCUBE_MONITOR=mock"),
     ({"SHIPCUBE_TOKEN_PEPPER": "sclocal_abc"}, "local value"),
     ({"SHIPCUBE_CONSOLE_URL": "http://localhost:3000"}, "SHIPCUBE_CONSOLE_URL"),
     ({"SHIPCUBE_CONSOLE_URL": "https://127.0.0.1"}, "SHIPCUBE_CONSOLE_URL"),
@@ -87,3 +92,16 @@ def test_startup_proceeds_with_a_production_config():
 def test_dev_mode_still_works_off_cloud_run():
     r = _start("shipcube_api.settings", {"SHIPCUBE_DEV_MODE": "1"})
     assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("env", [{}, {"SHIPCUBE_PROFILER": ""}, {"SHIPCUBE_PROFILER": "gcp"}, {"SHIPCUBE_PROFILER": " GCP "},
+                                 {"SHIPCUBE_MONITOR": "gcp"}])
+def test_profiler_and_monitor_allow_gcp_or_unset(monkeypatch, env):
+    # Unset SHIPCUBE_MONITOR resolves to gcp (shipcube_monitor), so the worker needn't set it.
+    assert problems(monkeypatch, **{**PROD, **env}) == []
+
+
+@pytest.mark.parametrize("env", [{"SHIPCUBE_PROFILER": "local"}, {"SHIPCUBE_MONITOR": "mock"}])
+def test_startup_refuses_local_profiler_and_monitor(env):
+    r = _start("shipcube_api.settings", {**PROD, **env})
+    assert r.returncode != 0 and "refusing to start on Cloud Run" in r.stderr

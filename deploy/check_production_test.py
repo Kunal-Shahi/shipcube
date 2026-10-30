@@ -23,6 +23,9 @@ BAD = [
     '            - {name: SHIPCUBE_AI_GATEWAY_URL, value: "http://host.docker.internal:8090"}',
     'CONSOLE_URL=https://web.localhost',
     'SHIPCUBE_TOKEN_PEPPER=sclocal_abcdef',
+    '            - {name: SHIPCUBE_PROFILER, value: "local"}',
+    '            - {name: SHIPCUBE_MONITOR, value: mock}',
+    '  --set-env-vars "^|^SHIPCUBE_MONITOR=local"',
 ]
 GOOD = [
     '            - {name: SHIPCUBE_EMBEDDED_WORKER, value: "0"}',
@@ -30,6 +33,8 @@ GOOD = [
     '  --set-env-vars "^|^SHIPCUBE_BACKEND=gcp|SHIPCUBE_DB_IAM_AUTH=1"',
     '# SHIPCUBE_DEV_MODE=1 is for local development only',
     'CONSOLE_URL="https://console.example.com"',
+    '            - {name: SHIPCUBE_MONITOR, value: gcp}',
+    '            - {name: SHIPCUBE_PROFILER, value: "gcp"}',
 ]
 
 
