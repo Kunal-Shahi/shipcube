@@ -412,11 +412,14 @@ def decide(caller: Caller, op_id: str, approve: bool, comment: str | None) -> Op
 # --- request-side mutations ------------------------------------------------------------------
 
 
+# The estimator reads the checkout inside the worker; git sources come back with the profiler
+# sandbox's clone limits and symlink checks (#57). Uploads and images are unaffected.
+GIT_ESTIMATES_PAUSED = True
+
+
 def start_estimate(caller: Caller, payload: dict[str, Any], idem: str | None) -> Operation:
     source = payload.get("source") or {}
-    if source.get("kind") == "git":
-        # The estimator reads the checkout inside the worker; git sources come back with the
-        # profiler sandbox's clone limits and symlink checks (#57). Uploads and images are unaffected.
+    if source.get("kind") == "git" and GIT_ESTIMATES_PAUSED:
         raise DeployError("invalid_argument", "estimates from git sources are paused; upload the code with create_upload instead")
     isolation.check_source(settings, caller.workspace_id, source)
     with db.tx(caller) as conn:

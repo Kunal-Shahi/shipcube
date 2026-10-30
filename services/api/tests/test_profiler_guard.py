@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from shipcube_api import db, profiler_guard, store_runtime
+from shipcube_api import db, profiler_guard, store, store_runtime
 from shipcube_api.deploy.mock import MockDeployer
 from shipcube_api.profiler_janitor import Janitor
 from shipcube_api.worker import Worker, lanes_from_env
@@ -51,6 +51,7 @@ def _clear():
 def guarded(client, monkeypatch):
     store_runtime.stop_embedded_worker()
     monkeypatch.setattr(profiler_guard, "configured", lambda: True)
+    monkeypatch.setattr(store, "GIT_ESTIMATES_PAUSED", False)  # these tests use git as a profiled source
     _clear()
     yield
     _clear()
