@@ -58,8 +58,9 @@ resource "google_service_account_iam_member" "api_impersonates_hosted_deployer" 
 }
 
 # Hosted deployer gets the same grants users give it on linked projects
-# (infra/scripts/link-project.sh). In the apps project it may also create and
-# act as per-app service accounts, which hold no project roles.
+# (infra/scripts/link-project.sh). It holds no service-account role on the project (#16): each
+# app's runtime SA is created by sc-provisioner, which grants the deployer actAs on that SA only,
+# and each workspace builder SA likewise (deploy/gcp.py).
 resource "google_project_iam_custom_role" "run_iam" {
   project     = var.apps_project_id
   role_id     = "shipcubeRunIamAdmin"
@@ -77,8 +78,6 @@ resource "google_project_iam_member" "hosted_deployer" {
     "roles/logging.viewer",
     "roles/monitoring.viewer",
     "roles/serviceusage.serviceUsageConsumer",
-    "roles/iam.serviceAccountAdmin",
-    "roles/iam.serviceAccountUser",
     "projects/${var.apps_project_id}/roles/shipcubeRunIamAdmin",
   ])
   project    = var.apps_project_id

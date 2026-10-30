@@ -150,3 +150,19 @@ def test_housekeeping_expires_approvals_and_purges_after_the_restore_window(clie
     with db.tx() as conn:
         app = conn.execute("select purged_at from apps where slug = 'old-app' and workspace_id = %s", (ws["workspace_id"],)).fetchone()
     assert app["purged_at"] is not None
+
+
+def test_exposure_check_logs_public_hosted_services_as_critical(client, caplog):
+    class Exposed(MockDeployer):
+        def public_services(self, regions):
+            assert regions  # always at least the default region
+            return ["projects/shipcube-apps-ks/locations/asia-south1/services/leaky"]
+
+    with caplog.at_level("CRITICAL", logger="shipcube.worker"):
+        Worker(Exposed(), worker_id="w-exposure").check_exposure()
+    hits = [r for r in caplog.records if r.levelname == "CRITICAL" and "public" in r.getMessage()]
+    assert hits and hits[0].service.endswith("/services/leaky")
+    caplog.clear()
+    with caplog.at_level("CRITICAL", logger="shipcube.worker"):
+        Worker(MockDeployer(), worker_id="w-exposure-2").check_exposure()  # no check on the mock: nothing
+    assert not [r for r in caplog.records if r.levelname == "CRITICAL"]
