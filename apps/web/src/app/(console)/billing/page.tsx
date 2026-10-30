@@ -32,6 +32,9 @@ async function BillingBody({ state }: { state: DemoState }) {
   if (blocked) return blocked;
   const b = await getBilling(state);
   const left = b.credits.granted - b.credits.used;
+  const today = new Date();
+  const month = today.toLocaleString("en-US", { month: "long", timeZone: "UTC" });
+  const spent = b.daily.some((d) => d.value > 0);
   const rows = b.byApp.map((a) => ({ ...a, total: a.compute + a.data + a.llm })).sort((x, y) => y.total - x.total);
   const onShipcube = rows.filter((r) => r.billing === "shipcube").reduce((s, r) => s + r.total, 0);
   const onGcp = rows.filter((r) => r.billing === "own-gcp").reduce((s, r) => s + r.total, 0);
@@ -39,29 +42,36 @@ async function BillingBody({ state }: { state: DemoState }) {
   return (
     <div className="flex flex-col gap-4">
       <StatRow>
-        <Stat
-          label="ShipCube credits left"
-          value={money(left)}
-          note={
-            <span className="flex flex-col gap-1.5 pt-0.5">
-              <Meter value={b.credits.used} max={b.credits.granted} label="Credits used" />
-              <span className="num">{money(b.credits.used)} of {money(b.credits.granted)} used · expires {date(b.credits.expiresAt)}</span>
-            </span>
-          }
-        />
-        <Stat label="This month, all apps" value={money(b.monthToDate)} note="October 1–27" />
+        {b.credits.granted > 0 ? (
+          <Stat
+            label="ShipCube credits left"
+            value={money(left)}
+            note={
+              <span className="flex flex-col gap-1.5 pt-0.5">
+                <Meter value={b.credits.used} max={b.credits.granted} label="Credits used" />
+                <span className="num">
+                  {money(b.credits.used)} of {money(b.credits.granted)} used{b.credits.expiresAt && <> · expires {date(b.credits.expiresAt)}</>}
+                </span>
+              </span>
+            }
+          />
+        ) : (
+          // No credit grant configured on this deployment: show what ShipCube's project has spent.
+          <Stat label="Spent on ShipCube's project" value={money(b.credits.used)} note="No credit grant configured" />
+        )}
+        <Stat label="This month, all apps" value={money(b.monthToDate)} note={`${month} 1–${today.getUTCDate()} · forecast ${money(b.forecast)}`} />
         <Stat label="From ShipCube credits" value={money(onShipcube)} note="Apps on ShipCube's GCP project" />
         <Stat label="Billed to your GCP" value={money(onGcp)} note={b.gcp.linked ? <span className="font-mono">{b.gcp.projectId}</span> : "No project linked"} />
       </StatRow>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <Panel>
-          <PanelHeader title="Daily spend from credits" description="October 2026, apps on ShipCube's GCP project" />
+          <PanelHeader title="Daily spend" description="All apps, last 30 days" />
           <div className="p-4">
-            {b.daily.length ? (
+            {spent ? (
               <CostChart data={b.daily} />
             ) : (
-              <p className="py-10 text-center text-fg-muted">No spend this month.</p>
+              <p className="py-10 text-center text-fg-muted">No spend in the last 30 days.</p>
             )}
           </div>
         </Panel>
@@ -76,10 +86,18 @@ async function BillingBody({ state }: { state: DemoState }) {
                 <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-2">
                   <dt className="text-fg-muted">Project</dt>
                   <dd className="font-mono text-[12.5px]">{b.gcp.projectId}</dd>
-                  <dt className="text-fg-muted">Billing account</dt>
-                  <dd className="font-mono text-[12.5px]">{b.gcp.billingAccount}</dd>
-                  <dt className="text-fg-muted">Linked</dt>
-                  <dd>{b.gcp.linkedAt && date(b.gcp.linkedAt)}</dd>
+                  {b.gcp.billingAccount && (
+                    <>
+                      <dt className="text-fg-muted">Billing account</dt>
+                      <dd className="font-mono text-[12.5px]">{b.gcp.billingAccount}</dd>
+                    </>
+                  )}
+                  {b.gcp.linkedAt && (
+                    <>
+                      <dt className="text-fg-muted">Linked</dt>
+                      <dd>{date(b.gcp.linkedAt)}</dd>
+                    </>
+                  )}
                 </dl>
                 <p className="text-fg-muted">
                   Free-trial credits and committed-use discounts on this account apply to these apps. Google invoices them
