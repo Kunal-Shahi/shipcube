@@ -17,7 +17,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import db
+from . import db, profiler_guard
 from .auth import Caller
 from .deploy import isolation
 from .deploy.base import AppRef, Deployer, Target
@@ -415,7 +415,12 @@ def decide(caller: Caller, op_id: str, approve: bool, comment: str | None) -> Op
 def start_estimate(caller: Caller, payload: dict[str, Any], idem: str | None) -> Operation:
     isolation.check_source(settings, caller.workspace_id, payload.get("source") or {})
     with db.tx(caller) as conn:
-        return enqueue(conn, caller, caller.workspace_id, "estimate", None, settings.apps_project, payload, idem)
+        replay = idem is not None and conn.execute("select 1 from operations where workspace_id = %s and idem_key = %s",
+                                                   (caller.workspace_id, idem)).fetchone() is not None
+        # Profiled or static (profiler_guard.admit), outside the idempotency hash. A replay returns the
+        # operation that already exists, so it isn't admitted (or rate-limited) again.
+        mode = {} if replay else profiler_guard.admit(conn, caller.workspace_id, payload)
+        return enqueue(conn, caller, caller.workspace_id, "estimate", None, settings.apps_project, payload, idem, extra=mode)
 
 
 def start_deploy(caller: Caller, slug: str, payload: dict[str, Any], idem: str | None) -> Operation:

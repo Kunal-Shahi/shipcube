@@ -7,8 +7,14 @@
   starts, so a retry or a new worker resumes from `step_index` (a running build is re-attached by id).
 - Retries: transient cloud errors (429, 5xx, timeouts, network) back off exponentially with jitter,
   up to `max_attempts`; anything else fails the operation at once with a typed error.
+- Lanes: estimates never wait behind deploys, or deploys behind estimates. A worker runs one lane:
+  `deploy` (every kind but estimate), `estimate`, or `all` (DEV_MODE's embedded worker and tests).
+  `run_lanes` starts SHIPCUBE_WORKER_LANES (default: 1 deploy thread, 3 estimate threads).
+- Profiler guard (profiler_guard.py): at most 3 profiled estimates run at once, 1 per workspace,
+  fairest workspace first; each charges the spend ledger before it starts, or runs static.
 - Housekeeping every minute: expire unanswered approvals, enqueue purges of apps past their 7-day
-  restore window.
+  restore window, run long-waiting profiled estimates static, and sweep profiler leftovers
+  (profiler_janitor.py).
 
 Production: run standalone as its own Cloud Run service, signed in as sc-worker (database role
 shipcube_worker, BYPASSRLS): `python -m shipcube_api.worker`. Every transaction here runs as
@@ -20,6 +26,7 @@ Operate it with `python -m shipcube_api.admin ops ...`.
 from __future__ import annotations
 
 import logging
+import os
 import random
 import threading
 import time
@@ -29,7 +36,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import db, obs
+from . import db, obs, profiler_guard, profiler_janitor
 from .deploy import isolation
 from .deploy.base import AppRef, Deployer, DeployError
 from .estimator import Estimator, make_estimator
@@ -40,6 +47,7 @@ log = logging.getLogger("shipcube.worker")
 LEASE_S = 90
 HEARTBEAT_S = 30
 RETRYABLE = {"unavailable", "timeout", "rate_limited"}
+LANES = {"all": "true", "deploy": "o.kind <> 'estimate'", "estimate": "o.kind = 'estimate'"}
 
 
 class Cancelled(Exception):
@@ -51,10 +59,17 @@ def backoff(attempt: int) -> float:
 
 
 class Worker:
-    def __init__(self, deployer: Deployer, estimator: Estimator | None = None, worker_id: str | None = None) -> None:
+    def __init__(self, deployer: Deployer, estimator: Estimator | None = None, worker_id: str | None = None,
+                 lane: str = "all", janitor: profiler_janitor.Janitor | None = None) -> None:
+        if lane not in LANES:
+            raise ValueError(f"worker lane must be one of {sorted(LANES)}, not {lane!r}")
         self.d = deployer
         self.estimator = estimator or make_estimator(deployer)
-        self.id = worker_id or f"{settings.worker_id}/{uuid.uuid4().hex[:6]}"
+        self.lane = lane
+        self.janitor = janitor
+        self.housekeeps = True  # run_lanes leaves it to one worker per process
+        self.thread: threading.Thread | None = None
+        self.id = worker_id or f"{settings.worker_id}/{lane}/{uuid.uuid4().hex[:6]}"
         self._stop = threading.Event()
         self._last_housekeeping = 0.0
 
@@ -64,7 +79,7 @@ class Worker:
         log.info("worker started", extra={"worker": self.id})
         while not self._stop.is_set():
             try:
-                if time.monotonic() - self._last_housekeeping > 60:
+                if self.housekeeps and time.monotonic() - self._last_housekeeping > 60:
                     self.housekeeping()
                     self._last_housekeeping = time.monotonic()
                 if not self.run_once():
@@ -77,18 +92,23 @@ class Worker:
         self._stop.set()
 
     def start_thread(self) -> threading.Thread:
-        t = threading.Thread(target=self.run_forever, name="shipcube-worker", daemon=True)
+        t = threading.Thread(target=self.run_forever, name=f"shipcube-worker-{self.lane}", daemon=True)
         t.start()
         return t
 
     def claim(self) -> dict[str, Any] | None:
         with db.worker_tx() as conn:
+            if self.lane != "deploy":  # makes the profiled-run count in claim_predicate race-free
+                conn.execute("select pg_advisory_xact_lock(%s)", (profiler_guard.CLAIM_LOCK,))
             return conn.execute(
-                "update operations set status = 'running', locked_by = %s, locked_until = now() + make_interval(secs => %s),"
+                "update operations set status = 'running', locked_by = %(me)s, locked_until = now() + make_interval(secs => %(lease)s),"
                 " attempts = attempts + 1, started_at = coalesce(started_at, now()), updated_at = now()"
-                " where id = (select id from operations where status in ('queued','running') and next_attempt_at <= now()"
-                "   and (locked_until is null or locked_until < now()) order by next_attempt_at"
-                "   for update skip locked limit 1) returning *", (self.id, LEASE_S)).fetchone()
+                " where id = (select o.id from operations o where o.status in ('queued','running') and o.next_attempt_at <= now()"
+                "   and (o.locked_until is null or o.locked_until < now())"
+                f"   and {LANES[self.lane]} and {profiler_guard.claim_predicate('o')}"
+                f"   order by {profiler_guard.fairness_order('o')}, o.next_attempt_at"
+                "   for update skip locked limit 1) returning *",
+                {"me": self.id, "lease": LEASE_S, "global_runs": profiler_guard.Limits.from_env().global_runs}).fetchone()
 
     def run_once(self) -> bool:
         op = self.claim()
@@ -230,9 +250,17 @@ class Worker:
     def _plan(self, op: dict[str, Any], state: dict[str, Any]) -> dict[str, Callable[[], Any]]:
         kind, inp = op["kind"], op["input"] or {}
         if kind == "estimate":
-            return {"profile": lambda: state.update(profile_done=True),
-                    "place": lambda: self.estimator.estimate(inp["source"], {k: inp.get(k) for k in ("expected_users", "schedule")},
-                                                             workspace_id=str(op["workspace_id"]), op_id=str(op["id"]))}
+            def profile() -> None:
+                if "profiled" not in state:  # once per operation: a retry doesn't charge the ledger again
+                    with db.worker_tx() as conn:
+                        state.update(profiler_guard.start_run(conn, op))
+
+            def place() -> dict[str, Any]:
+                return self.estimator.estimate(inp["source"], {k: inp.get(k) for k in ("expected_users", "schedule")},
+                                               workspace_id=str(op["workspace_id"]), op_id=str(op["id"]),
+                                               static_reason=state.get("static_reason"))
+
+            return {"profile": profile, "place": place}
 
         app, ref = self._app(op["app_id"])
         app_id = app["id"]
@@ -384,8 +412,15 @@ class Worker:
             for app in due:
                 enqueue(conn, None, str(app["workspace_id"]), "purge", app["id"], app["link_project"] or settings.apps_project,
                         {}, f"purge:{app['id']}")
-        if expired or due:
-            log.info("housekeeping", extra={"approvals_expired": len(expired), "purges_enqueued": len(due)})
+            busy = profiler_guard.expire_waiting(conn)
+        if expired or due or busy:
+            log.info("housekeeping", extra={"approvals_expired": len(expired), "purges_enqueued": len(due),
+                                            "estimates_static_busy": busy})
+        if self.janitor is not None:
+            try:
+                self.janitor.sweep()
+            except Exception:  # noqa: BLE001 — a cloud error must not stop the rest of housekeeping
+                log.exception("profiler janitor failed")
 
 
 def current_deployment_exists(app_id: Any) -> bool:
@@ -393,12 +428,34 @@ def current_deployment_exists(app_id: Any) -> bool:
         return current_deployment(conn, app_id) is not None
 
 
+def lanes_from_env() -> list[str]:
+    """SHIPCUBE_WORKER_LANES, e.g. "deploy,estimate*3": one worker thread per entry (×n repeats it)."""
+    out: list[str] = []
+    for part in os.environ.get("SHIPCUBE_WORKER_LANES", "deploy,estimate*3").split(","):
+        lane, _, n = part.strip().partition("*")
+        out += [lane] * int(n or 1)
+    return out
+
+
+def run_lanes(deployer: Deployer, factory: type[Worker] = Worker) -> list[Worker]:
+    """Start one worker thread per lane. Only the first worker runs the profiler janitor, so the
+    sweep happens once per process. Returns the workers (call stop() on each to shut down)."""
+    janitor = profiler_janitor.from_env()
+    workers = [factory(deployer, lane=lane, janitor=janitor if i == 0 else None) for i, lane in enumerate(lanes_from_env())]
+    for i, w in enumerate(workers):
+        w.housekeeps = i == 0
+        w.thread = w.start_thread()
+    return workers
+
+
 def main() -> None:
     from .store_runtime import deployer
 
     obs.setup_logging()
     db.check_schema(migrate_if_dev=settings.dev_mode)
-    Worker(deployer()).run_forever()
+    workers = run_lanes(deployer())
+    for w in workers:
+        w.thread.join()
 
 
 if __name__ == "__main__":

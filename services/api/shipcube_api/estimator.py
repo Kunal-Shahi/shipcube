@@ -23,7 +23,8 @@ log = logging.getLogger(__name__)
 
 
 class Estimator(Protocol):
-    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str) -> dict[str, Any]: ...
+    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str,
+                 static_reason: str | None = None) -> dict[str, Any]: ...
 
 
 class PlacementEstimator:
@@ -32,11 +33,15 @@ class PlacementEstimator:
 
         self.d = deployer
 
-    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str) -> dict[str, Any]:
+    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str,
+                 static_reason: str | None = None) -> dict[str, Any]:
         from shipcube_placement import estimate
         from shipcube_profiler import CloudRunJobRunner, StaticRunner
 
-        if os.environ.get("SHIPCUBE_PROFILER"):
+        if static_reason:
+            # The profiler guard said no (quota, budget, busy, disabled, image_source): never run the code.
+            runner = StaticRunner()
+        elif os.environ.get("SHIPCUBE_PROFILER"):
             # Explicit sandbox choice (e.g. `local`: docker run --network none on the local stack);
             # shipcube_profiler.runner_from_env reads SHIPCUBE_PROFILER and its limits.
             from shipcube_profiler import runner_from_env
@@ -54,11 +59,12 @@ class PlacementEstimator:
         res = estimate(source, {k: v for k, v in hints.items() if v is not None}, runner=runner, fetch_upload=fetch_upload)
         out = res.model_dump(mode="json") if hasattr(res, "model_dump") else dict(res.__dict__)
         out.setdefault("estimate_id", f"est_{op_id.replace('-', '')[:12]}")
-        return out
+        return with_static_reason(out, static_reason)
 
 
 class UnavailableEstimator:
-    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str) -> dict[str, Any]:
+    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str,
+                 static_reason: str | None = None) -> dict[str, Any]:
         raise DeployError("estimator_unavailable",
                           "the load estimator (shipcube_placement) is not installed on this server; deploy with an explicit tier")
 
@@ -66,7 +72,8 @@ class UnavailableEstimator:
 class DevEstimator:
     """DEV_MODE only: the classifier's canned numbers plus the explainer."""
 
-    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str) -> dict[str, Any]:
+    def estimate(self, source: dict[str, Any], hints: dict[str, Any], *, workspace_id: str, op_id: str,
+                 static_reason: str | None = None) -> dict[str, Any]:
         from .explain import explain
 
         classified = {
@@ -76,7 +83,19 @@ class DevEstimator:
             "monthly_cost_usd": {"low": 0.0, "expected": 1.8, "high": 6.5},
             "profile": {"peak_rss_mb": 210, "cpu_seconds": 3.4, "wall_seconds": 5.1, "queries": 12, "io_mb": 18},
         }
-        return {**classified, **explain(classified).model_dump(mode="json"), "dev_mode": True}
+        if static_reason:
+            classified["profile"] = {**classified["profile"], "measurements": {"mode": "static"}}
+        return with_static_reason({**classified, **explain(classified).model_dump(mode="json"), "dev_mode": True}, static_reason)
+
+
+def with_static_reason(result: dict[str, Any], reason: str | None) -> dict[str, Any]:
+    """Say why an estimate wasn't profiled, machine-readably: `profile.static_reason`
+    (docs/research/profiler-sandbox.md §9). The estimator may already have set its own reason."""
+    if reason:
+        profile = dict(result.get("profile") or {})
+        profile.setdefault("static_reason", reason)
+        result = {**result, "profile": profile}
+    return result
 
 
 def make_estimator(deployer: Deployer) -> Estimator:
