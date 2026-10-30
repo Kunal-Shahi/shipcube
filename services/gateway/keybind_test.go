@@ -26,15 +26,16 @@ func envelope(provider, baseURL string) string {
 }
 
 func TestKeyRefsMustBeThisWorkspacesAIKeys(t *testing.T) {
-	ok := "projects/p/secrets/ws-ws-1-ai_key-0a1b-2c3d/versions/4"
+	ok := "projects/p/secrets/ws-ai-ws-1-0a1b-2c3d/versions/4"
 	if err := checkKeyRef(ok, "ws-1", false); err != nil {
 		t.Fatal(err)
 	}
 	for _, ref := range []string{
-		"projects/p/secrets/ws-ws-2-ai_key-0a1b/versions/4",             // another workspace
+		"projects/p/secrets/ws-ai-ws-2-0a1b/versions/4",                 // another workspace
 		"projects/p/secrets/ws-ws-1-warehouse_credential-0a/versions/1", // another kind
+		"projects/p/secrets/ws-ws-1-ai_key-0a1b/versions/4",             // the old naming
 		"projects/p/secrets/warehouse-primary/versions/1",
-		"projects/p/secrets/ws-ws-1-ai_key-0a/versions/latest",
+		"projects/p/secrets/ws-ai-ws-1-0a/versions/latest",
 		"env:TEST_PROVIDER_KEY", // only in DEV_MODE
 	} {
 		if err := checkKeyRef(ref, "ws-1", false); !errors.Is(err, errKeyNotBound) {
@@ -47,7 +48,7 @@ func TestKeyRefsMustBeThisWorkspacesAIKeys(t *testing.T) {
 }
 
 func TestBoundKeyOnlyGoesWhereItWasSaved(t *testing.T) {
-	ref := "projects/p/secrets/ws-ws-1-ai_key-1/versions/1"
+	ref := "projects/p/secrets/ws-ai-ws-1-1/versions/1"
 	cases := []struct {
 		raw, kind, base string
 		ok              bool
@@ -75,7 +76,7 @@ func TestAKeyIsNeverSentToAnEndpointItWasNotSavedWith(t *testing.T) {
 	called := false
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true }))
 	defer up.Close()
-	ref := "projects/p/secrets/ws-ws-1-ai_key-1/versions/1"
+	ref := "projects/p/secrets/ws-ai-ws-1-1/versions/1"
 	h := newHarness(t, ProviderConfig{Kind: ProviderOpenAICompatible, Model: "m", BaseURL: up.URL + "/v1", SecretRef: ref}, Caps{}, "")
 	h.g.Secrets = mapSecrets{ref: envelope("openai_compatible", "https://llm.example.com/v1")}
 	resp := h.post(t, chatBody)
@@ -96,10 +97,23 @@ func TestAKeyIsNeverSentToAnEndpointItWasNotSavedWith(t *testing.T) {
 	}
 
 	// Another workspace's key is refused before it's read.
-	other := "projects/p/secrets/ws-ws-2-ai_key-1/versions/1"
+	other := "projects/p/secrets/ws-ai-ws-2-1/versions/1"
 	h2 := newHarness(t, ProviderConfig{Kind: ProviderOpenAI, Model: "m", SecretRef: other}, Caps{}, up.URL)
 	h2.g.Secrets = mapSecrets{other: envelope("openai", "")}
 	if resp := h2.post(t, chatBody); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status %d", resp.StatusCode)
+	}
+}
+
+// The exact name the API builds (workspace.py: ws-ai-<workspace uuid>-<uuid4>), checked from both
+// sides: tests/test_console_api.py also applies this file's pattern to a name the API created.
+func TestTheAPIsKeyNameMatches(t *testing.T) {
+	ws := "3c1d5e2a-7b4f-4e8a-9c6d-2f1e0a9b8c7d"
+	ref := "projects/123/secrets/ws-ai-" + ws + "-9f0e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c/versions/1"
+	if err := checkKeyRef(ref, ws, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkKeyRef(ref, "9f0e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c", false); err == nil {
+		t.Fatal("a key must not match a workspace whose id merely appears later in the name")
 	}
 }

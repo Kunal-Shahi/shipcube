@@ -65,6 +65,8 @@ def test_byok_keys_are_stored_in_the_secret_store_and_never_returned(client, ws)
                            " and destroyed_at is null", (ws["workspace_id"],)).fetchone()
     assert KEY.encode() not in json.dumps({k: str(v) for k, v in ref.items()}).encode()
     secret_id = ref["resource_name"].rsplit("/", 1)[-1]
+    assert secret_id.startswith(f"ws-ai-{ws['workspace_id']}-")  # the only secrets the gateway may read (#64)
+    assert _gateway_accepts(f"{ref['resource_name']}/versions/{ref['version']}", ws["workspace_id"])
     stored = json.loads(secrets_file()[secret_id])  # the key, bound to its provider (#42)
     assert stored == {"shipcube_ai_key": 1, "provider": "openai", "base_url": None, "key": KEY}
 
@@ -264,3 +266,19 @@ def test_base_urls_must_be_public_outside_dev_mode(monkeypatch):
         with pytest.raises(store.Conflict):
             workspace._check_base_url(bad)
     assert workspace._check_base_url("https://api.fireworks.ai/inference/v1/") == "https://api.fireworks.ai/inference/v1"
+
+
+def _gateway_accepts(ref: str, workspace_id: str) -> bool:
+    """Apply the gateway's own key-reference pattern (services/gateway/keybind.go, workspaceKeyRef)
+    to a name the API created, so the two can't drift apart."""
+    import re
+
+    src = (Path(__file__).resolve().parents[2] / "gateway" / "keybind.go").read_text()
+    head, tail = re.search(r"regexp\.MustCompile\(`([^`]*)` \+ regexp\.QuoteMeta\(workspaceID\) \+ `([^`]*)`\)", src).groups()
+    return re.fullmatch(head + re.escape(workspace_id) + tail, ref) is not None
+
+
+def test_the_gateway_pattern_check_is_strict(ws):
+    assert _gateway_accepts(f"projects/p/secrets/ws-ai-{ws['workspace_id']}-{uuid.uuid4()}/versions/3", ws["workspace_id"])
+    assert not _gateway_accepts(f"projects/p/secrets/ws-{ws['workspace_id']}-warehouse_credential-x/versions/3", ws["workspace_id"])
+    assert not _gateway_accepts(f"projects/p/secrets/ws-ai-{uuid.uuid4()}-{uuid.uuid4()}/versions/3", ws["workspace_id"])

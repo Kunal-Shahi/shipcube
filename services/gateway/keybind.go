@@ -18,9 +18,10 @@ import (
 
 var errKeyNotBound = errors.New("the provider key is not bound to this provider or endpoint; save it again in the console")
 
-// workspaceKeyRef matches the API's ai_key secrets for one workspace: projects/P/secrets/ws-<ws>-ai_key-<uuid>/versions/N.
+// workspaceKeyRef matches the API's AI-key secrets for one workspace: projects/P/secrets/ws-ai-<ws>-<uuid>/versions/N
+// (workspace.py builds the name; #64 limits the gateway's Secret Manager access to ws-ai-*).
 func workspaceKeyRef(workspaceID string) *regexp.Regexp {
-	return regexp.MustCompile(`^projects/[^/]+/secrets/ws-` + regexp.QuoteMeta(workspaceID) + `-ai_key-[A-Za-z0-9-]+/versions/[0-9]+$`)
+	return regexp.MustCompile(`^projects/[^/]+/secrets/ws-ai-` + regexp.QuoteMeta(workspaceID) + `-[A-Za-z0-9-]+/versions/[0-9]+$`)
 }
 
 // checkKeyRef refuses a secret reference that isn't one of this workspace's AI keys. DEV_MODE also

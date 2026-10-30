@@ -129,7 +129,8 @@ def save_provider(caller: Caller, pid: str, key: str | None, base_url: str | Non
 
     new_ref = None
     if key:
-        secret_id = f"ws-{caller.workspace_id}-ai_key-{uuid.uuid4()}"
+        # ws-ai-*: the gateway may read only these (#64's IAM condition), never warehouse credentials
+        secret_id = f"ws-ai-{caller.workspace_id}-{uuid.uuid4()}"
         resource, version = secret_store().put(secret_id, key_payload(pid, key, base_url),
                                                {"workspace": caller.workspace_id, "kind": "ai_key"})
         new_ref = (uuid.uuid4(), resource, version)
