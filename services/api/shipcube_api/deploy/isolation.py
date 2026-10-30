@@ -77,14 +77,54 @@ def check_object(s: Settings, workspace_id: str, bucket: str, name: str) -> None
 
 # Images a hosted app may run besides its own workspace's builds: public samples, pinned by
 # digest. SHIPCUBE_IMAGE_ALLOWLIST (comma-separated repository prefixes) replaces the default.
-DEFAULT_IMAGE_ALLOWLIST = ("us-docker.pkg.dev/cloudrun/container/",)
+DEFAULT_IMAGE_ALLOWLIST = ("us-docker.pkg.dev/cloudrun/container",)
+
+
+DOCKER_HUB_ALIASES = {"docker.io", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com"}
+
+
+def canonical_image(image: str) -> str:
+    """One spelling per image, for every match below: the registry host lowercased, without a
+    trailing dot or an explicit :443, Docker Hub aliases (and bare names like `nginx`) as
+    docker.io/library/..., the rest lowercased. Raises on references we won't interpret."""
+    image = image.strip()
+    if not image or any(c.isspace() or c in "\\%?#" for c in image) or "/../" in f"/{image}/" or "/./" in f"/{image}/":
+        raise DeployError("invalid_argument", f"image {image!r} is malformed")
+    first, _, rest = image.partition("/")
+    if rest and ("." in first or ":" in first or first.lower() == "localhost"):
+        host, path = first.lower(), rest
+    else:   # no registry: Docker Hub
+        host, path = "docker.io", image
+    if "@" in host:
+        raise DeployError("invalid_argument", f"image {image!r} is malformed")
+    name, _, port = host.partition(":")
+    name = name.rstrip(".")
+    if port in ("", "443"):
+        host = name
+    elif port.isdigit():
+        host = f"{name}:{port}"
+    else:
+        raise DeployError("invalid_argument", f"image {image!r} has a bad registry port")
+    if not name or name.endswith("."):
+        raise DeployError("invalid_argument", f"image {image!r} is malformed")
+    if host in DOCKER_HUB_ALIASES:
+        host = "docker.io"
+        if "/" not in path.split("@", 1)[0].split(":", 1)[0]:
+            path = f"library/{path}"
+    return f"{host}/{path.lower()}"
 
 
 def image_allowlist() -> tuple[str, ...]:
+    """Canonical allow-list entries (repositories or folders, without a trailing /)."""
     raw = os.environ.get("SHIPCUBE_IMAGE_ALLOWLIST")
-    if raw is None:
-        return DEFAULT_IMAGE_ALLOWLIST
-    return tuple(p.strip().lower().rstrip("/") + "/" for p in raw.split(",") if p.strip())
+    entries = DEFAULT_IMAGE_ALLOWLIST if raw is None else tuple(p.strip() for p in raw.split(",") if p.strip())
+    return tuple(canonical_image(p.rstrip("/")) for p in entries)
+
+
+def _allowlisted(canon: str) -> bool:
+    """The entry itself (any tag or digest) or anything under it, matched at a boundary, so
+    `.../container` doesn't also allow `.../containerx`."""
+    return any(canon.startswith(e) and canon[len(e):len(e) + 1] in ("/", ":", "@") for e in image_allowlist())
 
 
 def check_image(s: Settings, workspace_id: str, image: str, *, linked: bool = False) -> None:
@@ -96,36 +136,35 @@ def check_image(s: Settings, workspace_id: str, image: str, *, linked: bool = Fa
       image_allowlist(), pinned by digest. Arbitrary public images (a miner, say) are refused.
     - Linked apps run in the user's own project, on their bill: any image outside ShipCube's
       registries is theirs to choose, as before.
+    Every comparison is on canonical_image(), so `HOST.:443/...` spellings can't slip past.
     """
-    image = image.strip()
-    if "/../" in f"/{image}/" or any(c.isspace() for c in image):
-        raise DeployError("invalid_argument", f"image {image!r} is malformed")
-    host, _, path = image.lower().partition("/")
+    canon = canonical_image(image)
+    host, _, path = canon.partition("/")
     if host == LOCAL_REGISTRY:
         prefix = f"{LOCAL_REGISTRY}/{ar_repo(s, workspace_id)}/"
-        if not image.startswith(prefix):
+        if not canon.startswith(prefix):
             raise DeployError("permission_denied", f"image {image} is not in this workspace's namespace ({prefix.rstrip('/')})")
-        if not DIGEST.search(image):
+        if not DIGEST.search(canon):
             raise DeployError("invalid_argument", f"image {image} must be pinned by image id (@sha256:...)")
         return
     project = path.split("/", 1)[0]
     registry = host.split(":")[0]
     ours = registry.endswith("docker.pkg.dev") or registry == "gcr.io" or registry.endswith(".gcr.io")
-    if ours and project in (s.apps_project, s.control_project):
-        if not image.startswith(image_prefix(s, workspace_id)):
+    if ours and project in (s.apps_project.lower(), s.control_project.lower()):
+        if not canon.startswith(canonical_image(image_prefix(s, workspace_id) + "x").removesuffix("x")):
             raise DeployError("permission_denied", f"image {image} is not in this workspace's registry "
                                                    f"({image_prefix(s, workspace_id).rstrip('/')})")
-        if not DIGEST.search(image):
+        if not DIGEST.search(canon):
             raise DeployError("invalid_argument", f"image {image} must be pinned by digest (@sha256:...)")
         return
     if linked:
         return
-    if not any(image.lower().startswith(p) for p in image_allowlist()):
+    if not _allowlisted(canon):
         raise DeployError("permission_denied",
                           f"hosted apps run only images ShipCube built for this workspace "
                           f"({image_prefix(s, workspace_id).rstrip('/')}) or allow-listed images; deploy from source, "
                           f"or use a linked project for other images")
-    if not DIGEST.search(image):
+    if not DIGEST.search(canon):
         raise DeployError("invalid_argument", f"allow-listed image {image} must be pinned by digest (@sha256:...)")
 
 

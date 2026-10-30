@@ -324,3 +324,51 @@ def test_soft_delete_blocks_ingress_and_access(deployer):
     assert iam[2]["policy"]["bindings"] == []
     patch = next(c for c in sess.calls if c[0] == "PATCH")
     assert patch[2] == {"ingress": "INGRESS_TRAFFIC_INTERNAL_ONLY"} and patch[3] == {"updateMask": "ingress"}
+
+
+def test_image_hosts_are_normalised_before_matching(deployer, monkeypatch):
+    """Red team on #59: `HOST.`, `HOST:443` and upper case are the same registry, so they can't
+    dodge the ShipCube-registry rule (even for linked apps) or miss the allow-list."""
+    from shipcube_api.deploy import isolation
+
+    other = isolation.image_prefix(deployer.s, OTHER_WS) + "victim-123456" + PIN
+    host, _, rest = other.partition("/")
+    for spelling in (f"{host}./{rest}", f"{host}:443/{rest}", f"{host.upper()}/{rest}", f"{host}.:443/{rest}",
+                     f"{host.upper()}.:443/{rest.upper()}"):
+        for linked in (False, True):
+            with pytest.raises(DeployError) as e:
+                isolation.check_image(deployer.s, WS, spelling, linked=linked)
+            assert e.value.code == "permission_denied", (spelling, linked)
+    own = isolation.image_prefix(deployer.s, WS) + "app-123456" + PIN
+    h, _, r = own.partition("/")
+    for spelling in (f"{h}./{r}", f"{h}:443/{r}", f"{h.upper()}/{r}"):
+        isolation.check_image(deployer.s, WS, spelling)
+    for spelling in ("US-DOCKER.PKG.DEV/cloudrun/container/hello", "us-docker.pkg.dev.:443/cloudrun/container/hello",
+                     "us-docker.pkg.dev:443/CloudRun/Container/hello"):
+        isolation.check_image(deployer.s, WS, spelling + PIN)
+    with pytest.raises(DeployError):                     # another port is another registry
+        isolation.check_image(deployer.s, WS, "us-docker.pkg.dev:8443/cloudrun/container/hello" + PIN)
+
+
+def test_docker_hub_aliases_match_one_allowlist_entry(deployer, monkeypatch):
+    from shipcube_api.deploy import isolation
+
+    monkeypatch.setenv("SHIPCUBE_IMAGE_ALLOWLIST", "nginx")
+    for spelling in ("nginx", "docker.io/nginx", "docker.io/library/nginx", "index.docker.io/library/nginx",
+                     "registry-1.docker.io/library/nginx", "Docker.IO./library/nginx", "registry.hub.docker.com/nginx"):
+        isolation.check_image(deployer.s, WS, spelling + PIN)
+    for spelling in ("nginxx", "evil/nginx", "ghcr.io/library/nginx", "docker.io.evil.com/library/nginx"):
+        with pytest.raises(DeployError):
+            isolation.check_image(deployer.s, WS, spelling + PIN)
+    assert isolation.canonical_image("nginx:1.27") == "docker.io/library/nginx:1.27"
+
+
+@pytest.mark.parametrize("image", ["us-docker.pkg.dev\\cloudrun/container/hello", "us-docker.pkg.dev/cloudrun/%2e%2e/x",
+                                   "us-docker.pkg.dev/cloudrun/container/hello?x=1", "user@us-docker.pkg.dev/x/y",
+                                   "us-docker.pkg.dev:abc/x/y", "./x", "", "   "])
+def test_malformed_image_references_are_refused(deployer, image):
+    from shipcube_api.deploy import isolation
+
+    with pytest.raises(DeployError) as e:
+        isolation.check_image(deployer.s, WS, image + (PIN if image.strip() else ""))
+    assert e.value.code == "invalid_argument", image
