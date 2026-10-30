@@ -192,8 +192,8 @@ class ApprovalDecision(_Model):
 class AiConfigRequest(_Model):
     provider: Literal["meta", "openai_compatible", "openai", "anthropic"] = "meta"
     model: str = "muse-spark"
-    key_secret: str | None = Field(None, description="Secret name holding the BYOK API key")
-    base_url: str | None = Field(None, description="For openai_compatible providers")
+    key_secret: str | None = Field(None, description="Optional: the provider's key saved in the console (ai-provider-<provider>); no other secret is accepted")
+    base_url: str | None = Field(None, description="Console only: must equal the endpoint saved with the openai_compatible key")
 
 
 # --- responses ---------------------------------------------------------------------
