@@ -9,15 +9,18 @@ Source shapes follow the control-plane contract (services/api models):
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import tarfile
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 INLINE_MAX_FILES = 50
 INLINE_MAX_BYTES = 256 * 1024
@@ -133,6 +136,39 @@ def _reject_symlinks(root: Path) -> None:
                 raise SourceError(f"the checkout contains a symlink ({name}); symlinks aren't allowed")
 
 
+def _resolve_public(url: str) -> list[str]:
+    """`-c` options pinning an https URL's host to a public address (red-team P-3, #23).
+
+    The host is resolved once here and every address must be public (not private,
+    loopback, link-local such as the metadata server, CGNAT, multicast or reserved).
+    git then connects to the checked address (http.curloptResolve), so DNS can't
+    rebind it between the check and the connect, and redirects are off, so it can't be
+    bounced to an internal host either."""
+    parts = urlsplit(url)
+    host = parts.hostname
+    if parts.scheme != "https" or not host:
+        raise SourceError("git sources must be https:// URLs with a host")
+    try:
+        port = parts.port or 443
+    except ValueError as e:
+        raise SourceError(f"bad port in git URL: {e}") from e
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError) as e:
+        raise SourceError(f"git host {host!r} doesn't resolve") from e
+    addrs = sorted({info[4][0].split("%", 1)[0] for info in infos}, key=lambda a: (":" in a, a))
+    for a in addrs:
+        ip = ipaddress.ip_address(a)
+        if getattr(ip, "ipv4_mapped", None):
+            ip = ip.ipv4_mapped
+        if not ip.is_global or ip.is_multicast:
+            raise SourceError(f"git host {host!r} resolves to a non-public address ({a}); only public hosts are allowed")
+    if not addrs:
+        raise SourceError(f"git host {host!r} doesn't resolve")
+    pinned = f"[{addrs[0]}]" if ":" in addrs[0] else addrs[0]
+    return ["-c", f"http.curloptResolve={host}:{port}:{pinned}", "-c", "http.followRedirects=false"]
+
+
 def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) -> Path:
     """A shallow, size- and time-capped clone of one branch, in three steps:
 
@@ -156,7 +192,8 @@ def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) ->
     deadline = time.monotonic() + GIT_CLONE_TIMEOUT_S
     env = _git_env(target.parent, allow_file)
     cfg = _git_config(allow_file)
-    clone = [*cfg, "clone", "--quiet", "--no-checkout", "--depth", "1", "--single-branch", "--no-tags",
+    pin = [] if allow_file and url.startswith("file://") else _resolve_public(url)
+    clone = [*cfg, *pin, "clone", "--quiet", "--no-checkout", "--depth", "1", "--single-branch", "--no-tags",
              "--no-recurse-submodules", f"--filter=blob:limit={GIT_MAX_BLOB_BYTES}"]
     if ref:
         clone += ["--branch", ref]

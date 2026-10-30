@@ -2,6 +2,7 @@
 no local paths from tenants (docs/research/profiler-sandbox.md §5)."""
 
 import os
+import socket
 import subprocess
 from pathlib import Path
 
@@ -45,8 +46,9 @@ def test_tenants_cannot_clone_local_paths(tmp_path):
             materialize({"kind": "git", "url": url}, tmp_path / "out")
 
 
-def test_transport_allowlist_holds_even_past_the_url_check(tmp_path):
+def test_transport_allowlist_holds_even_past_the_url_check(tmp_path, monkeypatch):
     """GIT_ALLOW_PROTOCOL=https blocks local transports at git's level too."""
+    monkeypatch.setattr(sources, "_resolve_public", lambda url: [])   # past the URL and host checks
     repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n"})
     with pytest.raises(SourceError, match="clone failed"):
         sources._clone(f"file://{repo}", None, tmp_path / "out" / "repo", allow_file=False)
@@ -278,3 +280,56 @@ def test_older_git_fallback_alone_also_ignores_attributes(tmp_path, monkeypatch)
     git(repo, "commit", "-qm", "attributes")
     root = clone(repo, tmp_path / "out")
     assert (root / "big.txt").read_bytes() == _blob(repo, "big.txt")
+
+
+# --- public hosts only (red-team P-3, #23) ---------------------------------------------
+
+def _resolver(table):
+    def fake(host, port, *a, **kw):
+        if host not in table:
+            raise socket.gaierror(f"no such host {host}")
+        return [(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))
+                for ip in table[host]]
+    return fake
+
+
+@pytest.mark.parametrize("url,table", [
+    ("https://127.0.0.1/r.git", {"127.0.0.1": ["127.0.0.1"]}),
+    ("https://localhost/r.git", {"localhost": ["127.0.0.1", "::1"]}),
+    ("https://169.254.169.254/computeMetadata/v1/", {"169.254.169.254": ["169.254.169.254"]}),
+    ("https://metadata.google.internal/x", {"metadata.google.internal": ["169.254.169.254"]}),
+    ("https://10.0.0.5/r.git", {"10.0.0.5": ["10.0.0.5"]}),
+    ("https://git.corp.example/r.git", {"git.corp.example": ["192.168.1.10"]}),
+    ("https://cgnat.example/r.git", {"cgnat.example": ["100.64.0.1"]}),
+    ("https://[::1]/r.git", {"::1": ["::1"]}),
+    ("https://v6.example/r.git", {"v6.example": ["fd00::1"]}),
+    ("https://mapped.example/r.git", {"mapped.example": ["::ffff:10.0.0.1"]}),
+    ("https://mixed.example/r.git", {"mixed.example": ["93.184.216.34", "10.0.0.1"]}),   # any private address refuses
+    ("https://nowhere.example/r.git", {}),
+])
+def test_git_hosts_must_be_public(tmp_path, monkeypatch, url, table):
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _resolver(table))
+    ran = []
+    monkeypatch.setattr(sources, "_run_git", lambda *a, **kw: ran.append(a) or (0, "", ""))
+    with pytest.raises(SourceError):
+        materialize({"kind": "git", "url": url}, tmp_path / "out")
+    assert ran == []                                  # refused before git runs
+
+
+def test_public_host_is_pinned_and_redirects_are_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _resolver({"github.com": ["2606:50c0::1", "20.207.73.82"]}))
+    assert sources._resolve_public("https://github.com/o/r.git") == [
+        "-c", "http.curloptResolve=github.com:443:20.207.73.82", "-c", "http.followRedirects=false"]
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _resolver({"git.example": ["2606:50c0::1"]}))
+    assert sources._resolve_public("https://git.example:8443/r")[1] == "http.curloptResolve=git.example:8443:[2606:50c0::1]"
+    seen = {}
+
+    def run_git(step, args, *a, **kw):
+        seen.setdefault(step, args)
+        return 1, "", "stop here"
+    monkeypatch.setattr(sources.socket, "getaddrinfo", _resolver({"github.com": ["20.207.73.82"]}))
+    monkeypatch.setattr(sources, "_run_git", run_git)
+    with pytest.raises(SourceError):
+        materialize({"kind": "git", "url": "https://github.com/o/r.git"}, tmp_path / "out")
+    assert "http.curloptResolve=github.com:443:20.207.73.82" in seen["clone"]
+    assert "http.followRedirects=false" in seen["clone"]
