@@ -179,6 +179,7 @@ export async function decideWaitlistAction(id: string, decision: "approve" | "re
       if (!(await d.accountStatus()).platformAdmin) throw new ApiError("permission_denied", "Only platform admins can decide access requests.", 403, "");
       return d.decideWaitlist(id, decision);
     },
-    "/admin/waitlist",
+    // No revalidation: the row shows its new status in place. A refetch of the "pending" list would
+    // drop it before the admin sees the outcome.
   );
 }

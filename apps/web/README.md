@@ -64,13 +64,13 @@ Mock data is held in memory. The dev server can reload modules between requests,
 
 ## Early access
 
-ShipCube is in early access, with a waitlist that a platform admin approves by hand.
+ShipCube is in early access, with a waitlist that a platform admin approves by hand (API: PR #81).
 
 | Route | Who | What |
 |---|---|---|
-| `/` | Anyone | The landing page. Its "Request access" form posts from the browser straight to `POST /v1/waitlist` on the API (`SHIPCUBE_PUBLIC_API_URL`), so the API's per-IP rate limit sees the visitor's IP. The API allows that one route cross-origin from the console's origins. A hidden honeypot field is sent as-is, and the API quietly drops requests that fill it. The link preview is `/opengraph-image`, built with the request's host, so it works on run.app and on a Firebase Hosting address alike. |
-| `/waitlist` | Signed in, no workspace | `/v1/me` answers 403 `waitlisted` ("You're on the list") or `no_access` ("Request access", for the account's email). The console layout and onboarding send non-members here. Any other API failure never does. |
-| `/admin/waitlist` | Platform admins | Requests, oldest first, with Approve and Reject (`/v1/admin/waitlist`, `:approve`, `:reject`), and workspaces used against the cap. Hidden (404) unless `/v1/me` reports `platform_admin`. The API enforces it either way. |
+| `/` | Anyone | The landing page. Its "Request access" form posts from the browser straight to `POST /v1/waitlist` (`SHIPCUBE_PUBLIC_API_URL`), so the API's per-IP limit sees the visitor's own IP. The API allows that one cross-origin call from `SHIPCUBE_CONSOLE_URL` only; on any other host (a Firebase Hosting address), the form becomes a link to the console's own `/#request-access`. A hidden honeypot is sent for the API to drop. The link preview is `/opengraph-image`, with absolute URLs from the request's host. |
+| `/waitlist` | Signed in, no workspace | `/v1/me` answers 401; `/v1/waitlist/me` gives the state: "You're on the list", approved, not approved, or a one-click "Request access" (server-side with the session, so the API uses the verified email). The console layout and onboarding send non-members here; an API failure never does. |
+| `/admin/waitlist` | Platform admins | Its own layout (`src/app/(admin)`), so an admin needs no workspace. Requests newest first, Approve and Reject, and workspaces used against the cap. 404 for everyone else; the API enforces it too. |
 
 Approving creates the workspace with the person's email as a pending owner. Their next sign-in with that email's Google account claims it. `src/middleware.ts` keeps every other route behind sign-in, and `src/middleware.test.ts` checks the list.
 
@@ -82,6 +82,7 @@ Everything is read from the environment at request time.
 |---|---|---|
 | `SHIPCUBE_API_URL` | Yes, unless `DEV_MODE=1` | Control-plane API base URL: the `shipcube-mcp` Cloud Run service URL |
 | `SHIPCUBE_MCP_URL` | Yes, unless `DEV_MODE=1` | The MCP endpoint shown on the setup guide: `<your ShipCube MCP URL>`, the `shipcube-mcp` service URL plus `/mcp`. Must be `https` in production; the server exits at boot without it. `DEV_MODE` defaults to `http://localhost:8080/mcp` |
+| `SHIPCUBE_CONSOLE_URL` | For the landing page | The console's canonical URL (the API's CORS origin for the waitlist form). On any other host the form links here |
 | `SHIPCUBE_PUBLIC_API_URL` | No (`SHIPCUBE_API_URL`) | The API as browsers reach it, for the landing page's waitlist form, and allowed in the CSP's `connect-src`. Set it when the console reaches the API at an internal address (Docker Compose) |
 | `SHIPCUBE_API_TIMEOUT_MS` | No (10000) | Per-request timeout for API calls |
 | `AUTH_PROVIDER` | No | `identity-platform` (default). `DEV_MODE` only: `firebase-emulator` (the real sign-in flow against the Firebase Auth emulator) or `mock` |

@@ -11,7 +11,7 @@ Playwright drives one person's path through the console against a running local 
 7. Delete it the way an agent does (`DELETE /v1/apps/<app>` with the PAT), then approve the deletion on the console's approval page.
 8. Restore it from the console. This also leaves the stack ready for another run.
 
-`waitlist.spec.ts` checks that the landing page is public and the console isn't, the honeypot, and the early-access flow: request → admin approve → first sign-in claims the workspace. The flow needs `E2E_ADMIN_EMAIL` (a platform admin) and an API that serves the waitlist; it skips otherwise.
+`waitlist.spec.ts` checks that the landing page is public and the console isn't, the honeypot, and the early-access flow: a visitor requests access, sees "You're on the list" when signed in, a signed-in person requests with one click, an admin approves, and the next sign-in opens the workspace. The flow needs `E2E_ADMIN_EMAIL` (in the API's `SHIPCUBE_PLATFORM_ADMINS`), an API that serves the waitlist and accepts Auth-emulator sessions, and the console's `SHIPCUBE_PUBLIC_API_URL` and `SHIPCUBE_CONSOLE_URL`; it skips otherwise. Repeated runs from one IP need a higher `SHIPCUBE_WAITLIST_PER_IP_PER_HOUR`.
 
 `sign-in-redirect.spec.ts` covers sign-in where a popup can't work: the always-visible "Sign in in this tab" link, a popup blocker, the Claude desktop app's browser pane, and a sign-in window that takes over the tab. Each must finish through the redirect flow. These tests skip unless the console runs `AUTH_PROVIDER=firebase-emulator`.
 

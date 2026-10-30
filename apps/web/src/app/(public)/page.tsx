@@ -21,12 +21,16 @@ const OG_IMAGE = { url: "/opengraph-image", width: 1200, height: 630, alt: TITLE
 
 // The page is served on more than one host (run.app, a Firebase Hosting address), so absolute
 // URLs, like the Open Graph image's, come from the request rather than from config.
-export async function generateMetadata(): Promise<Metadata> {
+async function requestOrigin() {
   const h = await headers();
   const host = h.get("x-forwarded-host") ?? h.get("host") ?? "localhost:3000";
   const proto = h.get("x-forwarded-proto") ?? (host.startsWith("localhost") || host.startsWith("127.") ? "http" : "https");
+  return `${proto}://${host}`;
+}
+
+export async function generateMetadata(): Promise<Metadata> {
   return {
-    metadataBase: new URL(`${proto}://${host}`),
+    metadataBase: new URL(await requestOrigin()),
     title: { absolute: TITLE },
     description: DESCRIPTION,
     openGraph: { title: TITLE, description: DESCRIPTION, type: "website", url: "/", siteName: "ShipCube", images: [OG_IMAGE] },
@@ -76,6 +80,10 @@ const H2 = "font-display text-[32px] leading-[1.1] font-extrabold tracking-[-0.0
 export default async function Landing() {
   const session = await auth.getSession().catch(() => null);
   const c = config();
+  // The API accepts the form's cross-origin POST from the console's canonical origin only. On any
+  // other host (a Firebase Hosting address), anonymous visitors are sent there to request access.
+  const origin = await requestOrigin();
+  const formElsewhere = !session && c.consoleOrigin && c.consoleOrigin !== origin ? `${c.consoleOrigin}/#request-access` : null;
 
   return (
     <div className={`landing ${display.variable} min-h-dvh`}>
@@ -207,7 +215,16 @@ export default async function Landing() {
               </p>
             </div>
             <div className="rounded-xl border border-border bg-surface p-5 sm:p-6">
-              <RequestAccessForm apiBase={c.publicApiUrl} accountEmail={session?.user.email} />
+              {formElsewhere ? (
+                <div className="flex flex-col items-start gap-3">
+                  <p className="text-fg-muted">The request form opens on ShipCube&apos;s console.</p>
+                  <ButtonLink href={formElsewhere} variant="primary" className="h-11 px-5 text-[15px]">
+                    Request access
+                  </ButtonLink>
+                </div>
+              ) : (
+                <RequestAccessForm apiBase={c.publicApiUrl} accountEmail={session?.user.email} />
+              )}
             </div>
           </div>
         </section>

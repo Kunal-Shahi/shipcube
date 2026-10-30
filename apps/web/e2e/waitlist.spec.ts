@@ -63,6 +63,20 @@ test.describe("request, approve, sign in", () => {
     await page.context().close();
   });
 
+  test("someone signed in without a request asks with one click", async ({ browser }) => {
+    const page = await fresh(browser);
+    await signIn(page, `walk-in-${Date.now()}@example.com`);
+    await page.goto("/apps");
+    await expect(page).toHaveURL(/\/waitlist$/);
+    await page.getByLabel("Name").fill("Walk In");
+    await page.getByLabel("What will you build?").fill("A report our team checks every morning.");
+    await page.getByRole("button", { name: "Request access" }).click();
+    await expect(page.getByText("Thanks, you're on the list.")).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "You're on the list" })).toBeVisible();
+    await page.context().close();
+  });
+
   test("a platform admin approves the request", async ({ browser }) => {
     const page = await fresh(browser);
     await signIn(page, ADMIN);

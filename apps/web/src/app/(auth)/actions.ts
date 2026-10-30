@@ -2,8 +2,31 @@
 
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
+import { ApiError } from "@/lib/errors";
+import { data } from "@/lib/server/data";
+import { log } from "@/lib/server/log";
+import { validateAccessRequest, type SubmitResult } from "@/lib/waitlist";
 
 export async function signOut() {
   await auth.signOut();
   redirect("/sign-in");
+}
+
+/**
+ * The one-click request on /waitlist, for someone signed in without a workspace. Server-side with
+ * their session, so the API uses the verified email (and no cross-origin call is needed).
+ */
+export async function requestAccessSignedInAction(input: { name: string; useCase: string }): Promise<SubmitResult> {
+  const session = await auth.getSession();
+  if (!session) return { ok: false, message: "Your session ended. Sign in again." };
+  const errors = validateAccessRequest({ email: session.user.email, name: input.name ?? "", useCase: input.useCase ?? "" });
+  const first = errors.name ?? errors.useCase;
+  if (first) return { ok: false, message: first };
+  try {
+    await (await data()).requestAccessSignedIn({ name: input.name.trim(), useCase: input.useCase.trim() });
+    return { ok: true };
+  } catch (e) {
+    log("WARNING", "signed-in waitlist request failed", { code: e instanceof ApiError ? e.code : undefined, error: String(e) });
+    return { ok: false, message: e instanceof ApiError && e.code === "invalid_argument" ? e.message : "We couldn't save your request just now. Try again in a minute." };
+  }
 }

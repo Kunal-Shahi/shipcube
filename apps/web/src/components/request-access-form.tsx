@@ -2,14 +2,16 @@
 
 import { CheckCircle2 } from "lucide-react";
 import { useState } from "react";
+import { requestAccessSignedInAction } from "@/app/(auth)/actions";
 import { cn } from "@/lib/cn";
 import { HONEYPOT, LIMITS, submitAccessRequest, validateAccessRequest, type FieldErrors } from "@/lib/waitlist";
 import { Button, Field, Input, inputClass } from "./ui";
 
 /**
- * Early-access request, posted from the browser straight to the API (its rate limit is per
- * visitor IP). Signed in, the email is the account's and isn't editable. With no API configured
- * (DEV_MODE mock data), the request is only pretended.
+ * Early-access request. Anonymous, it posts from the browser straight to the API (its rate limit
+ * is per visitor IP). Signed in, it goes through the console server with the session, and the API
+ * uses the account's verified email. With no API configured (DEV_MODE mock data), an anonymous
+ * request is only pretended.
  */
 export function RequestAccessForm({ apiBase, accountEmail }: { apiBase: string | null; accountEmail?: string }) {
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -62,7 +64,11 @@ export function RequestAccessForm({ apiBase, accountEmail }: { apiBase: string |
       return;
     }
     setPending(true);
-    const r = apiBase ? await submitAccessRequest(apiBase, fields) : await new Promise<{ ok: true }>((ok) => setTimeout(() => ok({ ok: true }), 400));
+    const r = accountEmail
+      ? await requestAccessSignedInAction({ name: fields.name, useCase: fields.useCase }).catch(() => ({ ok: false as const, message: "Couldn't reach the console server. Try again." }))
+      : apiBase
+        ? await submitAccessRequest(apiBase, fields)
+        : await new Promise<{ ok: true }>((ok) => setTimeout(() => ok({ ok: true }), 400));
     setPending(false);
     if (r.ok) setSent(true);
     else setMessage(r.message);

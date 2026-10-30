@@ -1,9 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { EmptyState, PageHeader, Panel, TableSkeleton } from "@/components/ui";
-import { accountStatus, listWaitlist } from "@/lib/api";
+import { listWaitlist } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import type { WaitlistState } from "@/lib/types";
 import { WaitlistTable } from "./waitlist-table";
@@ -19,10 +18,9 @@ const FILTERS: { id: WaitlistState | "all"; label: string }[] = [
 
 type Props = { searchParams: Promise<{ status?: string }> };
 
-// Platform admins only, as the API reports them. Everyone else gets a 404, and the API refuses
-// the list and the decisions for them anyway.
+// Platform admins only: (admin)/layout.tsx answers 404 for everyone else, and the API refuses the
+// list and the decisions for them anyway.
 export default async function WaitlistAdminPage({ searchParams }: Props) {
-  if (!(await accountStatus()).platformAdmin) notFound();
   const { status } = await searchParams;
   const filter = FILTERS.find((f) => f.id === status)?.id ?? "pending";
 
@@ -69,7 +67,7 @@ async function Requests({ filter }: { filter: WaitlistState | "all" }) {
         <Panel>
           <EmptyState
             title={filter === "pending" ? "No requests waiting" : "No requests here"}
-            body="Requests from the landing page's form appear here, oldest first."
+            body="Requests from the landing page's form appear here, newest first."
           />
         </Panel>
       </>

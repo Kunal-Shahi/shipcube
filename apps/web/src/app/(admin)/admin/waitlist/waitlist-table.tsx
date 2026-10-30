@@ -7,7 +7,7 @@ import { Button, Pill } from "@/components/ui";
 import { useAction } from "@/components/use-action";
 import { ago } from "@/lib/format";
 import type { WaitlistRequest } from "@/lib/types";
-import { decideWaitlistAction } from "../../actions";
+import { decideWaitlistAction } from "@/app/(console)/actions";
 
 const TONE = { pending: "neutral", approved: "good", rejected: "critical" } as const;
 const LABEL = { pending: "Pending", approved: "Approved", rejected: "Rejected" } as const;

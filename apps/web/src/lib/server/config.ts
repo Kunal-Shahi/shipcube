@@ -14,6 +14,8 @@ export interface Config {
   apiUrl: string | null;
   /** The API as browsers reach it, for the landing page's waitlist form (defaults to apiUrl). */
   publicApiUrl: string | null;
+  /** The console's canonical origin. The API accepts the waitlist form's cross-origin POST from it only. */
+  consoleOrigin: string | null;
   /** The MCP endpoint users paste into their agent, e.g. https://shipcube-mcp-<n>.<region>.run.app/mcp. */
   mcpUrl: string;
   /** Per-request timeout for API calls. */
@@ -39,6 +41,14 @@ export const DEV_MCP_URL = "http://localhost:8080/mcp";
 /** The emulator's default address, and a demo- project, which the emulator never connects to Google for. */
 export const DEV_AUTH_EMULATOR_HOST = "127.0.0.1:9099";
 export const EMULATOR_PROJECT = "demo-shipcube";
+function originOf(url: string | undefined) {
+  try {
+    return url ? new URL(url).origin : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The API's browser-facing base URL; shared with the middleware's CSP (connect-src). */
 export function publicApiUrl(env: Record<string, string | undefined>) {
   return (env.SHIPCUBE_PUBLIC_API_URL || env.SHIPCUBE_API_URL || "").replace(/\/+$/, "") || null;
@@ -63,6 +73,7 @@ export function config(): Config {
     devMode,
     apiUrl: env.SHIPCUBE_API_URL?.replace(/\/+$/, "") || null,
     publicApiUrl: publicApiUrl(env),
+    consoleOrigin: originOf(env.SHIPCUBE_CONSOLE_URL),
     mcpUrl: env.SHIPCUBE_MCP_URL?.trim() || (devMode ? DEV_MCP_URL : ""),
     apiTimeoutMs: Number(env.SHIPCUBE_API_TIMEOUT_MS ?? 10_000),
     auth,

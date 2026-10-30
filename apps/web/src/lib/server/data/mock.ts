@@ -318,6 +318,10 @@ export const mockData: ConsoleData = {
     return m;
   },
 
+  async requestAccessSignedIn({ name, useCase }) {
+    await wait(400);
+    waitlist.unshift({ id: `wl_${waitlist.length + 1}`, email: "you@example.com", name, useCase, status: "pending", createdAt: new Date().toISOString() });
+  },
   async accountStatus() {
     // DEV_MODE's demo user is a member and a platform admin, so every page is reachable.
     return { member: true, platformAdmin: true };
@@ -325,7 +329,7 @@ export const mockData: ConsoleData = {
   async listWaitlist(status) {
     await wait();
     const rows = status === "all" ? waitlist : waitlist.filter((r) => r.status === status);
-    return { requests: [...rows].reverse(), workspaces: { count: 12, cap: 50 } };
+    return { requests: rows, workspaces: { count: 12, cap: 50 } };
   },
   async decideWaitlist(id, decision) {
     await wait(500);
