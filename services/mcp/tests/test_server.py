@@ -94,3 +94,17 @@ async def test_redeploy_and_rollback_through_deploy_app(as_agent):
         assert done["kind"] == "rollback" and done["result"]["revision"] == revs[0]
         missing = await client.call_tool("deploy_app", {"app": "rb-app"})
         assert missing.is_error and "rollback_to" in missing.content[0].text
+
+
+def test_a_finished_operation_passes_the_access_note_on():
+    from shipcube_api.models import Operation
+
+    from shipcube_mcp.tools import _next
+
+    note = "Access can take a few minutes to apply."
+    done = Operation.model_construct(id="op_1", status="succeeded", done=True, result={"url": "https://x", "access_note": note})
+    assert _next(done) == f"Tell the user, with the URL: {note}"
+    plain = Operation.model_construct(id="op_2", status="succeeded", done=True, result={"url": "https://x"})
+    assert _next(plain) is None
+    failed = Operation.model_construct(id="op_3", status="failed", done=True, result=None)
+    assert _next(failed) is None

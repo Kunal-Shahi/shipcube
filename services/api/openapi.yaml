@@ -593,6 +593,7 @@ components:
             revisions: { type: array, items: { type: object, properties: { revision: { type: string }, status: { type: string }, created_at: { type: string } } } }
             runtime: { type: [object, 'null'], description: Live Cloud Run state }
             restorable_until: { type: [string, 'null'] }
+            access_note: { type: [string, 'null'], description: "Set for a few minutes after access changes, while IAP may still deny the new grant" }
             estimate:
               type: [object, 'null']
               description: The load estimate the latest deploy used (its estimate_id, or the latest finished estimate for this app name)

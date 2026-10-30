@@ -15,6 +15,7 @@ from .base import AppRef, Deployed, DeployError, ShouldStop
 
 class MockDeployer:
     name = "mock"
+    access_propagates = False  # access applies at once
 
     def __init__(self, speed: float = 1.0) -> None:
         self.speed = speed

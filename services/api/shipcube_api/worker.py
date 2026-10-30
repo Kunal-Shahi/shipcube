@@ -38,7 +38,7 @@ from psycopg.types.json import Jsonb
 
 from . import db, obs, profiler_guard, profiler_janitor
 from .deploy import isolation
-from .deploy.base import AppRef, Deployer, DeployError
+from .deploy.base import ACCESS_NOTE, AppRef, Deployer, DeployError
 from .estimator import Estimator, make_estimator, measurements
 from .settings import settings
 from .store import STEPS, app_ref, current_deployment, enqueue, grants, write_app_caps, write_grants
@@ -249,6 +249,9 @@ class Worker:
                          " revoked_at is not null and sync_state = 'removing'", (app_id,))
         return principals
 
+    def _access_note(self) -> dict[str, str]:
+        return {"access_note": ACCESS_NOTE} if getattr(self.d, "access_propagates", False) else {}
+
     def _plan(self, op: dict[str, Any], state: dict[str, Any]) -> dict[str, Callable[[], Any]]:
         kind, inp = op["kind"], op["input"] or {}
         if kind == "estimate":
@@ -319,7 +322,7 @@ class Worker:
                                  " finished_at = now() where id = %s", (state["revision"], state["image"], dep_id))
                 return {"app": ref.name, "url": state["url"], "revision": state["revision"], "image": state["image"],
                         "target": ref.target.id, "build_id": state.get("build_id"),
-                        "access": "private (IAP): " + ", ".join(state.get("access", []))}
+                        "access": "private (IAP): " + ", ".join(state.get("access", [])), **self._access_note()}
 
             return {"validate": validate, "build": build, "push": push, "deploy": deploy,
                     "configure_access": configure_access, "health_check": health_check}
@@ -358,7 +361,7 @@ class Worker:
                 with db.worker_tx() as conn:
                     conn.execute("update apps set status = coalesce(status_before_delete, 'running'), status_before_delete = null,"
                                  " deleted_at = null, deleted_by = null, purge_after = null where id = %s", (app_id,))
-                return {"app": ref.name, "restored": True, "url": app["url"]}
+                return {"app": ref.name, "restored": True, "url": app["url"], **self._access_note()}
 
             return {"restore": restore}
 
@@ -389,8 +392,9 @@ class Worker:
                     with db.worker_tx() as conn:
                         write_grants(conn, str(app["workspace_id"]), app_id, inp.get("add", []), inp.get("remove", []),
                                      op["requested_by"])
-                principals = self._push_access(app_id, ref) if app["status"] == "running" else self._principals(app_id)
-                return {"access": principals}
+                if app["status"] != "running":
+                    return {"access": self._principals(app_id)}
+                return {"access": self._push_access(app_id, ref), **(self._access_note() if inp.get("add") else {})}
 
             return {"apply": apply_access}
 

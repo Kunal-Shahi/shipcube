@@ -79,6 +79,7 @@ def _now() -> str:
 
 class GcpDeployer:
     name = "gcp"
+    access_propagates = True  # IAP grants take minutes to apply (base.ACCESS_NOTE)
 
     def __init__(self, s: Settings) -> None:
         self.s = s

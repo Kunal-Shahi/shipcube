@@ -66,6 +66,7 @@ class Docker:
 
 class LocalDeployer:
     name = "local"
+    access_propagates = False  # access applies at once
 
     def __init__(self, s: Settings, docker: Docker | None = None) -> None:
         self.s = s
