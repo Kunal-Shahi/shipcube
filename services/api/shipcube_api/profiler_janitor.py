@@ -6,7 +6,9 @@ worker's housekeeping (every minute) runs this:
 
 - delete Cloud Run jobs labelled `shipcube-role=profiler` older than 30 minutes;
 - cancel Cloud Build builds tagged `shipcube-profiler` that are still running after 10 minutes;
-- delete `profiler-src/` objects older than 1 hour (the bucket's 1-day lifecycle rule is the backstop);
+- delete profiler source tarballs older than 1 hour: `profiler-src/` in the profiler bucket, and
+  `ws/<uuid>/profiler/` in the uploads bucket where builds run as the workspace's builder (#69). The
+  profiler bucket's 1-day lifecycle rule is the backstop;
 - the global brake: if more profiler job executions are running than the ceiling allows (5, against
   a ceiling of 3), something bypassed admission. Set the brake, so new estimates run static for
   15 minutes, and log an error.
@@ -33,6 +35,7 @@ log = logging.getLogger("shipcube.profiler_janitor")
 JOB_LABEL = ("shipcube-role", "profiler")
 BUILD_TAG = "shipcube-profiler"
 SRC_PREFIX = "profiler-src/"
+WS_SRC_GLOB = "ws/*/profiler/**"
 JOB_MAX_AGE = timedelta(minutes=30)
 BUILD_MAX_AGE = timedelta(minutes=10)
 SRC_MAX_AGE = timedelta(hours=1)
@@ -53,8 +56,8 @@ class ProfilerCloud(Protocol):
     def delete_job(self, name: str) -> None: ...
     def builds(self) -> list[dict[str, Any]]: ...          # {id, created: datetime, status}
     def cancel_build(self, build_id: str) -> None: ...
-    def objects(self) -> list[dict[str, Any]]: ...         # {name, created: datetime}
-    def delete_object(self, name: str) -> None: ...
+    def objects(self) -> list[dict[str, Any]]: ...         # {name, created: datetime, bucket}
+    def delete_object(self, name: str, bucket: str | None = None) -> None: ...
 
 
 def _ts(s: str) -> datetime:
@@ -68,13 +71,13 @@ class GcpProfilerCloud:
     BUILD = "https://cloudbuild.googleapis.com/v1"
     STORAGE = "https://storage.googleapis.com/storage/v1"
 
-    def __init__(self, project: str, region: str, bucket: str) -> None:
+    def __init__(self, project: str, region: str, bucket: str, uploads_bucket: str | None = None) -> None:
         import google.auth
         from google.auth.transport.requests import AuthorizedSession
 
         creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
         self.sess = AuthorizedSession(creds)
-        self.project, self.region, self.bucket = project, region, bucket
+        self.project, self.region, self.bucket, self.uploads_bucket = project, region, bucket, uploads_bucket
 
     def _get(self, url: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         r = self.sess.get(url, params=params, timeout=30)
@@ -118,11 +121,14 @@ class GcpProfilerCloud:
             r.raise_for_status()
 
     def objects(self) -> list[dict[str, Any]]:
-        return [{"name": o["name"], "created": _ts(o["timeCreated"])}
-                for o in self._pages(f"{self.STORAGE}/b/{self.bucket}/o", "items", {"prefix": SRC_PREFIX})]
+        found = [(self.bucket, {"prefix": SRC_PREFIX})]
+        if self.uploads_bucket:  # per-workspace profiler sources (#69)
+            found.append((self.uploads_bucket, {"prefix": "ws/", "matchGlob": WS_SRC_GLOB}))
+        return [{"name": o["name"], "created": _ts(o["timeCreated"]), "bucket": b}
+                for b, params in found for o in self._pages(f"{self.STORAGE}/b/{b}/o", "items", params)]
 
-    def delete_object(self, name: str) -> None:
-        r = self.sess.delete(f"{self.STORAGE}/b/{self.bucket}/o/{quote(name, safe='')}", timeout=30)
+    def delete_object(self, name: str, bucket: str | None = None) -> None:
+        r = self.sess.delete(f"{self.STORAGE}/b/{bucket or self.bucket}/o/{quote(name, safe='')}", timeout=30)
         if r.status_code not in (200, 204, 404):
             r.raise_for_status()
 
@@ -145,7 +151,7 @@ class Janitor:
                 done.builds.append(b["id"])
         for o in self.cloud.objects():
             if now - o["created"] > SRC_MAX_AGE:
-                self.cloud.delete_object(o["name"])
+                self.cloud.delete_object(o["name"], o.get("bucket"))
                 done.objects.append(o["name"])
         if done.running_executions > BRAKE_EXECUTIONS:
             log.error("profiler brake: more sandbox executions than the ceiling allows; estimates run static for 15 min",
@@ -168,4 +174,4 @@ def from_env() -> Janitor | None:
         return None
     project = os.environ.get("SHIPCUBE_PROFILER_PROJECT") or settings.apps_project
     region = os.environ.get("SHIPCUBE_PROFILER_REGION") or settings.region
-    return Janitor(GcpProfilerCloud(project, region, bucket))
+    return Janitor(GcpProfilerCloud(project, region, bucket, settings.upload_bucket))

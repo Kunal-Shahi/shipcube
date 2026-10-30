@@ -56,10 +56,14 @@ CAP_KIND = {"max_instances": "max_instances", "concurrency": "concurrency", "cpu
             "timeout_s": "request_timeout_s", "requests_per_minute": "requests_per_minute",
             "monthly_spend_usd": "spend_usd_per_month"}
 KIND_CAP = {v: k for k, v in CAP_KIND.items()}
-CAP_PERIOD = {"requests_per_minute": "minute", "spend_usd_per_month": "month", "deploys_per_day": "day"}
+CAP_PERIOD = {"requests_per_minute": "minute", "spend_usd_per_month": "month", "deploys_per_day": "day",
+              "ai_tokens_per_day": "day"}
 WORKSPACE_DEFAULTS: dict[str, float] = {
     "max_instances": 2, "concurrency": 80, "cpu": 1, "memory_mib": 512, "request_timeout_s": 60,
     "requests_per_minute": 120, "spend_usd_per_month": 5, "max_apps": 3, "deploys_per_day": 20,
+    # AI tokens per day on ShipCube's key, across the workspace's apps (the gateway's
+    # GATEWAY_WORKSPACE_TOKENS_PER_DAY default; each app also gets 200k unless set).
+    "ai_tokens_per_day": 1_000_000,
 }
 ENFORCED_BY = {
     "max_instances": "Cloud Run --max-instances",
@@ -198,11 +202,13 @@ def me(caller: Caller) -> dict[str, Any]:
         }
 
 
-def _app_row(conn, workspace_id: str, slug: str, include_deleted: bool = False) -> dict[str, Any]:
+def _app_row(conn, workspace_id: str, slug: str, include_deleted: bool = False, lock: bool = False) -> dict[str, Any]:
+    """lock: hold the app row until the transaction ends, so changes to one app run one at a time."""
     q = "select * from apps where workspace_id = %s and slug = %s and purged_at is null"
     if not include_deleted:
         q += " and deleted_at is null"
-    row = conn.execute(q + " order by deleted_at nulls first, created_at desc limit 1", (workspace_id, slug)).fetchone()
+    q += " order by deleted_at nulls first, created_at desc limit 1" + (" for update" if lock else "")
+    row = conn.execute(q, (workspace_id, slug)).fetchone()
     if row is None:
         raise NotFound(f"app {slug} not found")
     return row
@@ -241,7 +247,7 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
                     "role": "owner" if g["principal_type"] == "user" and g["principal"] == creator else "viewer",
                     "granted_at": _iso(g["created_at"]), "sync_state": g["sync_state"]} for g in grants(conn, app["id"])],
         "ai": {"provider": ai["provider"], "model": ai["model"], "key_secret": ai["key_secret"]} if ai
-        else {"provider": "meta", "model": "muse-spark", "key_secret": None},
+        else {"provider": "meta", "model": "muse-spark-1.3", "key_secret": None},
         "updated_at": _iso(dep["finished_at"] if dep and dep["finished_at"] else app["created_at"]),
         "deleted_at": _iso(app["deleted_at"]), "restorable_until": _iso(app["purge_after"]),
         "estimate": {"estimate_id": est["reasoning"].get("estimate_id"), "workload_class": est["workload_class"],
@@ -314,13 +320,40 @@ def _slug(conn, app_id: Any) -> str | None:
     return r["slug"] if r else None
 
 
+def _request_hash(kind: str, app_id: Any, payload: dict[str, Any]) -> bytes:
+    return hashlib.sha256(json.dumps([kind, str(app_id) if app_id else None, payload], sort_keys=True, default=str).encode()).digest()
+
+
+def replay(conn, workspace_id: str, kind: str, app_id: Any, payload: dict[str, Any], idem: str | None
+           ) -> tuple[Operation | None, str | None]:
+    """Idempotency for operations that change an app's state (set_access, set_caps): (operation, key).
+
+    A retry with the same key and body returns its operation, but only while that operation is still
+    the app's latest of this kind. Once a later change has run (remove, add, remove again with the same
+    derived key), the old operation describes a state the app no longer has, so the request is applied
+    again as a new operation (key None) instead of returning a stale result (#19). The same key with a
+    different body is a conflict, as in enqueue."""
+    if idem is None:
+        return None, None
+    prior = conn.execute("select * from operations where workspace_id = %s and idem_key = %s", (workspace_id, idem)).fetchone()
+    if prior is None:
+        return None, idem
+    if bytes(prior["request_hash"]) != _request_hash(kind, app_id, payload):
+        raise Conflict("idempotency key reused with a different request")
+    # Changes to an app hold its row lock (set_access, set_caps) and stamp created_at when written.
+    later = conn.execute("select 1 from operations where app_id = %s and kind = %s and created_at > %s limit 1",
+                         (app_id, kind, prior["created_at"])).fetchone()
+    if later is None:
+        return op_view(prior, _slug(conn, prior["app_id"])), idem
+    return None, None
+
+
 def enqueue(conn, caller: Caller | None, workspace_id: str, kind: str, app_id: Any, target_project: str,
             payload: dict[str, Any], idem_key: str | None, approvals: list[tuple[str, str]] | None = None,
             summary: str | None = None, extra: dict[str, Any] | None = None) -> Operation:
     """Insert an operation (and its approval) in the caller's transaction. Same key + same body
     returns the existing operation; same key + different body is a conflict."""
-    body = json.dumps([kind, str(app_id) if app_id else None, payload], sort_keys=True, default=str).encode()
-    request_hash = hashlib.sha256(body).digest()
+    request_hash = _request_hash(kind, app_id, payload)
     key = idem_key or f"auto:{uuid.uuid4().hex}"
     prior = conn.execute("select * from operations where workspace_id = %s and idem_key = %s", (workspace_id, key)).fetchone()
     if prior is not None:
@@ -332,9 +365,12 @@ def enqueue(conn, caller: Caller | None, workspace_id: str, kind: str, app_id: A
     steps = [{"name": n, "status": "pending"} for n, _ in STEPS[kind]]
     expires = datetime.now(UTC) + APPROVAL_TTL
     row = conn.execute(
+        # created_at is when the row is written (clock_timestamp), not when the transaction began: with
+        # the app row locked, operations on one app are then ordered as they were created (store.replay).
         "insert into operations (id, workspace_id, app_id, kind, target_project, status, step, idem_key, request_hash,"
         " requested_by, token_id, input, steps, progress_message, approval_url, approval_reasons, approval_actions,"
-        " approval_expires_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning *",
+        " approval_expires_at, created_at) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, clock_timestamp())"
+        " returning *",
         (op_id, workspace_id, app_id, kind, target_project, "awaiting_approval" if waiting else "queued", steps[0]["name"],
          key, request_hash, caller.user_id if caller else None,
          caller.token_id if caller and caller.token_id else None, Jsonb({**payload, **(extra or {})}), Jsonb(steps),
@@ -545,15 +581,18 @@ def start_rollback(caller: Caller, slug: str, to: str, idem: str | None) -> Oper
 
 def set_caps(caller: Caller, slug: str, caps: dict[str, Any], idem: str | None) -> tuple[dict[str, Any], Operation | None]:
     with db.tx(caller) as conn:
-        app = _app_row(conn, caller.workspace_id, slug)
+        app = _app_row(conn, caller.workspace_id, slug, lock=True)
         project = app_ref(conn, app).target.project
         reasons = caps_above_default(conn, caller.workspace_id, caps)
-        if reasons:  # the whole change waits for approval, so it never half-applies
-            op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, {"caps": caps}, idem, reasons)
-        else:
-            write_app_caps(conn, caller.workspace_id, app["id"], caps, caller.user_id)
-            op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, {"caps": caps, "push_only": True}, idem) \
-                if app["status"] == "running" else None
+        payload = {"caps": caps} if reasons else {"caps": caps, "push_only": True}
+        op, idem = replay(conn, caller.workspace_id, "set_caps", app["id"], payload, idem)
+        if op is None:  # a new change: write (unless it waits for approval) and push it
+            if reasons:  # the whole change waits for approval, so it never half-applies
+                op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, payload, idem, reasons)
+            else:
+                write_app_caps(conn, caller.workspace_id, app["id"], caps, caller.user_id)
+                op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, payload, idem) \
+                    if app["status"] == "running" else None
         return app_caps(conn, caller.workspace_id, app["id"]), op
 
 
@@ -575,23 +614,41 @@ def write_grants(conn, workspace_id: str, app_id: Any, add: list[str], remove: l
 
 
 def set_access(caller: Caller, slug: str, add: list[dict[str, Any]], remove: list[str], idem: str | None
-               ) -> tuple[list[dict[str, Any]], Operation | None]:
+               ) -> tuple[list[dict[str, Any]], Operation | None, Operation | None]:
+    """Direct grants and revocations are written and pushed to IAP at once, in their own operation;
+    `domain:` grants wait for approval in another. A rejected or expired domain approval never holds
+    back a revocation made in the same request (#18). Returns (access, domain op, push op)."""
     with db.tx(caller) as conn:
-        app = _app_row(conn, caller.workspace_id, slug)
+        app = _app_row(conn, caller.workspace_id, slug, lock=True)
         if f"user:{caller.email}".lower() in [r.lower() for r in remove] and \
                 conn.execute("select 1 from users where id = %s and email = %s", (app["created_by"], caller.email)).fetchone():
             raise Conflict("cannot remove the owner")
         project = app_ref(conn, app).target.project
         domain = [g["principal"] for g in add if g["principal"].startswith("domain:")]
         direct = [g["principal"] for g in add if not g["principal"].startswith("domain:")]
+        # The whole change is part of the request hash, so different changes never share an operation.
+        # The domain operation's worker reads only `add`; `with` is there for the hash.
+        norm = lambda ps: sorted({p.strip().lower() for p in ps})  # noqa: E731 — as write_grants stores them
+        push = {"push_only": True, "add": norm(direct), "remove": norm(remove)}
+        gated = {"add": norm(domain), "with": {"add": push["add"], "remove": push["remove"]}} if domain else None
+        payload = gated or push
+        op, idem = replay(conn, caller.workspace_id, "set_access", app["id"], payload, idem)
+        push_key = f"{idem}:push" if (idem and domain) else idem
+        if op is not None:  # a genuine retry: the operations it created, nothing written again
+            pushed = conn.execute("select * from operations where workspace_id = %s and idem_key = %s",
+                                  (caller.workspace_id, push_key)).fetchone() if domain and push_key else None
+            if not domain:
+                return _app_view(conn, app)["access"], None, op
+            return _app_view(conn, app)["access"], op, pushed and op_view(pushed, slug)
         write_grants(conn, caller.workspace_id, app["id"], direct, remove, caller.user_id)
+        pushed = None
+        if (direct or remove) and app["status"] == "running":  # never waits on the domain approval
+            pushed = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, push, push_key)
         op = None
-        if domain:
+        if domain:  # created last, so a retry finds it as the app's latest set_access operation
             reasons = [("domain_grant", f"grant to a whole domain ({p})") for p in domain]
-            op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, {"add": domain}, idem, reasons)
-        elif (direct or remove) and app["status"] == "running":
-            op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, {"push_only": True}, idem)
-        return _app_view(conn, app)["access"], op
+            op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, gated, idem, reasons)
+        return _app_view(conn, app)["access"], op, pushed
 
 
 def delete_app(caller: Caller, slug: str, idem: str | None) -> Operation:
@@ -616,25 +673,46 @@ def restore_app(caller: Caller, slug: str) -> Operation:
                        f"restore:{app['id']}:{int(app['deleted_at'].timestamp())}")
 
 
+def provider_key_label(provider: str) -> str:
+    """The secret_refs label of a provider's console-saved key (workspace.save_provider)."""
+    return f"ai-provider-{provider.replace('_', '-')}"
+
+
 def set_ai(caller: Caller, slug: str, provider: str, model: str, key_secret: str | None, base_url: str | None) -> dict[str, Any]:
+    """Point an app at an AI provider. A BYOK provider uses only the key a person saved for that
+    provider in the console (an `ai_key` secret), never another secret. An openai_compatible app
+    uses the endpoint saved with that key: the key is bound to it (the gateway checks), and an agent
+    can never choose where a key is sent."""
+    if base_url is not None and caller.via != "console":
+        raise PermissionError("base_url can only be set by a person in the console, together with the key")
     with db.tx(caller) as conn:
         app = _app_row(conn, caller.workspace_id, slug)
-        secret_id = None
+        secret_id = label = bound_url = None
         if provider != "meta":
-            if not key_secret:
-                raise Conflict("BYOK providers need key_secret: the name of a secret stored in the console")
-            ref = conn.execute("select id from secret_refs where workspace_id = %s and label = %s and destroyed_at is null",
-                               (caller.workspace_id, key_secret)).fetchone()
+            label = provider_key_label(provider)
+            if key_secret and key_secret != label:
+                raise PermissionError(f"{provider} apps use the {provider} key saved in the console ({label});"
+                                      " other secrets can't be used")
+            ref = conn.execute("select id from secret_refs where workspace_id = %s and app_id is null and kind = 'ai_key'"
+                               " and label = %s and destroyed_at is null", (caller.workspace_id, label)).fetchone()
             if ref is None:
-                raise NotFound(f"secret {key_secret} not found; add it in the console first")
+                raise NotFound(f"no {provider} key is saved; a person adds it in the console (Settings, AI)")
             secret_id = ref["id"]
+            if provider == "openai_compatible":
+                saved = conn.execute("select base_url from provider_configs where workspace_id = %s and app_id is null"
+                                     " and provider = 'openai_compatible'", (caller.workspace_id,)).fetchone()
+                if saved is None or not saved["base_url"]:
+                    raise Conflict("save the OpenAI-compatible endpoint and its key in the console first")
+                if base_url is not None and base_url.rstrip("/") != saved["base_url"]:
+                    raise PermissionError("base_url must be the endpoint saved with the key in the console")
+                bound_url = saved["base_url"]
         conn.execute(
             "insert into provider_configs (id, workspace_id, app_id, provider, model, base_url, secret_ref_id, updated_by)"
             " values (%s,%s,%s,%s,%s,%s,%s,%s) on conflict (workspace_id, coalesce(app_id, '00000000-0000-0000-0000-000000000000'::uuid))"
             " do update set provider = excluded.provider, model = excluded.model, base_url = excluded.base_url,"
             " secret_ref_id = excluded.secret_ref_id, updated_by = excluded.updated_by, updated_at = now()",
-            (uuid.uuid4(), caller.workspace_id, app["id"], provider, model, base_url, secret_id, caller.user_id))
-        return {"provider": provider, "model": model, "key_secret": key_secret}
+            (uuid.uuid4(), caller.workspace_id, app["id"], provider, model, bound_url, secret_id, caller.user_id))
+        return {"provider": provider, "model": model, "key_secret": label}
 
 
 def live_status(deployer: Deployer, caller: Caller, slug: str) -> dict[str, Any] | None:

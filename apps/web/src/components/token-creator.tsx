@@ -23,7 +23,7 @@ export function TokenCreator({
 }) {
   // Empty, with the example as placeholder and help text: a prefilled example gets typed onto.
   const [name, setName] = useState("");
-  const [scopes, setScopes] = useState<string[]>(SCOPES.map((s) => s.id));
+  const [scopes, setScopes] = useState<string[]>(SCOPES.filter((s) => !("optIn" in s)).map((s) => s.id));
   const [days, setDays] = useState(30);
   const [created, setCreated] = useState<CreatedToken | null>(null);
   const create = useAction(createTokenAction);

@@ -15,7 +15,7 @@ export default async function AiPage() {
         title="AI providers"
         description="Models your apps can call through ShipCube's AI gateway. Muse is the default; bring your own key for anything else."
       />
-      {blocked ?? <Providers initial={providers} apps={apps.map(({ id, name, aiProvider }) => ({ id, name, aiProvider }))} />}
+      {blocked ?? <Providers initial={providers} apps={apps.filter((a) => !a.deletedAt).map(({ id, name, aiProvider }) => ({ id, name, aiProvider }))} />}
     </>
   );
 }

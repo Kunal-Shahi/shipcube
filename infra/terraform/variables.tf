@@ -88,3 +88,13 @@ variable "alert_email" {
   type        = string
   sensitive   = true
 }
+
+variable "links_project_id" {
+  description = <<-EOT
+    Holds only the per-workspace link deployer SAs (ws-<id>-deployer), which users grant roles in
+    their own projects. A project of their own, because IAM conditions can't scope a role to some
+    service accounts by name: the API may create SAs and act as any SA here, and nothing else.
+  EOT
+  type        = string
+  default     = "shipcube-links-ks"
+}
