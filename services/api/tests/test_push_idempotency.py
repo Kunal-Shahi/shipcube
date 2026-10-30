@@ -78,3 +78,17 @@ def test_cap_reductions_with_repeated_keys_are_applied(client, ws):
     ops = [_caps(client, ws, "s4-caps", n, f"caps-{n}") for n in (2, 1, 2, 1)]  # keys repeat: caps-2, caps-1
     assert len(set(ops)) == 4
     assert client.get("/v1/apps/s4-caps", headers=ws["agent"]).json()["caps"]["max_instances"] == 1
+
+
+def test_the_same_key_with_different_removals_alongside_a_domain_grant_is_a_conflict(client, ws):
+    _running(client, ws, "s4-domain")
+    key = {**ws["agent"], "Idempotency-Key": "share-acme"}
+    first = client.patch("/v1/apps/s4-domain/access", headers=key,
+                         json={"add": [{"principal": "domain:acme.com"}], "remove": ["user:bob@example.com"]})
+    assert first.status_code == 200, first.text
+    other = client.patch("/v1/apps/s4-domain/access", headers=key,
+                         json={"add": [{"principal": "domain:acme.com"}], "remove": ["user:eve@example.com"]})
+    assert other.status_code == 409, "a different change must not replay the first request"
+    same = client.patch("/v1/apps/s4-domain/access", headers=key,
+                        json={"remove": ["user:bob@example.com"], "add": [{"principal": "domain:acme.com"}]})
+    assert same.status_code == 200 and same.json()["operation"]["id"] == first.json()["operation"]["id"]

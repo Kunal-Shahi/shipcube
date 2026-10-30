@@ -334,9 +334,10 @@ def replay(conn, workspace_id: str, kind: str, app_id: Any, payload: dict[str, A
         return None, idem
     if bytes(prior["request_hash"]) != _request_hash(kind, app_id, payload):
         raise Conflict("idempotency key reused with a different request")
-    latest = conn.execute("select id from operations where app_id = %s and kind = %s order by created_at desc limit 1",
-                          (app_id, kind)).fetchone()
-    if latest is not None and latest["id"] == prior["id"]:
+    # Operations created in the prior's own transaction share its created_at and don't count as later.
+    later = conn.execute("select 1 from operations where app_id = %s and kind = %s and created_at > %s limit 1",
+                         (app_id, kind, prior["created_at"])).fetchone()
+    if later is None:
         return op_view(prior, _slug(conn, prior["app_id"])), idem
     return None, None
 
@@ -616,10 +617,11 @@ def set_access(caller: Caller, slug: str, add: list[dict[str, Any]], remove: lis
         project = app_ref(conn, app).target.project
         domain = [g["principal"] for g in add if g["principal"].startswith("domain:")]
         direct = [g["principal"] for g in add if not g["principal"].startswith("domain:")]
-        # The pushed change is part of the request hash, so different changes never share an operation.
-        push = {"push_only": True, "add": sorted(direct), "remove": sorted(remove)}
-        # The domain operation's hash covers the whole request; the worker reads only `add` from it.
-        gated = {"add": domain, "with": {"add": push["add"], "remove": push["remove"]}} if domain else None
+        # The whole change is part of the request hash, so different changes never share an operation.
+        # The domain operation's worker reads only `add`; `with` is there for the hash.
+        norm = lambda ps: sorted({p.strip().lower() for p in ps})  # noqa: E731 — as write_grants stores them
+        push = {"push_only": True, "add": norm(direct), "remove": norm(remove)}
+        gated = {"add": norm(domain), "with": {"add": push["add"], "remove": push["remove"]}} if domain else None
         payload = gated or push
         op, idem = replay(conn, caller.workspace_id, "set_access", app["id"], payload, idem)
         push_key = f"{idem}:push" if (idem and domain) else idem
