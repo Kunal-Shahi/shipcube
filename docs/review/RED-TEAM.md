@@ -26,6 +26,17 @@ The red team now watches every push and PR in both repos and reviews each one as
 **Open:**
 - **#48 (console `secrets:write`):** the first version pre-checked `secrets:write` on every new token, which widens R-1 (#42). It has been revised so the scope is opt-in and the label is accurate. Good to merge.
 
+**Profiler sandbox phase 1 (#55, #57, #58).** Reviewed adversarially across several rounds.
+- **#55 (merged):** lanes, admission (static included), spend ledger, janitor, strikes, and a tarfile-stream upload guard. The guard refuses legacy `.lzma`, xz, gzip, sparse, many-member and long-path bombs.
+- **#58 (merged, deployed at `fa020eb`):** closes a worker-side symlink read on git sources (P-3, escalated). Git estimates are paused and the code scanner never follows links. **P-3 is mitigated in production.**
+- **#57 (OK to merge):**
+  - the agent runs `-S -P` from a read-only path, separate from tenant wheels;
+  - the agent and app run as separate uids;
+  - symlinks are stripped from sources;
+  - git clones are https-only, with an exact size check before checkout.
+
+  Before `SHIPCUBE_PROFILER_JOB` is set: `PR_SET_NO_NEW_PRIVS` for the app and setuid bits stripped in the image.
+
 **New, low:** `services/api/scripts/gcp_setup.sh` still creates `sc-builder` with bucket-wide read and registry write. Rerunning it would bring the C-1 exposure back. Delete those lines or the script. *(security)*
 
 ## Re-review 2, 2026-10-30 afternoon (`main` at `3320b7c`)
