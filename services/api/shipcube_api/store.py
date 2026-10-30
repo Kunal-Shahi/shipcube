@@ -613,8 +613,11 @@ def set_access(caller: Caller, slug: str, add: list[dict[str, Any]], remove: lis
         project = app_ref(conn, app).target.project
         domain = [g["principal"] for g in add if g["principal"].startswith("domain:")]
         direct = [g["principal"] for g in add if not g["principal"].startswith("domain:")]
-        # The pushed change is part of the request hash, so different changes never share an operation.
-        payload = {"add": domain} if domain else {"push_only": True, "add": sorted(direct), "remove": sorted(remove)}
+        # The whole change is part of the request hash, so different changes never share an operation.
+        # The domain operation's worker reads only `add`; `with` is there for the hash.
+        norm = lambda ps: sorted({p.strip().lower() for p in ps})  # noqa: E731 — as write_grants stores them
+        push = {"push_only": True, "add": norm(direct), "remove": norm(remove)}
+        payload = {"add": norm(domain), "with": {"add": push["add"], "remove": push["remove"]}} if domain else push
         op, idem = replay(conn, caller.workspace_id, "set_access", app["id"], payload, idem)
         if op is None:  # a new change: write it, then push it
             write_grants(conn, caller.workspace_id, app["id"], direct, remove, caller.user_id)
