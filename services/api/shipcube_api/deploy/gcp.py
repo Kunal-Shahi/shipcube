@@ -45,6 +45,8 @@ GCS = "https://storage.googleapis.com/storage/v1"
 INVOKER = "roles/run.invoker"
 ACCESSOR = "roles/iap.httpsResourceAccessor"
 UPLOAD_MAX_BYTES = 100 * 1024 * 1024
+# The profiler's Artifact Registry mirrors (infra/terraform/modules/profiler/build.tf, offline_builds).
+PROFILER_MIRRORS = ("pypi-remote", "dockerhub-remote")
 # What deploying into a linked project needs (infra/scripts/link-project.sh grants these).
 LINK_PERMISSIONS = [
     "run.services.create", "run.services.update", "run.services.setIamPolicy", "cloudbuild.builds.create",
@@ -237,6 +239,18 @@ class GcpDeployer:
         changed |= _add_binding(policy, "roles/iam.serviceAccountUser", f"serviceAccount:{self.s.build_submitter_sa}")
         if changed:
             self._call(sess, "POST", f"{sa_url}:setIamPolicy", json={"policy": policy})
+        # e. read on the profiler's package mirrors, so its offline profiler builds can fetch wheels and
+        #    the base image (#22 phase 2; the mirrors exist only with offline_builds, else skipped)
+        for mirror in PROFILER_MIRRORS:
+            mirror_url = f"{AR}/projects/{project}/locations/{region}/repositories/{mirror}"
+            try:
+                self._call(sess, "GET", mirror_url)
+            except DeployError as e:
+                if e.code == "not_found":
+                    continue
+                raise
+            self._grant(sess, f"{mirror_url}:getIamPolicy", f"{mirror_url}:setIamPolicy", "roles/artifactregistry.reader",
+                        member, get="GET")
         self._provisioned.add(workspace_id)
         log.info("workspace builder ready", extra={"workspace_id": workspace_id, "builder_sa": sa, "repo": repo})
 
