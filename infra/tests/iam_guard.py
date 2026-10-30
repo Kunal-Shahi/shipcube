@@ -35,10 +35,7 @@ GATEWAY_MEMBER = "google_service_account.gateway.member"
 AI_KEY_PREFIX = ("ai_key_secrets_prefix", "/secrets/ws-ai-")
 
 # Known exceptions, each tied to the issue that removes it. Delete the entry with the grant.
-KNOWN = {
-    ("google_project_iam_member.hosted_deployer", "roles/iam.serviceAccountUser"): "#16",
-    ("google_project_iam_member.hosted_deployer", "roles/iam.serviceAccountAdmin"): "#16",
-}
+KNOWN: dict[tuple[str, str], str] = {}
 
 BLOCK = re.compile(r'resource\s+"(google_project_iam_(?:member|binding))"\s+"([^"]+)"\s*\{', re.M)
 
