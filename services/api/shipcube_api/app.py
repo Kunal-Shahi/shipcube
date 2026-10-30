@@ -259,22 +259,16 @@ def revoke_token(token_id: uuid.UUID, c: Annotated[Caller, Depends(console_user)
 def me(authorization: Annotated[str | None, Header()] = None,
        x_shipcube_workspace: Annotated[str | None, Header()] = None):
     # No scope needed: any valid token may see who it belongs to and what it can do. A console sign-in
-    # with no workspace learns whether it's on the waitlist: 403 waitlisted (pending) or no_access, with
-    # platform_admin, so an admin without a workspace still finds the review page.
+    # with no workspace gets 401 here and asks GET /v1/waitlist/me where its request stands (and
+    # whether it's a platform admin).
     token = _bearer(authorization)
     if token.startswith("sc_pat_"):
         return store.me(caller(authorization, x_shipcube_workspace))
     ident = auth.console_identity(token)
-    if ident is None:
+    c = auth.console_caller(ident, x_shipcube_workspace) if ident else None
+    if c is None:
         raise ApiError(401, "unauthenticated", "invalid, expired or revoked token")
-    admin = waitlist.is_admin(ident.email, ident.email_verified)
-    c = auth.console_caller(ident, x_shipcube_workspace)
-    if c is not None:
-        return {**store.me(c), "platform_admin": admin}
-    pending = ident.email_verified and ident.email and waitlist.mine(ident.email)["status"] == "pending"
-    code, message = (("waitlisted", "You're on the waitlist; we'll email you when your workspace is ready") if pending
-                     else ("no_access", "This account has no ShipCube workspace; join the waitlist to request one"))
-    return JSONResponse({"error": {"code": code, "message": message, "platform_admin": admin}}, status_code=403)
+    return {**store.me(c), "platform_admin": waitlist.is_admin(ident.email, ident.email_verified)}
 
 
 # --- waitlist: public sign-up, reviewed by platform admins ------------------------------------

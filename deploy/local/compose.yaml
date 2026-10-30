@@ -102,6 +102,7 @@ services:
       SHIPCUBE_IDP_PROJECT: demo-shipcube
       FIREBASE_AUTH_EMULATOR_HOST: auth-emulator:9099
       SHIPCUBE_PLATFORM_ADMINS: ${SHIPCUBE_PLATFORM_ADMINS:-admin@shipcube.test}
+      SHIPCUBE_WAITLIST_PER_IP_PER_HOUR: ${SHIPCUBE_WAITLIST_PER_IP_PER_HOUR:-5}   # e2e runs raise it
     ports: ["127.0.0.1:${SHIPCUBE_API_PORT:-18080}:8080"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]

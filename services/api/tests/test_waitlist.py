@@ -135,8 +135,7 @@ def test_admin_routes_refuse_non_admins_and_pats(client, idp):
 def test_approve_then_first_sign_in_claims_the_workspace(client, idp):
     addr = email()
     sub = f"uid-{uuid.uuid4().hex[:8]}"
-    me = client.get("/v1/me", headers=idp(addr, sub))  # signed in, no workspace
-    assert me.status_code == 403 and me.json()["error"]["code"] == "no_access" and me.json()["error"]["platform_admin"] is False
+    assert client.get("/v1/me", headers=idp(addr, sub)).status_code == 401  # signed in, no workspace
     mine = client.get("/v1/waitlist/me", headers=idp(addr, sub)).json()
     assert mine == {"email": addr, "status": "none", "requested_at": None, "platform_admin": False}
     # Signed in, one click: the session's verified email is used, whatever the body says.
@@ -145,12 +144,9 @@ def test_approve_then_first_sign_in_claims_the_workspace(client, idp):
     assert r.status_code == 202
     mine = client.get("/v1/waitlist/me", headers=idp(addr, sub)).json()
     assert mine["status"] == "pending" and mine["requested_at"] and row("someone-else@example.com") is None
-    assert client.get("/v1/me", headers=idp(addr, sub)).json()["error"]["code"] == "waitlisted"
 
     admin = idp(ADMIN)
     assert client.get("/v1/waitlist/me", headers=admin).json()["platform_admin"] is True
-    # An admin without a workspace still learns they're an admin.
-    assert client.get("/v1/me", headers=admin).json()["error"]["platform_admin"] is True
     listed = client.get("/v1/admin/waitlist", headers=admin).json()
     assert listed["items"] == listed["requests"]
     reqs = listed["items"]
@@ -218,8 +214,7 @@ def test_another_account_with_the_email_unverified_claims_nothing(client, idp):
     join(client, addr)
     entry = next(i for i in waitlist.list_entries("pending", 500)["requests"] if i["email"] == addr)
     assert client.post(f"/v1/admin/waitlist/{entry['id']}:approve", headers=idp(ADMIN)).status_code == 200
-    r = client.get("/v1/me", headers=idp(addr, verified=False))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "no_access"
+    assert client.get("/v1/me", headers=idp(addr, verified=False)).status_code == 401
     with db.worker_tx() as conn:
         assert conn.execute("select firebase_uid from users where email = %s", (addr,)).fetchone()["firebase_uid"] == f"pending:{addr}"
 
