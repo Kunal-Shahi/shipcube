@@ -7,6 +7,8 @@ Fails on:
     SHIPCUBE_EMBEDDED_WORKER=1, SHIPCUBE_ESTIMATOR=dev, SHIPCUBE_ENV=local
   - a URL pointing at localhost, 127.0.0.1, 0.0.0.0, ::1, host.docker.internal or *.localhost
   - a locally generated secret (sclocal_..., infra/local/localsecrets.py)
+  - GATEWAY_ALLOW_PRIVATE_UPSTREAM=1, AUTH_PROVIDER=mock|firebase-emulator, SHIPCUBE_DEV_API_SESSION or
+    FIREBASE_AUTH_EMULATOR_HOST set
 
 CI runs it over deploy/services/*.yaml and deploy/*.sh; deploy.sh runs it again on each rendered
 manifest, right before `gcloud run services replace`. The services refuse the same things at
@@ -35,6 +37,11 @@ RULES = [
     (re.compile(r"\b[a-z][a-z0-9+.-]*://(?:[^/\s\"'@]*@)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal|[a-z0-9.-]+\.localhost)\b", re.I),
      "local URL"),
     (re.compile(r"\bsclocal_[A-Za-z0-9_-]+"), "locally generated secret"),
+    # Gateway and console local-only switches (they refuse these on Cloud Run too).
+    (re.compile(rf"\bGATEWAY_ALLOW_PRIVATE_UPSTREAM[\"']?\s*(?:[:=]|,\s*value:)\s*[\"']?{TRUE}\b", re.I), "private upstreams"),
+    (re.compile(r"\bAUTH_PROVIDER[\"']?\s*(?:[:=]|,\s*value:)\s*[\"']?(?:mock|firebase-emulator)\b", re.I), "mock or emulator sign-in"),
+    (re.compile(r"\b(?:SHIPCUBE_DEV_API_SESSION|FIREBASE_AUTH_EMULATOR_HOST)[\"']?\s*(?:[:=]|,\s*value:)\s*[\"']?\S", re.I),
+     "local console session or auth emulator"),
 ]
 
 
