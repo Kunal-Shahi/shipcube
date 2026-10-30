@@ -5,6 +5,7 @@
 #
 #   SA      sc-build-<ws_short>@<apps project>.iam.gserviceaccount.com
 #   uploads gs://<uploads bucket>/ws/<ws_uuid>/      (managed folder, objectViewer)
+#   logs    gs://<uploads bucket>/ws/<ws_uuid>/build-logs/   (managed folder, objectUser)
 #   images  <region>-docker.pkg.dev/<apps project>/ws-<ws_short>/   (repo, artifactregistry.writer)
 #
 # ws_uuid is the canonical workspace uuid; ws_short is its first 20 hex digits. Those
@@ -76,10 +77,26 @@ resource "google_storage_bucket_iam_member" "provisioner_folders" {
   member = google_service_account.provisioner.member
 }
 
-# Cloud Build with a user-specified SA needs logging.logWriter. One static binding for every
-# SA in the apps project, so provisioning never has to edit the project's IAM policy.
-resource "google_project_iam_member" "all_sas_log_writer" {
-  project = var.apps_project_id
-  role    = "roles/logging.logWriter"
-  member  = "principalSet://cloudresourcemanager.googleapis.com/projects/${var.apps_project_number}/type/ServiceAccount"
+# No logging.logWriter for builders (red-team #28: granting it to every SA in the apps project
+# let tenant apps forge other tenants' log entries). Hosted builds use GCS_ONLY logging into
+# gs://<uploads bucket>/ws/<ws_uuid>/build-logs/, a managed folder only that workspace's builder
+# can write (objectUser), created with the upload folder by the provisioner.
+
+# Cloud Build refuses a logsBucket unless the build's service account can read the bucket's
+# metadata ("invalid bucket ...: service account ... does not have access"). Builders are created at
+# runtime, so this is one static binding for every SA in the apps project, with a role that holds
+# storage.buckets.get and nothing else: no object reads, writes or listing, no IAM. Tenant app SAs
+# get the same metadata read (bucket name, location, lifecycle), which reveals nothing they can use.
+resource "google_project_iam_custom_role" "bucket_metadata" {
+  project     = var.apps_project_id
+  role_id     = "shipcubeBucketMetadataReader"
+  title       = "ShipCube bucket metadata reader"
+  description = "storage.buckets.get only, so Cloud Build accepts a logs folder in the uploads bucket."
+  permissions = ["storage.buckets.get"]
+}
+
+resource "google_storage_bucket_iam_member" "all_sas_bucket_metadata" {
+  bucket = var.uploads_bucket
+  role   = google_project_iam_custom_role.bucket_metadata.id
+  member = "principalSet://cloudresourcemanager.googleapis.com/projects/${var.apps_project_number}/type/ServiceAccount"
 }

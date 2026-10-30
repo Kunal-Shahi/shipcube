@@ -44,12 +44,12 @@ terraform plan -out=tfplan
 terraform apply tfplan   # only after the plan and its cost are approved
 ```
 
-`imports.tf` adopts resources that were created by hand or by other sessions before Terraform owned them (budget, topic, kill-switch account, two secrets, `sc-api`, `sc-builder`, the `shipcube` registry). The import blocks are no-ops once applied.
+`imports.tf` adopts resources that were created by hand or by other sessions before Terraform owned them (budget, topic, kill-switch account, two secrets, `sc-api`, the `shipcube` registry). The import blocks are no-ops once applied.
 
 What it creates:
 
 - APIs in both projects.
-- Service accounts: `sc-api`, `sc-gateway`, `sc-worker`, `sc-hosted-deployer` (control), `sc-profiler`, `sc-builder` (apps). Per-workspace deployers (`ws-<id>-deployer`) and per-app runtime accounts are created by the API at runtime, not here.
+- Service accounts: `sc-api`, `sc-gateway`, `sc-worker`, `sc-hosted-deployer` (control), `sc-profiler` (apps). Hosted builds run as per-workspace `sc-build-<id>` accounts that the worker provisions (C-1); the shared `sc-builder` was deleted on 2026-10-30. Per-workspace deployers (`ws-<id>-deployer`) and per-app runtime accounts are created by the API at runtime, not here.
 - Cloud SQL Postgres 16, `db-f1-micro`, IAM database auth only, backups and PITR, pgaudit.
 - Audit logging (Data Access logs and a 365-day audit bucket).
 - Secret Manager **containers** for platform secrets, with accessor bindings. Values are added with `gcloud secrets versions add`, never through Terraform (state would hold them in plain text).
@@ -92,16 +92,11 @@ Both secret tools refuse to run on Cloud Run (`K_SERVICE`, `CLOUD_RUN_JOB`) or w
 
 Hosted builds run tenant code, so each workspace builds as its own service account with access to only its own uploads folder and image repo (design: security-tenancy §4).
 
-- `terraform/modules/build_isolation`: the static pieces. `sc-provisioner` (impersonable only by `sc-worker`), its two custom roles (SA + repo admin in the apps project; managed-folder admin on the uploads bucket), and `logging.logWriter` for all SAs in the apps project, so provisioning never edits project IAM.
-- `scripts/provision-workspace-builder.sh <workspace-uuid> [--delete]`: the per-workspace resources (`sc-build-<ws_short>` SA, `ws-<ws_short>` repo, `ws/<ws_uuid>/` managed folder, and their bindings). The worker makes the same calls in Python. Idempotent.
+- `terraform/modules/build_isolation`: the static pieces. `sc-provisioner` (impersonable only by `sc-worker`), its two custom roles (SA + repo admin in the apps project; managed-folder admin on the uploads bucket), and `storage.buckets.get` (metadata only) on the uploads bucket for all SAs in the apps project, which Cloud Build requires before it accepts a logs folder. Builders hold no `logging.logWriter`: hosted builds log to `ws/<ws_uuid>/build-logs/` (#28).
+- `scripts/provision-workspace-builder.sh <workspace-uuid> [--delete]`: the per-workspace resources (`sc-build-<ws_short>` SA, `ws-<ws_short>` repo, `ws/<ws_uuid>/` and `ws/<ws_uuid>/build-logs/` managed folders, and their bindings). The worker makes the same calls in Python. Idempotent.
 - `tests/build-isolation.sh`: live test. It provisions two throwaway workspaces and, with real tokens for A's build SA, checks that A reads its own upload but not B's, can't list the bucket, and can push and pull only its own repo (not B's, `shipcube` or `profiler`). It cleans up on exit. Run it as an apps-project Owner.
 
-Rollout:
-
-1. `terraform apply -target=module.build_isolation -target=google_project_iam_member.hosted_deployer_ar_reader -target=google_project_iam_member.builder_ar_writer -target=google_storage_bucket_iam_member.uploads_builder` (8 adds, all IAM, free; the last two targets only move existing bindings in state; the reader lets deploys read back the pushed digest). Run it from a tree that also contains platform's PR #13 Terraform, or a full plan would remove that PR's live resources. Use `-target` while the Cloud SQL instance is deliberately stopped, because a full apply turns it back on.
-2. `infra/tests/build-isolation.sh` must print `ALL ISOLATION CHECKS PASSED`.
-3. Networking switches hosted builds to the per-workspace SA, repo and `ws/<ws_uuid>/` paths, and deploys by digest.
-4. Provision existing workspaces (`provision-workspace-builder.sh <uuid>` for each), then set `legacy_shared_builder = false` and apply. That removes `sc-builder`'s bucket-wide read and project-wide registry write. Also remove its hand-made `logging.logWriter` binding: `gcloud projects remove-iam-policy-binding shipcube-apps-ks --member serviceAccount:sc-builder@shipcube-apps-ks.iam.gserviceaccount.com --role roles/logging.logWriter`.
+Rollout: done on 2026-10-30. `build_isolation` is applied, `build-isolation.sh` passes, hosted builds run as `sc-build-<ws_short>` and deploy by digest, and the shared `sc-builder` (with its bucket-wide read, project-wide registry write and hand-made `logging.logWriter`) is deleted.
 
 ## Database
 

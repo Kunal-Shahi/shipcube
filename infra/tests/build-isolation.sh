@@ -3,8 +3,8 @@
 # workspaces A and B, then checks, using real tokens for A's build SA, that:
 #   1. A can read its own upload, but not B's, and can't list the bucket.
 #   2. A can push to and pull from its own Artifact Registry repo, but not B's or the shared repo.
-# Everything it creates is deleted on exit: two SAs, two empty repos, two managed folders and
-# two 16-byte objects. No images are pushed; repo access is checked with testIamPermissions and
+# Everything it creates is deleted on exit: two SAs, two empty repos, four managed folders and
+# three small objects. No images are pushed; repo access is checked with testIamPermissions and
 # with a registry request that answers 403 (no access) or 404 (access, no such image).
 #
 # Run as a project Owner of the apps project (it gives the caller tokenCreator on the two test
@@ -50,7 +50,8 @@ expect() {
 # shellcheck disable=SC2317,SC2329 # invoked by the EXIT trap
 cleanup() {
   set +e
-  gcloud storage rm --quiet "gs://${UPLOADS_BUCKET}/${OBJ_A}" "gs://${UPLOADS_BUCKET}/${OBJ_B}" >/dev/null 2>&1
+  gcloud storage rm --quiet "gs://${UPLOADS_BUCKET}/${OBJ_A}" "gs://${UPLOADS_BUCKET}/${OBJ_B}" \
+    "gs://${UPLOADS_BUCKET}/ws/${A}/build-logs/log-isolation.txt" >/dev/null 2>&1
   "$PROVISION" "$A" --delete
   "$PROVISION" "$B" --delete
 }
@@ -89,6 +90,14 @@ expect "A reads its own upload" "$(status "${GCS}/o/$(enc "$OBJ_A")?alt=media")"
 expect "A cannot read B's upload" "$(status "${GCS}/o/$(enc "$OBJ_B")?alt=media")" 403
 expect "A cannot list the bucket" "$(status "${GCS}/o?prefix=ws/")" 403
 expect "A cannot list B's folder" "$(status "${GCS}/o?prefix=$(enc "ws/${B}/")")" 403
+# Build logs (GCS_ONLY, #28): A writes only its own build-logs folder, never an upload, never B's logs.
+put() {
+  curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${T}" -H "Content-Type: text/plain" \
+    -X POST "https://storage.googleapis.com/upload/storage/v1/b/${UPLOADS_BUCKET}/o?uploadType=media&name=$(enc "$1")" -d x
+}
+expect "A writes its own build log" "$(put "ws/${A}/build-logs/log-isolation.txt")" 200
+expect "A cannot write B's build logs" "$(put "ws/${B}/build-logs/log-isolation.txt")" 403
+expect "A cannot write its own uploads" "$(put "ws/${A}/uploads/upl_forged.tgz")" 403
 
 # 2. Artifact Registry: permissions A holds on each repo.
 perms() {
@@ -115,7 +124,11 @@ pull() {
     "https://${HOST}/v2/${APPS_PROJECT}/$1/app/manifests/latest"
 }
 expect "A's pull from its own repo is authorized (404 = no such image)" "$(pull "$REPO_A")" 404
-expect "A cannot pull from B's repo" "$(pull "$REPO_B")" 403
+# Denied either way: the registry won't issue A a pull token for B's repo, so the manifest request
+# goes out without one (401), or with one that lacks the scope (403).
+code="$(pull "$REPO_B")"
+[[ "$code" == 401 ]] && code=403
+expect "A cannot pull from B's repo" "$code" 403
 
 if [[ "$FAILED" == 0 ]]; then echo "ALL ISOLATION CHECKS PASSED"; else echo "ISOLATION CHECKS FAILED"; fi
 exit "$FAILED"
