@@ -124,7 +124,11 @@ pull() {
     "https://${HOST}/v2/${APPS_PROJECT}/$1/app/manifests/latest"
 }
 expect "A's pull from its own repo is authorized (404 = no such image)" "$(pull "$REPO_A")" 404
-expect "A cannot pull from B's repo" "$(pull "$REPO_B")" 403
+# Denied either way: the registry won't issue A a pull token for B's repo, so the manifest request
+# goes out without one (401), or with one that lacks the scope (403).
+code="$(pull "$REPO_B")"
+[[ "$code" == 401 ]] && code=403
+expect "A cannot pull from B's repo" "$code" 403
 
 if [[ "$FAILED" == 0 ]]; then echo "ALL ISOLATION CHECKS PASSED"; else echo "ISOLATION CHECKS FAILED"; fi
 exit "$FAILED"

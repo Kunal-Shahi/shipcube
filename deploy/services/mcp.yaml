@@ -39,6 +39,8 @@ spec:
             - {name: SHIPCUBE_REGION, value: "${REGION}"}
             - {name: SHIPCUBE_HOSTED_DEPLOYER_SA, value: "${SA_HOSTED_DEPLOYER}"}
             - {name: SHIPCUBE_CONSOLE_URL, value: "${CONSOLE_URL}"}
+            # Returned to agents by ai_config; unset, it falls back to http://localhost:8090 (#41).
+            - {name: SHIPCUBE_AI_GATEWAY_URL, value: "${GATEWAY_URL}"}
             - {name: SHIPCUBE_DATA_WORKSPACE, value: "${DATA_WORKSPACE}"}
             - {name: SHIPCUBE_MONITOR, value: gcp}
             - {name: ALLOWED_HOSTS, value: "${MCP_HOST}"}
