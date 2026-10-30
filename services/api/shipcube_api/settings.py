@@ -22,7 +22,8 @@ class Settings:
     backend: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_BACKEND", "mock" if _dev_mode() else "gcp"))
     # Identity Platform project whose ID tokens authenticate console users (approvals, restore).
     idp_project: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_IDP_PROJECT") or None)
-    # Profiler sandbox SA for estimate_load (security's sc-profiler). Unset = static analysis only.
+    # The profiler sandbox job's runtime SA for estimate_load: `profiler-sandbox@<apps project>` from
+    # infra/terraform/modules/profiler (no roles, no secrets). Unset = static analysis only.
     profiler_job: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_PROFILER_JOB") or None)
     worker_id: str = field(default_factory=lambda: os.environ.get("K_REVISION", "") + "/" + os.environ.get("HOSTNAME", "local") + f"/{os.getpid()}")
     # Hosted apps run here (security's `shipcube-apps` project).
@@ -56,6 +57,11 @@ class Settings:
     console_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000").rstrip("/"))
     # The AI gateway's URL, injected into every deployed app as SHIPCUBE_AI_GATEWAY. Unset: not injected.
     ai_gateway_url: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_AI_GATEWAY_URL") or None)
+    # The AI gateway's identity and the audience its ID tokens carry for this API (/internal/gateway/*,
+    # shared caps). Unset audience: the internal routes refuse every caller.
+    gateway_sa: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_GATEWAY_SA", "sc-gateway@shipcube-control-ks.iam.gserviceaccount.com"))
+    internal_audience: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_INTERNAL_AUDIENCE") or None)
     # SHIPCUBE_BACKEND=local (deploy/local.py, local_iap.py): Docker + pack + fake-gcs-server.
     local_state_dir: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_STATE", ".shipcube-local"))
     local_gcs_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_GCS_URL", "http://localhost:4443"))
@@ -74,8 +80,11 @@ class Settings:
     local_secrets_file: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_SECRETS_FILE",
                                                                            ".shipcube-local/secrets.json"))
     # Linked projects: the per-workspace deployer the user grants roles to (infra/scripts/link-project.sh).
+    # Created in a project of their own (infra/terraform/links.tf), where the API can create SAs and
+    # the API and worker can act as them, and nothing else (#15).
+    links_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LINKS_PROJECT", "shipcube-links-ks"))
     link_deployer_sa_template: str = field(default_factory=lambda: os.environ.get(
-        "SHIPCUBE_LINK_DEPLOYER_SA_TEMPLATE", "ws-{ws12}-deployer@{control_project}.iam.gserviceaccount.com"))
+        "SHIPCUBE_LINK_DEPLOYER_SA_TEMPLATE", "ws-{ws12}-deployer@{links_project}.iam.gserviceaccount.com"))
     # The API's own SA: it creates each workspace's deployer SA and checks links by impersonating it.
     api_sa: str = field(default_factory=lambda: os.environ.get(
         "SHIPCUBE_API_SA", "sc-api@shipcube-control-ks.iam.gserviceaccount.com"))

@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 from shipcube_classifier import load_model, obs, rule_class
-from shipcube_profiler import (CodeSummary, Hints, NotRunnable, ProfilerError, Runner, StaticRunner,
+from shipcube_profiler import (CodeSummary, abuse_signals, Hints, NotRunnable, ProfilerError, Runner, StaticRunner,
                                default_runner, materialize, summarize, to_features)
 from shipcube_profiler.sources import UploadFetcher
 
@@ -22,7 +22,8 @@ log = logging.getLogger("shipcube.placement")
 
 def _measured(profile, tr: pl.Traffic) -> dict:
     d = {k: profile.__dict__[k] for k in ("mode", "kind", "wall_s", "cpu_mean_cores", "cpu_p95_cores",
-                                          "mem_peak_gb", "net_calls", "net_blocked", "remote_hosts")}
+                                          "mem_peak_gb", "net_calls", "net_blocked", "remote_hosts",
+                                          "static_reason")}
     d["latency_mean_s"] = tr.latency_s
     return {k: (round(v, 4) if isinstance(v, float) else v) for k, v in d.items()}
 
@@ -76,32 +77,43 @@ def _estimate(estimate_id, source, h: Hints, runner, explainer, fetch_upload, wo
     try:
         summary = CodeSummary()
         app_dir = None
+        reason = None   # shipcube_profiler.STATIC_REASONS code when the estimate is static
         try:
             app_dir = materialize(source, work / "src", fetch_upload=fetch_upload)
             summary = summarize(app_dir)
         except NotRunnable as e:
             notes.append(str(e))
+            reason = "image_source"
 
         profile = None
-        if app_dir is not None and summary.entrypoint:
+        signals: list[str] = []   # kept when a measured run is discarded, for the control plane's strikes
+        if app_dir is not None and summary.entrypoint and summary.uses_gpu_libs:
+            reason = "gpu"   # the sandbox has no GPU; a CPU run would mislead
+        elif app_dir is not None and summary.entrypoint:
             runner = runner or default_runner()
             try:
                 with obs.timed(log, "profile.completed", runner=runner.name, kind=summary.kind):
                     profile = runner.run(app_dir, summary, h)
             except ProfilerError as e:
-                obs.event(log, "profile.failed", logging.WARNING, stage=e.stage, error=str(e)[:300])
+                reason = e.reason
+                obs.event(log, "profile.failed", logging.WARNING, stage=e.stage, reason=e.reason, error=str(e)[:300])
                 notes.append(f"the profiler failed at '{e.stage}'; fell back to static estimates")
             if profile is not None and profile.mode == "measured" and (
                     (summary.kind == "web" and not (profile.requests and profile.requests.ok))
                     or (summary.kind != "web" and profile.exit_code not in (0, None) and not profile.timed_out)):
                 notes.append("the app didn't run cleanly under the profiler; fell back to static estimates")
                 notes += profile.notes
+                reason = "did_not_start" if summary.kind == "web" else "app_failed"
+                signals = profile.abuse_signals
                 profile = None
         elif h.schedule and summary.kind == "web" and not summary.framework:
             summary.kind = "script"
+        if profile is None and reason is None and app_dir is not None and not summary.entrypoint:
+            reason = "no_entrypoint"
         if profile is None:
-            profile = StaticRunner().run(app_dir, summary, h)
-            obs.event(log, "profile.static", logging.WARNING, reasons=notes[:3])
+            profile = StaticRunner(reason=reason).run(app_dir, summary, h)
+            profile.abuse_signals = signals or abuse_signals(profile)
+            obs.event(log, "profile.static", logging.WARNING, reason=reason, notes=notes[:3])
 
         features, assumptions = to_features(profile, h, api_only=summary.api_only)
         shape = "worker" if summary.kind == "script" and profile.timed_out else summary.kind

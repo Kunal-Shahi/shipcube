@@ -1,15 +1,16 @@
 import "server-only";
 
 // Production data source: the control-plane API (services/api/openapi.yaml). Every call
-// goes through lib/server/http.ts. Features whose endpoints don't exist yet throw
-// NotConnectedError instead of returning anything made up; see FEATURE_ENDPOINT.
+// goes through lib/server/http.ts. AVAILABLE lists the features this API serves; a page whose
+// feature isn't listed shows "not available yet" (FEATURE_ENDPOINT names the endpoint it needs).
 
-import { ApiError, NotConnectedError } from "@/lib/errors";
+import { ApiError } from "@/lib/errors";
 import type {
   AccessGrant,
   ApiToken,
   AppDetail,
   AppSummary,
+  BillingOverview,
   Approval,
   ApprovalKind,
   Caps,
@@ -27,11 +28,21 @@ import type {
 } from "@/lib/types";
 import { api } from "../http";
 import { log } from "../log";
-import { FEATURE_ENDPOINT, type ConsoleData, type Feature, type PendingApproval, type WarehouseInput } from "./source";
+import { type ConsoleData, type Feature, type PendingApproval, type WarehouseInput } from "./source";
 
 // --- API shapes (services/api/shipcube_api/models.py) ---------------------------------
 
-interface ApiAppSummary { name: string; url: string; tier: string; status: string; updated_at: string }
+interface ApiAppSummary {
+  name: string;
+  url: string;
+  tier: string;
+  status: string;
+  updated_at: string;
+  /** shipcube, local, or a linked project id. */
+  target?: string;
+  deleted_at?: string | null;
+  restorable_until?: string | null;
+}
 interface ApiAccess { principal: string; role: string; granted_at: string }
 export interface ApiApp extends ApiAppSummary {
   target: string;
@@ -283,8 +294,7 @@ async function optional<T>(what: string, p: Promise<T>): Promise<T | undefined> 
   }
 }
 
-const notConnected = (f: Feature) => new NotConnectedError(FEATURE_ENDPOINT[f].name, FEATURE_ENDPOINT[f].endpoint);
-const AVAILABLE = new Set<Feature>(["tokens", "data", "approvals_inbox", "providers", "gcp_link"]);
+const AVAILABLE = new Set<Feature>(["tokens", "data", "approvals_inbox", "providers", "gcp_link", "billing", "deleted_apps"]);
 
 export interface ApiGcpLink {
   id: string;
@@ -305,6 +315,37 @@ export const linkFromApi = (l: ApiGcpLink): GcpLink => ({
   serviceAccount: l.deployer_sa,
   status: l.status,
   missingPermissions: l.missing_permissions,
+});
+
+interface ApiBilling {
+  credits: { granted_usd: number; used_usd: number; expires_at: string | null };
+  month_to_date_usd: number;
+  forecast_usd: number;
+  by_app: { app: string; billing: "shipcube" | "own-gcp"; compute_usd: number; data_usd: number; llm_usd: number }[];
+  daily: { date: string; cost_usd: number }[];
+  gcp: ApiGcpLink | null;
+  source: string;
+}
+
+export const billingFromApi = (b: ApiBilling): BillingOverview => ({
+  credits: { granted: b.credits.granted_usd, used: b.credits.used_usd, expiresAt: b.credits.expires_at ?? undefined },
+  gcp: b.gcp ? linkFromApi(b.gcp) : { linked: false },
+  monthToDate: b.month_to_date_usd,
+  forecast: b.forecast_usd,
+  byApp: b.by_app.map((a) => ({ appId: a.app, name: a.app, billing: a.billing, compute: a.compute_usd, data: a.data_usd, llm: a.llm_usd })),
+  daily: b.daily.map((d) => ({ t: d.date, value: d.cost_usd })),
+});
+
+/** A list row, including soft-deleted apps (the "Recently deleted" section restores them). */
+export const summaryFromApi = (a: ApiAppSummary): AppSummary => ({
+  id: a.name,
+  name: a.name,
+  tier: tierOf(a.tier),
+  health: a.deleted_at ? "down" : healthOf(a.status),
+  url: a.url,
+  lastDeployAt: a.updated_at,
+  billing: !a.target || a.target === "local" ? undefined : a.target === "shipcube" ? "shipcube" : "own-gcp",
+  deletedAt: a.deleted_at ?? undefined,
 });
 
 interface ApiTokenRow {
@@ -382,10 +423,8 @@ export const httpData: ConsoleData = {
   supports: (f) => AVAILABLE.has(f),
 
   async listApps() {
-    const { apps } = await api<{ apps: ApiAppSummary[] }>("/v1/apps");
-    return apps.map(
-      (a): AppSummary => ({ id: a.name, name: a.name, tier: tierOf(a.tier), health: healthOf(a.status), url: a.url, lastDeployAt: a.updated_at }),
-    );
+    const { apps } = await api<{ apps: ApiAppSummary[] }>("/v1/apps", { query: { include_deleted: "true" } });
+    return apps.map(summaryFromApi);
   },
 
   async getApp(id) {
@@ -495,7 +534,7 @@ export const httpData: ConsoleData = {
     await api<void>(`/v1/ai/providers/${enc(id)}`, { method: "DELETE" });
   },
   async getBilling() {
-    throw notConnected("billing");
+    return billingFromApi(await api<ApiBilling>("/v1/billing"));
   },
   async getGcpLink() {
     // New apps default to ShipCube's project; the console shows the first active link, as billing does.

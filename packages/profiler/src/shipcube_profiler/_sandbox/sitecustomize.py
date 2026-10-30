@@ -9,7 +9,8 @@ import signal
 import socket
 import sys
 
-_stats = {"connect_attempts": 0, "blocked": 0, "remote_hosts": [], "bytes_sent": 0, "bytes_recv": 0}
+_stats = {"connect_attempts": 0, "blocked": 0, "remote_hosts": [], "remote_ports": [], "bytes_sent": 0, "bytes_recv": 0,
+          "tamper_attempts": 0}
 _out = os.environ.get("SHIPCUBE_STATS_FILE")
 _no_egress = os.environ.get("SHIPCUBE_NO_EGRESS") == "1"
 _orig_connect = socket.socket.connect
@@ -31,11 +32,14 @@ def _is_local(host):
 def _check(self, address):
     host = _host(address)
     if self.family in (socket.AF_INET, socket.AF_INET6) and not _is_local(host):
-        _record(host)
+        port = address[1] if isinstance(address, tuple) and len(address) > 1 else None
+        _record(host, port)
 
 
-def _record(host):
+def _record(host, port=None):
     _stats["connect_attempts"] += 1
+    if isinstance(port, int) and port not in _stats["remote_ports"] and len(_stats["remote_ports"]) < 50:
+        _stats["remote_ports"].append(port)
     if host not in _stats["remote_hosts"] and len(_stats["remote_hosts"]) < 50:
         _stats["remote_hosts"].append(host)
     if _no_egress:
@@ -78,6 +82,26 @@ def recv(self, *a):
     return data
 
 
+# Signals aimed at the profiler's agent (or the container's PID 1). The agent runs as
+# another uid, so the kernel refuses these anyway; counting them makes the attempt an
+# abuse signal. Like the socket hooks, a determined app can bypass this (ctypes).
+_guard = {int(p) for p in os.environ.get("SHIPCUBE_GUARD_PIDS", "").split(",") if p.isdigit()}
+_orig_kill, _orig_killpg = os.kill, os.killpg
+
+
+def kill(pid, sig):
+    if pid in _guard or pid == -1:
+        _stats["tamper_attempts"] += 1
+    return _orig_kill(pid, sig)
+
+
+def killpg(pgid, sig):
+    if pgid in _guard:
+        _stats["tamper_attempts"] += 1
+    return _orig_killpg(pgid, sig)
+
+
+os.kill, os.killpg = kill, killpg
 socket.socket.connect, socket.socket.connect_ex = connect, connect_ex
 socket.socket.send, socket.socket.sendall, socket.socket.recv = send, sendall, recv
 socket.getaddrinfo = getaddrinfo

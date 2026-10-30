@@ -24,6 +24,9 @@ agent ─MCP─> /mcp ─in-process─> /v1 (FastAPI) ──writes desired state
 | `deploy/gcp.py` | GCP over REST with `google-auth`: signed uploads, Cloud Build, Cloud Run v2, IAM, IAP, traffic, purge |
 | `deploy/mock.py` | DEV_MODE only |
 | `estimator.py` | `estimate_load` engine: load-estimator's `shipcube_placement` if installed, otherwise a typed `estimator_unavailable` error |
+| `profiler_guard.py` | Who may run the profiler sandbox: admission (2 in flight, 20/day per workspace), the claim's global ceiling (3, 1 per workspace, fairest first), the 10-minute queue limit, the $5/day ($1 per workspace) spend ledger, the brake, and strikes from the profiler's abuse signals (3 in 24 h suspend profiling for 24 h; `mining_pool` until a person clears it). Static estimates say why in `profile.measurements.static_reason` |
+| `upload_guard.py` | Estimate sources can't exhaust the worker: an upload is walked with tarfile's own stream decoder under a 256 MiB decompressed budget, ≤ 20,000 members, ≤ 1,024-byte paths, no sparse files, devices, fifos or links out of the archive, and no bzip2; refused uploads fail with `invalid_argument`. At most 2 upload or git sources are on disk per process |
+| `profiler_janitor.py` | Worker housekeeping: deletes leftover profiler jobs (30 min), builds (10 min) and `profiler-src/` objects (1 h); sets the brake if more than 5 sandbox executions run at once |
 | `telemetry.py` | Logs and metrics interface. The platform workstream installs the real implementation; without it the API answers 501. |
 | `auth.py` | PATs in `api_tokens` (HMAC with a pepper), Identity Platform ID tokens for console users |
 | `db.py`, `migrations/` | Pool, versioned migrations (checksummed, advisory-locked), the startup schema check, and per-transaction role and caller context for row-level security |
@@ -96,7 +99,13 @@ Isolation locally is enforced by the deployer (the same `isolation.py` checks: o
 | `SHIPCUBE_LINK_DEPLOYER_SA_TEMPLATE` | `ws-{ws12}-deployer@{control_project}.iam.gserviceaccount.com` | The per-workspace deployer a user grants roles to (`link-project.sh`); `POST /v1/gcp-targets` checks it with testIamPermissions |
 | `SHIPCUBE_CREDIT_GRANT_USD`, `SHIPCUBE_CREDIT_EXPIRES_AT` | `0`, unset | Credits shown on the billing page against hosted usage (`usage_daily`) |
 | `SHIPCUBE_HOSTED_DEPLOYER_SA` | unset | Impersonate this SA for hosted deploys (production: `sc-hosted-deployer`) |
-| `SHIPCUBE_PROFILER_JOB` | unset | Profiler sandbox job for `estimate_load`; unset means static analysis only |
+| `SHIPCUBE_PROFILER_JOB` | unset | Profiler sandbox job for `estimate_load`; unset means static analysis only (`static_reason=disabled`) |
+| `SHIPCUBE_PROFILER_ENABLED` | `1` | `0` is the manual off switch: every estimate runs static (`disabled`), read on every admission and run |
+| `SHIPCUBE_PROFILER_IN_FLIGHT`, `_PER_DAY`, `_GLOBAL_RUNS`, `_QUEUE_WAIT_S` | `2`, `20`, `3`, `600` | Profiler admission and claim limits (docs/research/profiler-sandbox.md §6) |
+| `SHIPCUBE_PROFILER_DAILY_USD`, `_WORKSPACE_DAILY_USD`, `_RUN_COST_USD` | `5`, `1`, `0.11` | Spend ledger: caps per UTC day, and the worst-case cost charged per profiled run (lower it to `0.05` once profiler builds stop at 300 s) |
+| `SHIPCUBE_ESTIMATE_STATIC_IN_FLIGHT`, `SHIPCUBE_ESTIMATE_UNPACK_MAX_MIB`, `SHIPCUBE_ESTIMATE_SOURCE_SLOTS` | `3`, `256`, `2` | Static estimates in flight per workspace (then 429), the decompressed-size budget for uploads, and sources on disk at once per worker process |
+| `SHIPCUBE_WORKER_LANES` | `deploy,estimate*3` | Worker threads per process (`run_lanes`): one deploy lane, three estimate lanes. `all` claims everything (one thread) |
+| `SHIPCUBE_INTERNAL_AUDIENCE`, `SHIPCUBE_GATEWAY_SA` | unset, `sc-gateway@shipcube-control-ks…` | The AI gateway's shared caps (`/internal/gateway/reserve`, `/settle`, `gateway_counters.py`): only an ID token for that service account with this audience (the API's own URL) is accepted. Unset audience: the routes refuse every caller. |
 | `SHIPCUBE_EMBEDDED_WORKER` | `1` in DEV_MODE, else `0` | Run a worker thread in the API process. Not possible in production: the API's login (`shipcube_app`) is confined to the caller's workspace by RLS, and the worker needs `shipcube_worker`. |
 | `SHIPCUBE_LOG_LEVEL` | `INFO` | |
 
@@ -124,6 +133,7 @@ Hosting ShipCube itself is the platform workstream's job; this section says what
 | Situation | What to do |
 |---|---|
 | See what's happening | `python -m shipcube_api.admin ops` (latest 20), or filter the logs by `jsonPayload.operation_id` |
+| Estimates are all static | `admin profiler` shows the switches, today's spend per workspace, profiled runs in flight and the brake; `admin profiler --clear-brake` lifts the brake after you've found why more than 5 executions ran; `--unsuspend <workspace id>` lifts a suspension (check its strikes in `profiler_strikes` first). |
 | A deploy seems stuck | `admin ops --stuck` lists running operations with expired leases, operations retried more than twice, and queued ones overdue by 5 minutes. An expired lease is picked up again by any worker automatically, resuming at `step_index`. A running build is re-attached by its `build_id`, not restarted. |
 | Retry a failed operation | `admin requeue <id>` resumes from the step that failed |
 | Give up on one | `admin fail <id> --reason "..."` |

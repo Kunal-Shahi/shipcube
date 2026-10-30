@@ -54,7 +54,8 @@ def test_git_source(tmp_path):
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run([*git, "add", "."], check=True)
     subprocess.run([*git, "commit", "-qm", "x"], check=True)
-    root = materialize({"kind": "git", "url": f"file://{repo}", "subdir": "svc"}, tmp_path / "out")
+    root = materialize({"kind": "git", "url": f"file://{repo}", "subdir": "svc"}, tmp_path / "out",
+                       allow_file_urls=True)
     assert (root / "main.py").exists()
 
 

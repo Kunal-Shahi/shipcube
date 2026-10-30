@@ -44,10 +44,25 @@ class CodeSummary:
         return asdict(self)
 
 
+def _inside(root: Path, p: Path) -> bool:
+    """A regular file under root, reached without following any symlink: tenant code must never
+    make the reader open something outside its checkout (e.g. /proc/self/environ)."""
+    try:
+        rel = p.relative_to(root)
+    except ValueError:
+        return False
+    cur = root
+    for part in rel.parts:
+        cur = cur / part
+        if cur.is_symlink():
+            return False
+    return p.is_file()
+
+
 def _py_files(root: Path) -> list[Path]:
     out = []
     for p in sorted(root.rglob("*.py")):
-        if not _SKIP_DIRS.intersection(p.relative_to(root).parts):
+        if not _SKIP_DIRS.intersection(p.relative_to(root).parts) and _inside(root, p):
             out.append(p)
     return out[:500]
 
@@ -97,7 +112,7 @@ def summarize(root: Path, excerpt_lines: int = 60) -> CodeSummary:
     tops = {i.split(".")[0] for i in imports} | imports
 
     req = root / "requirements.txt"
-    if req.exists():
+    if _inside(root, req):
         s.requirements = [ln.strip() for ln in req.read_text().splitlines()
                           if ln.strip() and not ln.startswith("#")][:100]
     req_names = {re.split(r"[<>=\[; ]", r, maxsplit=1)[0].lower() for r in s.requirements}
@@ -113,7 +128,7 @@ def summarize(root: Path, excerpt_lines: int = 60) -> CodeSummary:
     body = "\n".join(text_all)
     s.writes_outputs = sorted(set(re.findall(r"""\.(html|csv|json|parquet|md|png)['"]""", body)))
 
-    candidates = [root / n for n in ENTRY_NAMES if (root / n).exists()]
+    candidates = [root / n for n in ENTRY_NAMES if _inside(root, root / n)]
     entry = candidates[0] if candidates else (mains[0] if mains else (files[0] if files else None))
     if entry is not None:
         s.entrypoint = str(entry.relative_to(root))
