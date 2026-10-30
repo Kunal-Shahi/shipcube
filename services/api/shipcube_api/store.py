@@ -56,10 +56,14 @@ CAP_KIND = {"max_instances": "max_instances", "concurrency": "concurrency", "cpu
             "timeout_s": "request_timeout_s", "requests_per_minute": "requests_per_minute",
             "monthly_spend_usd": "spend_usd_per_month"}
 KIND_CAP = {v: k for k, v in CAP_KIND.items()}
-CAP_PERIOD = {"requests_per_minute": "minute", "spend_usd_per_month": "month", "deploys_per_day": "day"}
+CAP_PERIOD = {"requests_per_minute": "minute", "spend_usd_per_month": "month", "deploys_per_day": "day",
+              "ai_tokens_per_day": "day"}
 WORKSPACE_DEFAULTS: dict[str, float] = {
     "max_instances": 2, "concurrency": 80, "cpu": 1, "memory_mib": 512, "request_timeout_s": 60,
     "requests_per_minute": 120, "spend_usd_per_month": 5, "max_apps": 3, "deploys_per_day": 20,
+    # AI tokens per day on ShipCube's key, across the workspace's apps (the gateway's
+    # GATEWAY_WORKSPACE_TOKENS_PER_DAY default; each app also gets 200k unless set).
+    "ai_tokens_per_day": 1_000_000,
 }
 ENFORCED_BY = {
     "max_instances": "Cloud Run --max-instances",
@@ -243,7 +247,7 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
                     "role": "owner" if g["principal_type"] == "user" and g["principal"] == creator else "viewer",
                     "granted_at": _iso(g["created_at"]), "sync_state": g["sync_state"]} for g in grants(conn, app["id"])],
         "ai": {"provider": ai["provider"], "model": ai["model"], "key_secret": ai["key_secret"]} if ai
-        else {"provider": "meta", "model": "muse-spark", "key_secret": None},
+        else {"provider": "meta", "model": "muse-spark-1.3", "key_secret": None},
         "updated_at": _iso(dep["finished_at"] if dep and dep["finished_at"] else app["created_at"]),
         "deleted_at": _iso(app["deleted_at"]), "restorable_until": _iso(app["purge_after"]),
         "estimate": {"estimate_id": est["reasoning"].get("estimate_id"), "workload_class": est["workload_class"],

@@ -191,7 +191,7 @@ class ApprovalDecision(_Model):
 
 class AiConfigRequest(_Model):
     provider: Literal["meta", "openai_compatible", "openai", "anthropic"] = "meta"
-    model: str = "muse-spark"
+    model: str = "muse-spark-1.3"  # the only Muse id Meta serves (and the gateway prices and allows)
     key_secret: str | None = Field(None, description="Optional: the provider's key saved in the console (ai-provider-<provider>); no other secret is accepted")
     base_url: str | None = Field(None, description="Console only: must equal the endpoint saved with the openai_compatible key")
 
