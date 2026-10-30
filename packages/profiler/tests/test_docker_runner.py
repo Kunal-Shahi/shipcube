@@ -285,3 +285,76 @@ def test_oversized_image_is_refused_and_removed(tmp_path, monkeypatch):
     tag = hashlib.sha256(_package(root, compress=False)).hexdigest()[:16]
     assert subprocess.run(["docker", "image", "inspect", f"shipcube-profiler-app:{tag}"],
                           capture_output=True).returncode != 0
+
+
+# --- agent integrity (red team on #57): the upload and its wheels can't become the agent ---
+
+FORGE = ('import os, sys\n'
+         'n = os.environ.get("SHIPCUBE_RESULT_NONCE")\n'
+         'if n:\n'
+         '    sys.stdout.write("SHIPCUBE_PROFILE {\\"nonce\\": \\"%s\\", \\"summary\\": {}, \\"profile\\": '
+         '{\\"mode\\": \\"measured\\", \\"runner\\": \\"x\\", \\"kind\\": \\"script\\", \\"cpu_mean_cores\\": 42.0}}\\n" % n)\n'
+         '    sys.stdout.flush()\n')
+
+
+def _genuine(p):
+    return p.mode == "measured" and p.cpu_mean_cores < 5 and p.exit_code == 0
+
+
+@needs_docker
+def test_upload_cannot_shadow_the_agent(tmp_path):
+    """WORKDIR /app plus `python -m` used to put the upload first on the agent's sys.path."""
+    root, s = _app(tmp_path, "print('hi')\n")
+    for rel in ("shipcube_profiler/__init__.py", "shipcube_profiler/agent.py", "json.py", "hmac.py", "ctypes.py",
+                "psutil.py", "sitecustomize.py", "usercustomize.py"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(FORGE)
+    p = DockerRunner().run(root, summarize(root), Hints())
+    assert _genuine(p), p
+
+
+def _wheel(tmp_path) -> tuple[str, bytes]:
+    """evilpkg: a .pth, a .data stdlib overwrite and a psutil shadow, each forging the result."""
+    import base64
+    import hashlib
+    import io
+    import zipfile
+    files = {
+        "evilpkg/__init__.py": "VALUE = 1\n",
+        "zz_evil.pth": "import os, sys; exec(" + repr(FORGE) + ")\n",
+        "psutil/__init__.py": FORGE + "raise ImportError('shadowed psutil')\n",
+        "evilpkg-1.0.data/data/lib/python3.12/json/__init__.py": FORGE,
+        "evilpkg-1.0.data/data/lib/python3.12/site-packages/zz_data.pth": "import os, sys; exec(" + repr(FORGE) + ")\n",
+        "evilpkg-1.0.dist-info/METADATA": "Metadata-Version: 2.1\nName: evilpkg\nVersion: 1.0\n",
+        "evilpkg-1.0.dist-info/WHEEL": "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    }
+    record = []
+    for name, text in files.items():
+        digest = base64.urlsafe_b64encode(hashlib.sha256(text.encode()).digest()).rstrip(b"=").decode()
+        record.append(f"{name},sha256={digest},{len(text.encode())}")
+    files["evilpkg-1.0.dist-info/RECORD"] = "\n".join(record + ["evilpkg-1.0.dist-info/RECORD,,"]) + "\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, text in files.items():
+            z.writestr(name, text)
+    return "evilpkg-1.0-py3-none-any.whl", buf.getvalue()
+
+
+@needs_docker
+def test_malicious_wheel_cannot_touch_the_agent(tmp_path):
+    from shipcube_profiler.gcp_runner import _package, render_dockerfile
+    root, s = _app(tmp_path, "import evilpkg\nprint(evilpkg.VALUE)\n")
+    name, data = _wheel(tmp_path)
+    # Same layers as production; only the package source differs (a local wheel, no index).
+    dockerfile = render_dockerfile(app_install="--no-index --find-links /opt/wheels evilpkg",
+                                   extra="COPY wheels/ /opt/wheels/\n")
+    r = DockerRunner()
+    image = r.build(root, context=_package(root, compress=False, dockerfile=dockerfile,
+                                           extra_files={f"wheels/{name}": data}))
+    listing = subprocess.run(["docker", "run", "--rm", "--entrypoint", "sh", image, "-c",
+                              "ls /opt/appdeps; python -S -c 'import json; print(json.__file__)'"],
+                             capture_output=True, text=True).stdout
+    assert "evilpkg" in listing and "psutil" in listing          # the wheel really installed
+    assert "/usr/local/lib/python3.12/json/__init__.py" in listing   # stdlib untouched
+    p = r.run(root, s, Hints(), image=image)
+    assert _genuine(p), p                                          # the app ran with its wheel; the agent was untouched

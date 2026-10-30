@@ -63,26 +63,51 @@ BUILD_TERMINAL = {"SUCCESS", "FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED"
 # (docker_runner.py), so both profile the app in the same image. Requirements install
 # at build time (with network); the profiling run itself has none. They are the
 # sanitized list (policy.sanitize_requirements), installed wheels-only from pypi.org, so
-# no package code runs during the build. The app runs as an unprivileged user with a
-# read-only /app; only /tmp is writable.
+# no package code runs during the build.
+#
+# The agent's interpreter stays pristine, because the app's wheels come from anyone on PyPI:
+# - The app's deps install as an unprivileged user (uid APPDEPS_UID) with --target into
+#   /opt/appdeps. That isn't a site dir, so a wheel's .pth files never run there, and
+#   the installer can't write the stdlib or site-packages (made read-only first).
+#   /opt/appdeps is on the app subprocess's PYTHONPATH only (SHIPCUBE_APP_DEPS).
+# - The agent runs as `python -S -P` (no site, so no .pth or sitecustomize; no cwd on
+#   sys.path) from /opt/shipcube, which bundles its own psutil. WORKDIR is /, so the
+#   upload in /app is never importable by the agent; the app's subprocess runs in /app.
+# The app runs as another unprivileged user (SANDBOX_UID) with a read-only /app; only
+# /tmp is writable.
 SANDBOX_UID = 10001
+APPDEPS_UID = 10002
 REQUIREMENTS_FILE = "shipcube-requirements.txt"
-DOCKERFILE = f"""\
+APP_INSTALL = f"--index-url {PYPI_INDEX} -r /opt/{REQUIREMENTS_FILE}"
+
+
+def render_dockerfile(app_install: str = APP_INSTALL, extra: str = "") -> str:
+    """The sandbox Dockerfile. `app_install` and `extra` exist for tests that install a
+    local wheel through the same layer as production; production uses the defaults."""
+    return f"""\
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 \\
-    PIP_ONLY_BINARY=:all: PIP_INDEX_URL={PYPI_INDEX} \\
-    HOME=/tmp TMPDIR=/tmp PYTHONPATH=/opt/shipcube
-RUN pip install --only-binary=:all: --index-url {PYPI_INDEX} "psutil>=6.0,<8" \\
- && useradd --uid {SANDBOX_UID} --no-create-home --shell /usr/sbin/nologin sandbox
+    PIP_ONLY_BINARY=:all: HOME=/tmp TMPDIR=/tmp PYTHONPATH=/opt/shipcube SHIPCUBE_APP_DEPS=/opt/appdeps
+RUN pip install --only-binary=:all: --index-url {PYPI_INDEX} --target /opt/shipcube "psutil>=6.0,<8" \\
+ && useradd --uid {SANDBOX_UID} --no-create-home --shell /usr/sbin/nologin sandbox \\
+ && useradd --uid {APPDEPS_UID} --no-create-home --shell /usr/sbin/nologin appdeps \\
+ && chmod -R a-w /usr/local/lib/python3.12 /opt/shipcube \\
+ && mkdir /opt/appdeps && chown {APPDEPS_UID}:{APPDEPS_UID} /opt/appdeps
 COPY {REQUIREMENTS_FILE} /opt/{REQUIREMENTS_FILE}
-RUN pip install --only-binary=:all: --index-url {PYPI_INDEX} -r /opt/{REQUIREMENTS_FILE}
+{extra}USER {APPDEPS_UID}:{APPDEPS_UID}
+RUN pip install --only-binary=:all: --target /opt/appdeps {app_install}
+USER root
+RUN chown -R root:root /opt/appdeps && chmod -R a-w /opt/appdeps
 COPY app/ /app/
 COPY shipcube/ /opt/shipcube/
 RUN chmod -R a-w /app /opt/shipcube
 USER {SANDBOX_UID}:{SANDBOX_UID}
-WORKDIR /app
-ENTRYPOINT ["python", "-m", "shipcube_profiler.agent", "/app"]
+WORKDIR /
+ENTRYPOINT ["python", "-S", "-P", "-m", "shipcube_profiler.agent", "/app"]
 """
+
+
+DOCKERFILE = render_dockerfile()
 
 
 @dataclass(frozen=True)
@@ -112,7 +137,8 @@ class GcpProfilerConfig:
                    build_service_account=e.get("SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT") or None)
 
 
-def _package(app_dir: Path, compress: bool = True) -> bytes:
+def _package(app_dir: Path, compress: bool = True, *, dockerfile: str = DOCKERFILE,
+             extra_files: dict[str, bytes] | None = None) -> bytes:
     """Tarball: app/ (the user's code), shipcube/ (profiler + classifier features), the
     sanitized requirements and the Dockerfile.
 
@@ -142,7 +168,9 @@ def _package(app_dir: Path, compress: bool = True) -> bytes:
         tar.addfile(ti, io.BytesIO(data))
 
     with tarfile.open(fileobj=buf, mode="w:gz" if compress else "w") as tar:
-        add_bytes(tar, "Dockerfile", DOCKERFILE.encode())
+        add_bytes(tar, "Dockerfile", dockerfile.encode())
+        for name, data in sorted((extra_files or {}).items()):   # tests only
+            add_bytes(tar, name, data)
         add_bytes(tar, REQUIREMENTS_FILE, "".join(r + "\n" for r in reqs).encode())
         for p in files:
             tar.add(p, arcname=f"app/{p.relative_to(app_dir)}", recursive=False, filter=norm)

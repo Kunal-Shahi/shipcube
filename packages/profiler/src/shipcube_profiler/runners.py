@@ -280,7 +280,12 @@ def _sandbox_env(app_dir: Path, home: Path, stats_file: Path, hints: Hints, port
         "HOME": str(home),
         "TMPDIR": str(home),
         "LANG": "C.UTF-8",
-        "PYTHONPATH": f"{SANDBOX_DIR}{os.pathsep}{app_dir}",
+        # The instrumentation's sitecustomize first, then the app, then the app's deps
+        # (installed with --target outside any site dir; see gcp_runner.render_dockerfile).
+        "PYTHONPATH": os.pathsep.join(
+            [str(SANDBOX_DIR), str(app_dir)] + ([os.environ["SHIPCUBE_APP_DEPS"]]
+                                                 if os.environ.get("SHIPCUBE_APP_DEPS") else [])),
+        "PYTHONNOUSERSITE": "1",   # no usercustomize to undo the instrumentation
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1",
         "SHIPCUBE_PROFILE": "1",

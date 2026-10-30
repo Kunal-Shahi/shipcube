@@ -261,6 +261,13 @@ def test_dockerfile_installs_wheels_only_from_pypi():
     assert installs and all("--only-binary=:all:" in ln and "--index-url https://pypi.org/simple" in ln
                             for ln in installs)
     assert "/app/requirements.txt" not in DOCKERFILE and f"-r /opt/{REQUIREMENTS_FILE}" in DOCKERFILE
+    # The agent's interpreter stays pristine (red team on #57).
+    assert 'ENTRYPOINT ["python", "-S", "-P", "-m", "shipcube_profiler.agent", "/app"]' in DOCKERFILE
+    assert "WORKDIR /\n" in DOCKERFILE and "WORKDIR /app" not in DOCKERFILE
+    lines = DOCKERFILE.splitlines()
+    app_install = next(i for i, ln in enumerate(lines) if f"-r /opt/{REQUIREMENTS_FILE}" in ln)
+    assert "--target /opt/appdeps" in lines[app_install] and lines[app_install - 1] == "USER 10002:10002"
+    assert "--target /opt/shipcube" in DOCKERFILE and "chmod -R a-w /usr/local/lib/python3.12" in DOCKERFILE
     with tarfile.open(fileobj=io.BytesIO(_package(SAMPLES / "dashboard")), mode="r:gz") as tar:
         reqs = tar.extractfile(REQUIREMENTS_FILE).read().decode()
     assert "flask" in reqs.lower()

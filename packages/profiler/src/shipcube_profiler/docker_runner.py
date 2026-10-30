@@ -132,9 +132,10 @@ class DockerRunner:
         except (ProfilerError, subprocess.TimeoutExpired):
             return False
 
-    def build(self, app_dir: Path) -> str:
-        """Build (or reuse) the sandbox image for this code; returns its tag."""
-        context = _package(app_dir, compress=False)
+    def build(self, app_dir: Path, context: bytes | None = None) -> str:
+        """Build (or reuse) the sandbox image for this code; returns its tag. `context`
+        replaces the packaged app (tests that install a local wheel)."""
+        context = context or _package(app_dir, compress=False)
         image = f"{IMAGE_REPO}:{hashlib.sha256(context).hexdigest()[:16]}"
         if self._docker("image", "inspect", image, timeout=30).returncode == 0:
             obs.event(log, "profile.docker_image", image=image, cached=True)
@@ -172,12 +173,12 @@ class DockerRunner:
         obs.event(log, "profile.docker_image", image=image, cached=False, size=int(size or 0))
         return image
 
-    def run(self, app_dir: Path, summary: CodeSummary, hints: Hints) -> Profile:
+    def run(self, app_dir: Path, summary: CodeSummary, hints: Hints, *, image: str | None = None) -> Profile:
         run_id = obs.context().get("estimate_id", f"r{uuid.uuid4().hex[:12]}")
         name = "prof-" + re.sub(r"[^a-z0-9-]", "-", run_id.lower())[:40].strip("-")
         nonce = secrets.token_hex(16)
         with obs.timed(log, "profile.docker", run_id=run_id) as extra:
-            image = self.build(app_dir)
+            image = image or self.build(app_dir)
             args = run_args(self.config, image, name, hints, nonce)
             try:
                 r = subprocess.run(args, capture_output=True, timeout=self.config.timeout_s + 30)

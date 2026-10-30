@@ -138,7 +138,10 @@ Design:
    - Reuse the C-1 pattern that hosted builds already use (`sc-build-<id>`): each workspace gets `profiler-build-<ws>`.
    - Its bucket read is scoped to the `profiler-src/<ws>/` prefix, and the runner uploads there. It gets AR write on `profiler` limited to the `prof-<ws>-*` image prefix through a tag condition, or one AR repo per workspace if conditions on AR don't allow it.
    - Until then, the shared `profiler-build` SA can read any tenant's `profiler-src/` tarball for up to one day. That's acceptable only while build steps run no user code, so (1) must ship first.
-5. **The Dockerfile stays generated.** User files are copied to `/app` and never interpreted as a Dockerfile; this is already true. A user `Dockerfile` in the upload is ignored.
+5. **The agent's interpreter stays pristine.** Added after the red team's review of #57. Wheels-only stops code running at build time, but a wheel from PyPI could still ship a `.pth` file, overwrite stdlib files through `.data`, or shadow psutil, and so take over the agent at run time. So:
+   - the app's deps install as an unprivileged user with `--target /opt/appdeps`, on the app's `PYTHONPATH` only;
+   - the agent runs `python -S -P` with `WORKDIR /` from a read-only `/opt/shipcube` that bundles psutil.
+6. **The Dockerfile stays generated.** User files are copied to `/app` and never interpreted as a Dockerfile; this is already true. A user `Dockerfile` in the upload is ignored.
 
 ## 5. Hard caps per run
 

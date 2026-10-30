@@ -29,6 +29,11 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
   - Each run gets a random nonce (`SHIPCUBE_RESULT_NONCE`), and the runner accepts only the result line carrying it.
   - The agent makes itself non-dumpable (`prctl(PR_SET_DUMPABLE, 0)`). The app, running as the same uid, then can't read the agent's `/proc/<pid>/environ` or write to its stdout.
   - A forged line yields `static_reason=result_rejected`.
+- **Agent integrity:** the app and its wheels can't become the agent.
+  - The app's deps are installed by an unprivileged user with `pip --target /opt/appdeps`. That isn't a site dir, so no `.pth` runs, and the stdlib and site-packages are read-only. They're on the app subprocess's `PYTHONPATH` only.
+  - The agent runs as `python -S -P` from a read-only `/opt/shipcube` with its own psutil, with `WORKDIR /`, so the upload is never on its `sys.path`.
+  - The app gets `PYTHONNOUSERSITE=1`.
+  - Tested with an upload that shadows the agent's modules and with a local malicious wheel (`.pth`, a `.data` stdlib overwrite, a psutil shadow). Against the previous image design both attacks got into the agent; now both runs are genuine.
 - **Static fallbacks:** `estimate()` reports `profile.measurements.static_reason`, one of `STATIC_REASONS`. The control plane forces one with `StaticRunner(reason="quota" | "budget" | "suspended" | "busy" | "disabled")`.
 - **Abuse signals:** `profile.measurements.abuse_signals`, computed host-side by `abuse_signals(profile)`, for the control plane's strikes.
 - **Uploads:** checked for unpacked size (1 GiB) and entry count (20,000) before extraction.
