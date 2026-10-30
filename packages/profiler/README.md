@@ -16,12 +16,29 @@ Runs an app on sample input and measures CPU, RSS, disk and network I/O, wall ti
 
 Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and `samples/nightly_batch` (a nightly job).
 
+## Sandbox safety (docs/research/profiler-sandbox.md, Phase 1)
+
+- **Build** (`policy.py`):
+  - `requirements.txt` is sanitized to plain PyPI requirements: no URLs, VCS, paths, options or custom indexes.
+  - Installs are wheels-only (`--only-binary=:all:`) from pypi.org, so no package code runs at build time.
+  - Caps: at most 60 requirements, 500 MiB / 10,000 source files, a 300 s build, and a 2 GiB image (checked by a `size-check` build step, or `docker image inspect` locally).
+- **Run** (the agent, inside the container):
+  - existing limits: CPU, memory (RLIMIT_AS plus the RSS watchdog) and file size,
+  - plus `RLIMIT_NPROC` 256, a 512 MiB disk-write watchdog, and stderr kept as a 64 KiB tail (drained continuously).
+- **Result integrity:**
+  - Each run gets a random nonce (`SHIPCUBE_RESULT_NONCE`), and the runner accepts only the result line carrying it.
+  - The agent makes itself non-dumpable (`prctl(PR_SET_DUMPABLE, 0)`). The app, running as the same uid, then can't read the agent's `/proc/<pid>/environ` or write to its stdout.
+  - A forged line yields `static_reason=result_rejected`.
+- **Static fallbacks:** `estimate()` reports `profile.measurements.static_reason`, one of `STATIC_REASONS`. The control plane forces one with `StaticRunner(reason="quota" | "budget" | "suspended" | "busy" | "disabled")`.
+- **Abuse signals:** `profile.measurements.abuse_signals`, computed host-side by `abuse_signals(profile)`, for the control plane's strikes.
+- **Uploads:** checked for unpacked size (1 GiB) and entry count (20,000) before extraction.
+
 ## Configure
 
 | Variable | Purpose |
 |---|---|
 | `SHIPCUBE_PROFILER` | `gcp`, `local` (Docker sandbox) or `inproc` (DEV_MODE only) |
-| `SHIPCUBE_PROFILER_DOCKER`, `_CPUS`, `_MEMORY_MB`, `_PIDS`, `_TIMEOUT_S`, `_TMPFS_MB` | Local sandbox limits; the defaults match the Cloud Run job |
+| `SHIPCUBE_PROFILER_DOCKER`, `_CPUS`, `_MEMORY_MB`, `_PIDS`, `_TIMEOUT_S`, `_TMPFS_MB`, `_DISK_MB`, `_BUILD_TIMEOUT_S` | Local sandbox limits; the defaults match the Cloud Run job |
 | `SHIPCUBE_DEV_MODE` | `1` for in-process runs only |
 | `SHIPCUBE_PROFILER_PROJECT`, `_REGION`, `_BUCKET`, `_REPOSITORY`, `_NETWORK`, `_SUBNET`, `_SERVICE_ACCOUNT` | Required in production |
 | `SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT` | Optional build identity |

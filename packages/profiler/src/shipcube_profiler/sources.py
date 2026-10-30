@@ -16,6 +16,8 @@ from pathlib import Path, PurePosixPath
 
 INLINE_MAX_FILES = 50
 INLINE_MAX_BYTES = 256 * 1024
+UNPACKED_MAX_FILES = 20_000      # the sandbox itself takes up to 10,000 (policy.py); bigger is refused
+UNPACKED_MAX_BYTES = 1 * 2**30   # outright, beyond that the estimate is static (too_large)
 
 
 class SourceError(ValueError):
@@ -77,7 +79,14 @@ def materialize(source: dict, dest: Path, *, fetch_upload: UploadFetcher | None 
             raise SourceError("upload sources need an upload fetcher (GCS in production)")
         tarball = fetch_upload(source["upload_id"])
         with tarfile.open(tarball, "r:*") as tar:
-            tar.extractall(dest, filter="data")  # rejects absolute paths, links out of dest
+            # Check the declared sizes before writing anything: a small compressed upload
+            # can unpack to far more than the worker's disk.
+            members = tar.getmembers()
+            if len(members) > UNPACKED_MAX_FILES:
+                raise SourceError(f"upload has {len(members)} entries; the limit is {UNPACKED_MAX_FILES}")
+            if sum(m.size for m in members if m.isfile()) > UNPACKED_MAX_BYTES:
+                raise SourceError(f"upload unpacks to more than {UNPACKED_MAX_BYTES // 2**20} MiB")
+            tar.extractall(dest, members=members, filter="data")  # rejects absolute paths, links out of dest
         return dest
     if kind == "image":
         raise NotRunnable("container images are profiled on GCP only; using static hints")

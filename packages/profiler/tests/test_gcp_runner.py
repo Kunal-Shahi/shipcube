@@ -9,7 +9,7 @@ import pytest
 from shipcube_classifier.gcp import GcpClient, GcpError
 from shipcube_profiler import (CloudRunJobRunner, GcpProfilerConfig, Hints, LocalRunner, Profile, ProfilerError,
                                default_runner, summarize)
-from shipcube_profiler.agent import RESULT_PREFIX
+from shipcube_profiler.agent import NONCE_ENV, RESULT_PREFIX
 from shipcube_profiler.gcp_runner import _package
 
 SAMPLES = Path(__file__).resolve().parents[1] / "samples"
@@ -20,13 +20,23 @@ CFG = GcpProfilerConfig(project="p", region="asia-south1", bucket="b", repositor
 class FakeClient:
     """Scripted GCP: answers each REST call the runner makes, records them."""
 
-    def __init__(self, build_status="SUCCESS", succeeded=1, log_text=None, fail_at=None, throttle=False):
+    def __init__(self, build_status="SUCCESS", succeeded=1, log_text=None, fail_at=None, throttle=False,
+                 failed_step="build", forged=None, conflict=False):
         self.calls = []
-        self.throttle = throttle
+        self.throttle, self.conflict = throttle, conflict
         self.build_status, self.succeeded, self.fail_at = build_status, succeeded, fail_at
-        prof = Profile(mode="measured", runner="local", kind="script", wall_s=1.2, cpu_mean_cores=0.9)
-        self.log_text = log_text if log_text is not None else RESULT_PREFIX + json.dumps(
-            {"summary": {}, "profile": prof.to_dict()})
+        self.failed_step, self.forged = failed_step, forged
+        self.prof = Profile(mode="measured", runner="local", kind="script", wall_s=1.2, cpu_mean_cores=0.9)
+        self.log_text = log_text
+
+    def _result_lines(self):
+        """What the agent prints: the result line with the nonce from the job's env."""
+        if self.log_text is not None:
+            return [self.log_text]
+        create = [c for c in self.calls if c[0] == "POST" and c[1].endswith("/jobs")][-1]
+        env = {e["name"]: e["value"] for e in create[2]["json"]["template"]["template"]["containers"][0]["env"]}
+        lines = [RESULT_PREFIX + json.dumps({"nonce": env[NONCE_ENV], "summary": {}, "profile": self.prof.to_dict()})]
+        return lines + ([self.forged] if self.forged else [])
 
     def _maybe_fail(self, what):
         if self.fail_at == what:
@@ -47,12 +57,14 @@ class FakeClient:
         if url.endswith(":run"):
             return {"name": "projects/p/locations/asia-south1/operations/run-op"}
         if "run.googleapis.com" in url:
+            if self.conflict and sum(c[1].endswith("/jobs") for c in self.calls) == 1:
+                raise GcpError(409, "already exists", method="POST", url=url)
             return {"name": "projects/p/locations/asia-south1/operations/create-op"}
         if "logging" in url:
             self.log_calls = getattr(self, "log_calls", 0) + 1
             if self.throttle and self.log_calls == 1:
                 raise GcpError(429, "Quota exceeded for 'Read requests'", method="POST", url=url)
-            return {"entries": [{"textPayload": self.log_text}]}
+            return {"entries": [{"textPayload": t} for t in self._result_lines()]}
         raise AssertionError(url)
 
     def get(self, url, **kw):
@@ -61,7 +73,11 @@ class FakeClient:
         self.build_polls = getattr(self, "build_polls", 0) + 1
         if self.build_polls == 1:
             return {"id": "b1", "status": "WORKING"}
-        return {"id": "b1", "status": self.build_status, "results": {"images": [{"digest": "sha256:abc"}]}}
+        steps = [{"id": "build", "status": "SUCCESS"}, {"id": "size-check", "status": "SUCCESS"}]
+        if self.build_status != "SUCCESS":
+            next(st for st in steps if st["id"] == self.failed_step)["status"] = "FAILURE"
+        return {"id": "b1", "status": self.build_status, "steps": steps,
+                "results": {"images": [{"digest": "sha256:abc"}]}}
 
     def wait_operation(self, url, **kw):
         self.calls.append(("WAIT", url, kw))
@@ -183,3 +199,68 @@ def test_gcp_integration_profiles_the_batch_sample():
                                 Hints(schedule="0 2 * * *"))
     assert p.runner == "gcp" and p.exit_code == 0 and p.cpu_seconds > 0
     assert p.net_blocked >= 1          # the webhook can't get out of the sandbox
+
+
+# --- Phase 1 sandbox hardening (docs/research/profiler-sandbox.md) ----------------------
+
+def test_result_line_needs_this_runs_nonce():
+    forged = RESULT_PREFIX + json.dumps({"nonce": "guess", "summary": {}, "profile": {"mode": "measured"}})
+    with pytest.raises(ProfilerError) as e:
+        run(FakeClient(forged=forged))
+    assert e.value.reason == "result_rejected"
+    with pytest.raises(ProfilerError) as e:   # a line with no nonce at all
+        run(FakeClient(log_text=RESULT_PREFIX + json.dumps({"summary": {}, "profile": {}})))
+    assert e.value.reason == "result_rejected"
+
+
+def test_each_run_gets_a_fresh_nonce_in_the_job_env():
+    fake = FakeClient()
+    run(fake)
+    run(fake)
+    creates = [c for c in fake.calls if c[0] == "POST" and c[1].endswith("/jobs")]
+    nonces = [{e["name"]: e["value"] for e in c[2]["json"]["template"]["template"]["containers"][0]["env"]}[NONCE_ENV]
+              for c in creates]
+    assert len(set(nonces)) == 2 and all(len(n) == 32 for n in nonces)
+
+
+def test_leftover_job_is_replaced_not_reused():
+    fake = FakeClient(conflict=True)
+    p = run(fake)
+    assert p.mode == "measured"   # the result carries the new run's nonce
+    i = [n for n, c in enumerate(fake.calls) if c[0] == "POST" and c[1].endswith("/jobs")]
+    assert len(i) == 2 and any(c[0] == "DELETE" and "/jobs/prof-" in c[1] for c in fake.calls[i[0]:i[1]])
+
+
+@pytest.mark.parametrize("step,reason", [("build", "build_failed"), ("size-check", "too_large")])
+def test_build_failures_carry_a_reason(step, reason):
+    with pytest.raises(ProfilerError) as e:
+        run(FakeClient(build_status="FAILURE", failed_step=step))
+    assert e.value.stage == "build" and e.value.reason == reason
+
+
+def test_build_is_capped_and_checks_image_size():
+    spec = CloudRunJobRunner(CFG, client=FakeClient()).build_spec("o", "img")
+    assert spec["timeout"] == "300s"
+    ids = [st["id"] for st in spec["steps"]]
+    assert ids == ["build", "size-check"]
+    assert "2147483648" in spec["steps"][1]["args"][1] and "$$(" in spec["steps"][1]["args"][1]
+
+
+def test_policy_errors_happen_before_anything_is_created(tmp_path):
+    (tmp_path / "main.py").write_text("print(1)\n")
+    (tmp_path / "requirements.txt").write_text("evil @ https://x.example/evil.tar.gz\n")
+    fake = FakeClient()
+    with pytest.raises(ProfilerError) as e:
+        CloudRunJobRunner(CFG, client=fake).run(tmp_path, summarize(tmp_path), Hints())
+    assert e.value.reason == "requirements_policy" and fake.calls == []
+
+
+def test_dockerfile_installs_wheels_only_from_pypi():
+    from shipcube_profiler.gcp_runner import DOCKERFILE, REQUIREMENTS_FILE
+    installs = [ln for ln in DOCKERFILE.splitlines() if "pip install" in ln]
+    assert installs and all("--only-binary=:all:" in ln and "--index-url https://pypi.org/simple" in ln
+                            for ln in installs)
+    assert "/app/requirements.txt" not in DOCKERFILE and f"-r /opt/{REQUIREMENTS_FILE}" in DOCKERFILE
+    with tarfile.open(fileobj=io.BytesIO(_package(SAMPLES / "dashboard")), mode="r:gz") as tar:
+        reqs = tar.extractfile(REQUIREMENTS_FILE).read().decode()
+    assert "flask" in reqs.lower()

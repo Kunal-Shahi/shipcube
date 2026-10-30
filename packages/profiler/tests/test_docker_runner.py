@@ -198,3 +198,90 @@ def test_no_host_environment_leaks(tmp_path, monkeypatch):
     root, s = _app(tmp_path, "import os, sys\nsys.exit(5 if any('sentinel' in v for v in os.environ.values()) else 0)\n")
     assert DockerRunner().run(root, s, Hints()).exit_code == 0
     assert os.environ["META_API_KEY"] == "sentinel-not-a-real-key"
+
+
+# --- Phase 1 hardening (docs/research/profiler-sandbox.md §4-8) -------------------------
+
+def test_run_args_pass_nonce_and_agent_caps():
+    cfg = DockerSandboxConfig(pids=256, disk_mb=512)
+    a = run_args(cfg, "img:tag", "prof-x", Hints(), nonce="n0nce")
+    env = dict(a[i + 1].split("=", 1) for i, x in enumerate(a) if x == "--env")
+    assert env["SHIPCUBE_RESULT_NONCE"] == "n0nce"
+    assert env["SHIPCUBE_AGENT_NPROC"] == "256" and env["SHIPCUBE_AGENT_DISK_MB"] == "512"
+    assert DockerSandboxConfig().build_timeout_s == 300
+
+
+FORGER = r'''
+import json, os, sys
+agent = os.getppid()
+problems = []
+try:
+    open(f"/proc/{agent}/environ", "rb").read()
+    problems.append("read the agent's environment")
+except OSError:
+    pass
+fake = "SHIPCUBE_PROFILE " + json.dumps({"nonce": "guess", "summary": {}, "profile": {"mode": "measured",
+        "runner": "docker", "kind": "script", "cpu_mean_cores": 9.9}}) + "\n"
+for target in (f"/proc/{agent}/fd/1", "/proc/1/fd/1"):
+    try:
+        with open(target, "w") as f:
+            f.write(fake)
+        problems.append("wrote to " + target)
+    except OSError:
+        pass
+print(fake)                    # the app's own stdout goes nowhere
+sys.exit(7 if problems else 0)
+'''
+
+
+@needs_docker
+def test_app_cannot_read_the_nonce_or_forge_the_result(tmp_path):
+    root, s = _app(tmp_path, FORGER)
+    p = DockerRunner().run(root, s, Hints())
+    assert p.exit_code == 0, "the app reached the agent's /proc entries"
+    assert p.cpu_mean_cores < 5 and p.abuse_signals == []
+
+
+@needs_docker
+def test_fork_bomb_is_stopped(tmp_path):
+    root, s = _app(tmp_path, "import os, time\nwhile True:\n    try:\n        os.fork() or time.sleep(60)\n"
+                             "    except OSError:\n        time.sleep(0.01)\n")
+    p = DockerRunner(DockerSandboxConfig(timeout_s=60)).run(root, s, Hints())
+    assert p.killed_reason and "processes" in p.killed_reason
+    assert "fork_bomb" in p.abuse_signals
+
+
+@needs_docker
+def test_disk_filler_is_stopped(tmp_path):
+    root, s = _app(tmp_path, "import os, time\nf = open('/tmp/fill', 'wb')\nfor _ in range(300):\n"
+                             "    f.write(b'x' * 2**20); f.flush(); time.sleep(0.01)\ntime.sleep(10)\n")
+    p = DockerRunner(DockerSandboxConfig(disk_mb=64, timeout_s=60)).run(root, s, Hints())
+    assert p.killed_reason and p.killed_reason.startswith("disk")
+    assert "disk_flood" in p.abuse_signals
+
+
+@needs_docker
+def test_sdist_only_requirement_fails_the_build(tmp_path):
+    root, s = _app(tmp_path, "import docopt\n")
+    (tmp_path / "requirements.txt").write_text("docopt==0.6.2\n")      # published as an sdist only
+    with pytest.raises(ProfilerError) as e:
+        DockerRunner().build(root)
+    assert e.value.reason == "build_failed"
+
+
+@needs_docker
+def test_oversized_image_is_refused_and_removed(tmp_path, monkeypatch):
+    import shipcube_profiler.policy as policy
+    root, s = _app(tmp_path, "print('hi')\n")
+    monkeypatch.setattr(policy, "MAX_IMAGE_BYTES", 1000)
+    r = DockerRunner()
+    with pytest.raises(ProfilerError) as e:
+        r.build(root)
+    assert e.value.reason == "too_large"
+    left = subprocess.run(["docker", "images", "-q", "--filter", "label=dev.shipcube.role=profiler",
+                           "--filter", "dangling=false"], capture_output=True, text=True).stdout
+    import hashlib
+    from shipcube_profiler.gcp_runner import _package
+    tag = hashlib.sha256(_package(root, compress=False)).hexdigest()[:16]
+    assert subprocess.run(["docker", "image", "inspect", f"shipcube-profiler-app:{tag}"],
+                          capture_output=True).returncode != 0
