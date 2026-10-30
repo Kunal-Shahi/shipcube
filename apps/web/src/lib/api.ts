@@ -5,6 +5,7 @@ import "server-only";
 
 import { mockDataEnabled } from "./server/config";
 import { data, type DemoState, type Feature } from "./server/data";
+import type { WaitlistState } from "./types";
 
 export type { DemoState, Feature };
 
@@ -35,3 +36,7 @@ export const getMigration = async (id: string) => (await data()).getMigration(id
 
 /** This workspace's deployer service account, which the link script grants roles to, and its linked project. */
 export const getGcpLink = async () => (await data()).getGcpLink();
+
+/** Member, or where the signed-in person's access request stands (lib/types AccountStatus). */
+export const accountStatus = async () => (await data()).accountStatus();
+export const listWaitlist = async (status: WaitlistState | "all") => (await data()).listWaitlist(status);

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signIn } from "./helpers";
+import { MEMBER_EMAIL, signIn } from "./helpers";
 
 // One person's path through the console against the local stack, in order: sign in, create a
 // PAT, connect an agent, find the app `make smoke` deployed, share it, cap it, delete it, restore it.
@@ -9,7 +9,7 @@ const MCP_URL = process.env.E2E_MCP_URL ?? "http://localhost:8080/mcp";
 const API_URL = (process.env.E2E_API_URL ?? "http://127.0.0.1:8080").replace(/\/+$/, "");
 /** The app `make smoke` deploys (services/mcp/scripts/smoke.py). */
 const APP = process.env.E2E_APP ?? "olist-tracker";
-const EMAIL = process.env.E2E_EMAIL ?? `e2e-${Date.now()}@example.com`;
+const EMAIL = MEMBER_EMAIL;
 
 test.describe.configure({ mode: "serial" });
 

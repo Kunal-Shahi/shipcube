@@ -18,6 +18,8 @@ export interface RequestOptions {
   timeoutMs?: number;
   /** Total attempts for retryable failures. */
   attempts?: number;
+  /** Extra request headers, e.g. X-Forwarded-For for the public waitlist's rate limit. */
+  headers?: Record<string, string>;
 }
 
 /** Supplies the caller's credential for the API, or null when signed out. Set by the auth module. */
@@ -79,7 +81,7 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
   const requestId = crypto.randomUUID();
   const token = await credential();
 
-  const headers: Record<string, string> = { Accept: "application/json", "X-Request-Id": requestId };
+  const headers: Record<string, string> = { ...opts.headers, Accept: "application/json", "X-Request-Id": requestId };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (traceparent) headers.traceparent = traceparent;
   if (opts.body !== undefined) headers["Content-Type"] = "application/json";
