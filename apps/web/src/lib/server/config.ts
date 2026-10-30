@@ -63,11 +63,30 @@ export function emulatorPublicUrl(env: Record<string, string | undefined>) {
 }
 const PROVIDERS: AuthProviderId[] = ["identity-platform", "firebase-emulator", "mock"];
 
+/** Set by Cloud Run on every service and job: their presence means production (#29). */
+export const CLOUD_RUN_VARS = ["K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB"] as const;
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "host.docker.internal"]);
+
+/** A URL the browser or server would call that is public and encrypted. */
+function isPublicHttps(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    const h = u.hostname.toLowerCase();
+    return u.protocol === "https:" && !LOCAL_HOSTS.has(h) && !h.endsWith(".localhost") && !h.endsWith(".local");
+  } catch {
+    return false;
+  }
+}
+
 export function config(): Config {
   if (cached) return cached;
   const env = process.env;
-  const devMode = env.DEV_MODE === "1" || env.DEV_MODE === "true";
-  const onCloudRun = Boolean(env.K_SERVICE);
+  // SHIPCUBE_DEV_MODE is the one switch name (#29); DEV_MODE still works, with a warning.
+  const devMode = [env.SHIPCUBE_DEV_MODE, env.DEV_MODE].some((v) => v === "1" || v === "true");
+  if (devMode && !(env.SHIPCUBE_DEV_MODE === "1" || env.SHIPCUBE_DEV_MODE === "true")) {
+    console.warn("DEV_MODE=1 is deprecated; use SHIPCUBE_DEV_MODE=1");
+  }
+  const onCloudRun = CLOUD_RUN_VARS.some((k) => Boolean(env[k]));
   const auth = (env.AUTH_PROVIDER || (devMode ? "mock" : "identity-platform")) as AuthProviderId;
   if (!PROVIDERS.includes(auth)) throw new Error(`Unknown AUTH_PROVIDER "${auth}".`);
   const emulator = auth === "firebase-emulator";
@@ -94,6 +113,12 @@ export function config(): Config {
   // Mock data, the mock sign-in and the auth emulator must never reach a deployed service.
   if (onCloudRun && (c.devMode || c.auth !== "identity-platform")) {
     throw new Error(`DEV_MODE and AUTH_PROVIDER=${c.auth} are refused on Cloud Run (K_SERVICE is set).`);
+  }
+  if (onCloudRun) {
+    if (c.devApiSession) throw new Error("SHIPCUBE_DEV_API_SESSION (a local console session) is refused on Cloud Run.");
+    for (const [name, value] of [["SHIPCUBE_API_URL", c.apiUrl], ["SHIPCUBE_MCP_URL", c.mcpUrl]] as const) {
+      if (value && !isPublicHttps(value)) throw new Error(`${name} "${value}" must be a public https URL on Cloud Run.`);
+    }
   }
   if (c.auth !== "identity-platform" && !c.devMode) {
     throw new Error(`AUTH_PROVIDER=${c.auth} requires DEV_MODE=1.`);

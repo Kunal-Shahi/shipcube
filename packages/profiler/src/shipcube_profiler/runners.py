@@ -550,6 +550,12 @@ def runner_from_env(env: dict | None = None) -> Runner:
     dev = e.get("SHIPCUBE_DEV_MODE") == "1"
     if not choice:
         choice = "inproc" if dev else "gcp"
+    # On Cloud Run (the API and worker) only the sandboxed Cloud Run job: never Docker, never this
+    # process, never dev mode (#29). The sandbox's own agent runs LocalRunner directly, not this.
+    if any(e.get(k) for k in ("K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB")) and (choice != "gcp" or dev):
+        from .gcp_runner import ProfilerError
+        raise ProfilerError("config", f"refusing SHIPCUBE_PROFILER={choice}{' with SHIPCUBE_DEV_MODE=1' if dev else ''} "
+                                      "on Cloud Run: production profiles only in the gcp sandbox")
     if choice == "local":
         from .docker_runner import DockerRunner, DockerSandboxConfig
         return DockerRunner(DockerSandboxConfig.from_env(e))

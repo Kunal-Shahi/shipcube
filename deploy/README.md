@@ -51,7 +51,9 @@ commit, for example after an env change). `DATA_WORKSPACE` is the workspace the 
 Rollback: `gcloud run services update-traffic <svc> --to-revisions <rev>=100 --region asia-south1`. Revisions
 carry a `release` label with the commit. CI (`.github/workflows/ci.yml`, required check `ci-ok`) gates
 merges; `deploy.yml` deploys `main` through Workload Identity Federation (`wif.sh`) with repository
-variables `SHIPCUBE_DATA_WORKSPACE` and `SHIPCUBE_PROFILER_ENV_JSON`.
+variables `SHIPCUBE_DATA_WORKSPACE`, `SHIPCUBE_PROFILER_ENV_JSON` and `SHIPCUBE_PLATFORM_ADMINS` (comma-separated
+emails that review the waitlist; a local `deploy.sh` defaults it to your gcloud account). `MAX_WORKSPACES`
+(default 50) caps waitlist approvals.
 
 ## Monthly cost (asia-south1 list prices, demo traffic)
 

@@ -245,3 +245,33 @@ def test_alerts_fire_and_notify():
     assert "error_rate" in sent[0]["text"]
     with pytest.raises(ValueError):
         notify("http://insecure", fired, client)
+
+
+@pytest.mark.parametrize("mode,dev", [("mock", "1"), ("local", ""), ("gcp", "1")])
+def test_provider_refuses_local_modes_and_dev_mode_on_cloud_run(monkeypatch, mode, dev):
+    monkeypatch.setenv("K_SERVICE", "shipcube-mcp")
+    monkeypatch.setenv("SHIPCUBE_MONITOR", mode)
+    monkeypatch.setenv("DEV_MODE", dev)
+    with pytest.raises(RuntimeError, match="on Cloud Run"):
+        provider_from_env()
+
+
+@pytest.mark.parametrize("env", [{"SHIPCUBE_MONITOR": "gcp"}, {}])  # the live MCP service sets gcp; unset means gcp
+def test_provider_allows_gcp_on_cloud_run(monkeypatch, env):
+    import shipcube_monitor.gcp as gcp
+
+    monkeypatch.setattr(gcp, "GcpMonitor", lambda usage=None: "gcp-monitor")  # no credentials in tests
+    monkeypatch.delenv("SHIPCUBE_MONITOR", raising=False)
+    monkeypatch.delenv("DEV_MODE", raising=False)
+    monkeypatch.setenv("CLOUD_RUN_JOB", "x")
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    assert provider_from_env() == "gcp-monitor"
+
+
+def test_mock_takes_shipcube_dev_mode_locally(monkeypatch):
+    for k in ("K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB", "DEV_MODE"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SHIPCUBE_MONITOR", "mock")
+    monkeypatch.setenv("SHIPCUBE_DEV_MODE", "1")
+    assert isinstance(provider_from_env(), MockMonitor)

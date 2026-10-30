@@ -13,6 +13,7 @@ import socket
 import subprocess
 import tarfile
 import time
+import uuid
 from dataclasses import replace
 
 import httpx
@@ -43,8 +44,11 @@ RUN = secrets.token_hex(3)
 GCS_PORT = int(os.environ.get("SHIPCUBE_TEST_GCS_PORT") or _free_port())
 GCS_NAME = f"sc-test-gcs-{RUN}"
 NETWORK = f"shipcube-test-{RUN}"
-WS_A = "3c1d5e2a-7b4f-4e8a-9c6d-2f1e0a9b8c7d"
-WS_B = "9f0e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c"
+# Workspace ids per run too: they name the apps' services, containers' labels and image namespace, and
+# purge removes the namespace's images. Fixed ids let two runs at once purge each other's images and
+# see each other's containers in the final check.
+WS_A = str(uuid.uuid4())
+WS_B = str(uuid.uuid4())
 APP_PY = """
 import http.server, os
 class H(http.server.BaseHTTPRequestHandler):

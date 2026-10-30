@@ -116,12 +116,16 @@ URLS
     ;;
   e2e)   # console + Auth emulator, then frontend's Playwright suite (run after `smoke`)
     [ -f "$STATE/seed.env" ] || { echo "run 'up' and 'smoke' first" >&2; exit 1; }
-    # compose interpolates ${SHIPCUBE_DEV_CONSOLE_TOKEN} from the shell, not from env_file: load the seed.
+    # Load the seed (compose interpolates from the shell, not from env_file).
     set -a
     # shellcheck source=/dev/null
     . "$STATE/seed.env"
     set +a
-    dc --profile console up -d --wait --build console auth-emulator
+    # The waitlist spec signs up repeatedly from one address; the API reloads with the raised limit.
+    export SHIPCUBE_WAITLIST_PER_IP_PER_HOUR="${SHIPCUBE_WAITLIST_PER_IP_PER_HOUR:-1000}"
+    admins="${SHIPCUBE_PLATFORM_ADMINS:-admin@shipcube.test}"
+    e2e_admin="${E2E_ADMIN_EMAIL:-${admins%%,*}}"   # one of the API's platform admins
+    dc --profile console up -d --wait --build api console console-waitlist auth-emulator
     cd "$ROOT/apps/web"
     npm ci --silent
     npx playwright install --with-deps chromium >/dev/null
@@ -129,6 +133,8 @@ URLS
     E2E_API_URL="http://127.0.0.1:${SHIPCUBE_API_PORT:-18080}" \
     E2E_MCP_URL="http://localhost:${SHIPCUBE_API_PORT:-18080}/mcp" \
     E2E_APP="${SMOKE_APP:-$(cat "$STATE/smoke-app" 2>/dev/null || echo hello-local)}" \
+    E2E_ADMIN_EMAIL="$e2e_admin" \
+    E2E_WAITLIST_BASE_URL="http://localhost:${SHIPCUBE_WAITLIST_CONSOLE_PORT:-3001}" \
       npm run test:e2e
     ;;
   logs) dc logs -f --tail 100 "${@:2}" ;;

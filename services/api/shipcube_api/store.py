@@ -457,7 +457,7 @@ def start_estimate(caller: Caller, payload: dict[str, Any], idem: str | None) ->
     source = payload.get("source") or {}
     if source.get("kind") == "git" and GIT_ESTIMATES_PAUSED:
         raise DeployError("invalid_argument", "estimates from git sources are paused; upload the code with create_upload instead")
-    isolation.check_source(settings, caller.workspace_id, source)
+    isolation.check_source(settings, caller.workspace_id, source, estimate=True)
     with db.tx(caller) as conn:
         replay = idem is not None and conn.execute("select 1 from operations where workspace_id = %s and idem_key = %s",
                                                    (caller.workspace_id, idem)).fetchone() is not None
@@ -468,9 +468,9 @@ def start_estimate(caller: Caller, payload: dict[str, Any], idem: str | None) ->
 
 
 def start_deploy(caller: Caller, slug: str, payload: dict[str, Any], idem: str | None) -> Operation:
-    isolation.check_source(settings, caller.workspace_id, payload.get("source") or {})
+    target = payload.get("target") or HOSTED
+    isolation.check_source(settings, caller.workspace_id, payload.get("source") or {}, linked=target != HOSTED)
     with db.tx(caller) as conn:
-        target = payload.get("target") or HOSTED
         link_id = None if target == HOSTED else target
         if link_id is not None:
             try:

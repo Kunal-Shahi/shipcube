@@ -49,6 +49,7 @@ apply() {  # apply <name>: render deploy/services/<name>.yaml and replace the Cl
   local out
   out="$(mktemp "${TMPDIR:-/tmp}/shipcube-$1.XXXXXX")"
   render "deploy/services/$1.yaml" > "$out"
+  python3 deploy/check_production.py "$out"  # nothing local in what Cloud Run will run (#29)
   gcloud run services replace "$out" --project "$PROJECT" --region "$REGION" --quiet
   rm -f "$out"
 }
@@ -61,12 +62,23 @@ export PROJECT APPS_PROJECT REGION TAG SQL_INSTANCE CONSOLE_URL MCP_URL GATEWAY_
 export SA_API SA_WORKER SA_GATEWAY SA_WEB SA_HOSTED_DEPLOYER
 export IMAGE_API="$IMAGES/api:$TAG" IMAGE_GATEWAY="$IMAGES/gateway:$TAG" IMAGE_CONSOLE="$IMAGES/console:$TAG"
 export MCP_HOST="${MCP_URL#https://}"
+export CONSOLE_ORIGINS   # both the API (waitlist CORS) and the console (where the form shows) read it
 
 if want mcp; then
   if [ -z "${DATA_WORKSPACE:-}" ]; then
     echo "warning: DATA_WORKSPACE is unset, so the data_* tools are not mounted (11 of 16 MCP tools)" >&2
   fi
   export DATA_WORKSPACE="${DATA_WORKSPACE:-}"
+  # Platform admins review the waitlist. Unset, a person deploying from their own gcloud account is the
+  # admin; the GitHub workflow passes the SHIPCUBE_PLATFORM_ADMINS repository variable.
+  if [ -z "${PLATFORM_ADMINS:-}" ]; then
+    account="$(gcloud config get-value account 2>/dev/null || true)"
+    case "$account" in
+      ""|*.gserviceaccount.com) echo "warning: PLATFORM_ADMINS is unset, so nobody can review the waitlist" >&2 ;;
+      *) PLATFORM_ADMINS="$account" ;;
+    esac
+  fi
+  export PLATFORM_ADMINS="${PLATFORM_ADMINS:-}" MAX_WORKSPACES
   CLOUDSQL_INSTANCES="$SQL_INSTANCE${DATA_SQL_INSTANCES:+,$DATA_SQL_INSTANCES}"
   DATA_ALLOWED_DB_HOSTS="$(echo "$DATA_SQL_INSTANCES" | tr ',' '\n' | sed '/^$/d; s|^|/cloudsql/|' | paste -sd, -)"
   export CLOUDSQL_INSTANCES DATA_ALLOWED_DB_HOSTS
