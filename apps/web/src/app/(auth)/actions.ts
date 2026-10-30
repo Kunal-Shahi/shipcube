@@ -27,6 +27,9 @@ export async function requestAccessSignedInAction(input: { name: string; useCase
     return { ok: true };
   } catch (e) {
     log("WARNING", "signed-in waitlist request failed", { code: e instanceof ApiError ? e.code : undefined, error: String(e) });
-    return { ok: false, message: e instanceof ApiError && e.code === "invalid_argument" ? e.message : "We couldn't save your request just now. Try again in a minute." };
+    if (e instanceof ApiError && e.code === "invalid_argument") return { ok: false, message: e.message };
+    // Signed-in requests have their own limits: per account, and in total.
+    if (e instanceof ApiError && e.code === "rate_limited") return { ok: false, message: "Too many requests right now. Try again in a little while." };
+    return { ok: false, message: "We couldn't save your request just now. Try again in a minute." };
   }
 }

@@ -31,6 +31,8 @@ describe("requestAccessSignedInAction", () => {
   it("shows the API's reason for a bad field, and hides other failures", async () => {
     requestAccessSignedIn.mockRejectedValueOnce(new ApiError("invalid_argument", "use_case is too long", 400, "r"));
     expect(await requestAccessSignedInAction({ name: "Ada", useCase: "x" })).toEqual({ ok: false, message: "use_case is too long" });
+    requestAccessSignedIn.mockRejectedValueOnce(new ApiError("rate_limited", "slow down", 429, "r"));
+    expect(await requestAccessSignedInAction({ name: "Ada", useCase: "x" })).toEqual({ ok: false, message: "Too many requests right now. Try again in a little while." });
     requestAccessSignedIn.mockRejectedValueOnce(new ApiError("unavailable", "db at 10.0.0.3", 503, "r"));
     expect(await requestAccessSignedInAction({ name: "Ada", useCase: "x" })).toEqual({ ok: false, message: "We couldn't save your request just now. Try again in a minute." });
   });
