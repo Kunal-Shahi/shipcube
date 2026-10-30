@@ -153,8 +153,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: shellcheck
         run: shellcheck -x -e SC1091 deploy/*.sh
-      - name: Python syntax
-        run: python3 -m py_compile deploy/monitoring.py
       - name: YAML
         run: pip install --quiet pyyaml && python3 -c "import sys, yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" deploy/*.yaml .github/workflows/*.yml
 

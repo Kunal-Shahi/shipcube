@@ -83,7 +83,7 @@ for k, v in sorted(json.load(sys.stdin).items()):
     print(f"            - {{name: {k}, value: \"{v}\"}}")')"
   export PROFILER_ENV
   apply worker
-  # The uptime check calls /healthz with an OIDC token minted by the Monitoring service agent,
+  # The uptime check (infra/terraform/modules/monitoring) calls /health with an OIDC token minted by the Monitoring service agent,
   # which Google creates on first use; make sure it exists before granting it.
   curl -fsS -X POST -H "Authorization: Bearer $(gcloud auth print-access-token)" -H "x-goog-user-project: $PROJECT" \
     "https://serviceusage.googleapis.com/v1beta1/projects/$PROJECT/services/monitoring.googleapis.com:generateServiceIdentity" >/dev/null

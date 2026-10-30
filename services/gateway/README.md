@@ -103,7 +103,7 @@ at the Cloud Run level because it verifies app identity itself.
 
 ## Operate (runbook)
 
-**Alerts.** `deploy/monitoring.py` creates an uptime check on `/healthz` (every 5 min, 3 regions) and
+**Alerts.** `infra/terraform/modules/monitoring` creates an uptime check on `/health` (every 5 min, 3 regions) and
 alerts on uptime failure and a 5xx ratio above 5% for 5 min. There is no latency alert, because streamed
 completions are long by design. Usage per app: Logs Explorer with `jsonPayload.shipcube_usage=true`.
 

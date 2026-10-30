@@ -82,3 +82,9 @@ variable "postgres_password_version" {
   default     = 1
 }
 
+
+variable "alert_email" {
+  description = "Where uptime and alert notifications go. Set it in terraform.tfvars (gitignored), never in the repo."
+  type        = string
+  sensitive   = true
+}
