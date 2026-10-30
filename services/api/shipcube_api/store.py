@@ -616,25 +616,46 @@ def restore_app(caller: Caller, slug: str) -> Operation:
                        f"restore:{app['id']}:{int(app['deleted_at'].timestamp())}")
 
 
+def provider_key_label(provider: str) -> str:
+    """The secret_refs label of a provider's console-saved key (workspace.save_provider)."""
+    return f"ai-provider-{provider.replace('_', '-')}"
+
+
 def set_ai(caller: Caller, slug: str, provider: str, model: str, key_secret: str | None, base_url: str | None) -> dict[str, Any]:
+    """Point an app at an AI provider. A BYOK provider uses only the key a person saved for that
+    provider in the console (an `ai_key` secret), never another secret. An openai_compatible app
+    uses the endpoint saved with that key: the key is bound to it (the gateway checks), and an agent
+    can never choose where a key is sent."""
+    if base_url is not None and caller.via != "console":
+        raise PermissionError("base_url can only be set by a person in the console, together with the key")
     with db.tx(caller) as conn:
         app = _app_row(conn, caller.workspace_id, slug)
-        secret_id = None
+        secret_id = label = bound_url = None
         if provider != "meta":
-            if not key_secret:
-                raise Conflict("BYOK providers need key_secret: the name of a secret stored in the console")
-            ref = conn.execute("select id from secret_refs where workspace_id = %s and label = %s and destroyed_at is null",
-                               (caller.workspace_id, key_secret)).fetchone()
+            label = provider_key_label(provider)
+            if key_secret and key_secret != label:
+                raise PermissionError(f"{provider} apps use the {provider} key saved in the console ({label});"
+                                      " other secrets can't be used")
+            ref = conn.execute("select id from secret_refs where workspace_id = %s and app_id is null and kind = 'ai_key'"
+                               " and label = %s and destroyed_at is null", (caller.workspace_id, label)).fetchone()
             if ref is None:
-                raise NotFound(f"secret {key_secret} not found; add it in the console first")
+                raise NotFound(f"no {provider} key is saved; a person adds it in the console (Settings, AI)")
             secret_id = ref["id"]
+            if provider == "openai_compatible":
+                saved = conn.execute("select base_url from provider_configs where workspace_id = %s and app_id is null"
+                                     " and provider = 'openai_compatible'", (caller.workspace_id,)).fetchone()
+                if saved is None or not saved["base_url"]:
+                    raise Conflict("save the OpenAI-compatible endpoint and its key in the console first")
+                if base_url is not None and base_url.rstrip("/") != saved["base_url"]:
+                    raise PermissionError("base_url must be the endpoint saved with the key in the console")
+                bound_url = saved["base_url"]
         conn.execute(
             "insert into provider_configs (id, workspace_id, app_id, provider, model, base_url, secret_ref_id, updated_by)"
             " values (%s,%s,%s,%s,%s,%s,%s,%s) on conflict (workspace_id, coalesce(app_id, '00000000-0000-0000-0000-000000000000'::uuid))"
             " do update set provider = excluded.provider, model = excluded.model, base_url = excluded.base_url,"
             " secret_ref_id = excluded.secret_ref_id, updated_by = excluded.updated_by, updated_at = now()",
-            (uuid.uuid4(), caller.workspace_id, app["id"], provider, model, base_url, secret_id, caller.user_id))
-        return {"provider": provider, "model": model, "key_secret": key_secret}
+            (uuid.uuid4(), caller.workspace_id, app["id"], provider, model, bound_url, secret_id, caller.user_id))
+        return {"provider": provider, "model": model, "key_secret": label}
 
 
 def live_status(deployer: Deployer, caller: Caller, slug: str) -> dict[str, Any] | None:

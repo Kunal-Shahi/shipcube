@@ -65,7 +65,8 @@ def test_byok_keys_are_stored_in_the_secret_store_and_never_returned(client, ws)
                            " and destroyed_at is null", (ws["workspace_id"],)).fetchone()
     assert KEY.encode() not in json.dumps({k: str(v) for k, v in ref.items()}).encode()
     secret_id = ref["resource_name"].rsplit("/", 1)[-1]
-    assert secrets_file()[secret_id] == KEY
+    stored = json.loads(secrets_file()[secret_id])  # the key, bound to its provider (#42)
+    assert stored == {"shipcube_ai_key": 1, "provider": "openai", "base_url": None, "key": KEY}
 
     # A new key replaces the old one, which is destroyed in the store.
     client.put("/v1/ai/providers/openai", json={"key": KEY[:-4] + "ABCD", "model": "gpt-4.1"}, headers=ws["human"])
@@ -191,3 +192,74 @@ def test_deploy_records_its_load_estimate_on_the_app(client, ws):
     assert n == 1 and dep["load_estimate_id"] is not None
     deployed(client, ws, "no-est-app")
     assert client.get("/v1/apps/no-est-app", headers=ws["agent"]).json()["estimate"] is None
+
+
+# --- #42: an agent can't pair a stored secret with an endpoint of its choosing ----------------------
+
+
+def _secret(ws, label, kind):
+    with db.tx() as conn:
+        conn.execute("insert into secret_refs (id, workspace_id, kind, label, resource_name, version) values (%s,%s,%s,%s,%s,'1')",
+                     (uuid.uuid4(), ws["workspace_id"], kind, label, f"projects/local/secrets/{uuid.uuid4()}"))
+
+
+def test_an_agent_cannot_pair_another_secret_or_choose_the_base_url(client, ws):
+    deployed(client, ws, "r1-app")
+    _secret(ws, "warehouse-primary", "warehouse_credential")
+    agent = ws["agent"]
+    r = client.put("/v1/apps/r1-app/ai", json={"provider": "openai_compatible", "model": "m", "key_secret": "warehouse-primary",
+                                               "base_url": "https://collector.example.net/v1"}, headers=agent)
+    assert r.status_code == 403 and r.json()["error"]["code"] == "permission_denied"
+    # Not even without a base_url: only the provider's own console-saved key is accepted.
+    r = client.put("/v1/apps/r1-app/ai", json={"provider": "openai", "model": "m", "key_secret": "warehouse-primary"}, headers=agent)
+    assert r.status_code == 403
+    # Nor a key saved for another provider.
+    client.put("/v1/ai/providers/anthropic", json={"key": KEY}, headers=ws["human"])
+    r = client.put("/v1/apps/r1-app/ai", json={"provider": "openai", "model": "m", "key_secret": "ai-provider-anthropic"},
+                   headers=agent)
+    assert r.status_code == 403
+    # A same-named secret of another kind isn't a provider key either.
+    _secret(ws, "ai-provider-openai", "other")
+    r = client.put("/v1/apps/r1-app/ai", json={"provider": "openai", "model": "m"}, headers=agent)
+    assert r.status_code == 404
+    with db.tx() as conn:
+        assert conn.execute("select count(*) as n from provider_configs where workspace_id = %s and app_id is not null",
+                            (ws["workspace_id"],)).fetchone()["n"] == 0
+
+
+def test_openai_compatible_apps_inherit_the_endpoint_saved_with_the_key(client, ws):
+    deployed(client, ws, "compat-app")
+    agent, human = ws["agent"], ws["human"]
+    body = {"provider": "openai_compatible", "model": "llama-3.3"}
+    assert client.put("/v1/apps/compat-app/ai", json=body, headers=agent).status_code == 404  # nothing saved yet
+    client.put("/v1/ai/providers/openai-compatible", json={"key": KEY, "base_url": "https://llm.example.com/v1",
+                                                           "model": "llama-3.3"}, headers=human)
+    r = client.put("/v1/apps/compat-app/ai", json=body, headers=agent)
+    assert r.status_code == 200 and r.json()["ai"]["key_secret"] == "ai-provider-openai-compatible"
+    with db.tx() as conn:
+        row = conn.execute("select base_url from provider_configs p join apps a on a.id = p.app_id where a.slug = 'compat-app'"
+                           " and a.workspace_id = %s", (ws["workspace_id"],)).fetchone()
+    assert row["base_url"] == "https://llm.example.com/v1"
+    stored = json.loads(next(v for v in secrets_file().values() if KEY in v))
+    assert stored["provider"] == "openai_compatible" and stored["base_url"] == "https://llm.example.com/v1"
+
+    # A person in the console may name it, but only the saved one.
+    assert client.put("/v1/apps/compat-app/ai", json={**body, "base_url": "https://llm.example.com/v1/"}, headers=human).status_code == 200
+    assert client.put("/v1/apps/compat-app/ai", json={**body, "base_url": "https://other.example.com/v1"},
+                      headers=human).status_code == 403
+    # Moving the saved endpoint needs the key again: keys are bound to where they were saved.
+    r = client.put("/v1/ai/providers/openai-compatible", json={"base_url": "https://other.example.com/v1", "model": "m"}, headers=human)
+    assert r.status_code == 409 and "re-enter the key" in r.json()["error"]["message"]
+
+
+def test_base_urls_must_be_public_outside_dev_mode(monkeypatch):
+    import dataclasses
+
+    from shipcube_api import store, workspace
+
+    monkeypatch.setattr(workspace, "settings", dataclasses.replace(workspace.settings, dev_mode=False))
+    for bad in ("http://llm.example.com", "https://localhost:8000", "https://10.1.2.3/v1", "https://169.254.169.254",
+                "https://[::1]/v1", "https://metadata.google.internal", "https://user:pw@llm.example.com"):
+        with pytest.raises(store.Conflict):
+            workspace._check_base_url(bad)
+    assert workspace._check_base_url("https://api.fireworks.ai/inference/v1/") == "https://api.fireworks.ai/inference/v1"

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import calendar
 import hashlib
+import ipaddress
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from functools import cache
@@ -39,7 +41,14 @@ def secret_store() -> SecretStore:
 
 
 def _label(pid: str) -> str:
-    return f"ai-provider-{pid}"  # also the key_secret name PUT /v1/apps/{app}/ai accepts
+    return f"ai-provider-{pid}"  # also the key_secret name PUT /v1/apps/{app}/ai accepts (store.provider_key_label)
+
+
+def key_payload(pid: str, key: str, base_url: str | None) -> str:
+    """What's stored in Secret Manager for a BYOK key: the key bound to its provider and, for
+    openai-compatible, the endpoint a person saved it with. The gateway refuses to send the key
+    anywhere else (services/gateway, boundKey)."""
+    return json.dumps({"shipcube_ai_key": 1, "provider": pid.replace("-", "_"), "base_url": base_url, "key": key})
 
 
 # --- approvals inbox --------------------------------------------------------------------
@@ -80,10 +89,18 @@ def list_providers(caller: Caller) -> list[dict[str, Any]]:
 
 def _check_base_url(url: str) -> str:
     u = urlparse(url)
-    if u.scheme not in ("https", "http") or not u.hostname:
+    if u.scheme not in ("https", "http") or not u.hostname or u.username or u.password:
         raise Conflict("base_url must be an https URL")
-    if u.scheme == "http" and not settings.dev_mode:  # local stacks may point at Ollama on http
-        raise Conflict("base_url must use https")
+    if not settings.dev_mode:  # local stacks may point at Ollama on http://localhost
+        if u.scheme == "http":
+            raise Conflict("base_url must use https")
+        host = u.hostname.lower()
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            ip = None
+        if host == "localhost" or host.endswith((".localhost", ".internal", ".local")) or (ip is not None and not ip.is_global):
+            raise Conflict("base_url must be a public endpoint")  # the gateway also checks the resolved address
     return url.rstrip("/")
 
 
@@ -98,6 +115,12 @@ def save_provider(caller: Caller, pid: str, key: str | None, base_url: str | Non
         if not base_url:
             raise Conflict("openai-compatible needs base_url")
         base_url = _check_base_url(base_url)
+        if not key:  # the stored key is bound to the endpoint it was saved with
+            with db.tx(caller) as conn:
+                saved = conn.execute("select base_url from provider_configs where workspace_id = %s and app_id is null"
+                                     " and provider = 'openai_compatible'", (caller.workspace_id,)).fetchone()
+            if saved is None or saved["base_url"] != base_url:
+                raise Conflict("re-enter the key to use a different endpoint: a key only goes to the endpoint it was saved with")
     else:
         base_url = None
     model = model or p["model"]
@@ -107,7 +130,8 @@ def save_provider(caller: Caller, pid: str, key: str | None, base_url: str | Non
     new_ref = None
     if key:
         secret_id = f"ws-{caller.workspace_id}-ai_key-{uuid.uuid4()}"
-        resource, version = secret_store().put(secret_id, key, {"workspace": caller.workspace_id, "kind": "ai_key"})
+        resource, version = secret_store().put(secret_id, key_payload(pid, key, base_url),
+                                               {"workspace": caller.workspace_id, "kind": "ai_key"})
         new_ref = (uuid.uuid4(), resource, version)
     replaced = []
     try:
