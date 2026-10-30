@@ -33,6 +33,9 @@ resource "google_monitoring_uptime_check_config" "service" {
       project_id   = var.project_id
       service_name = each.key
       location     = var.region
+      # Monitoring fills these in as empty; declaring them keeps the plan from replacing the check.
+      configuration_name = ""
+      revision_name      = ""
       } : {
       project_id = var.project_id
       host       = "${each.key}-${var.project_number}.${var.region}.run.app"
@@ -67,7 +70,7 @@ resource "google_monitoring_alert_policy" "down" {
   conditions {
     display_name = "Uptime check failing for ${each.key} from 2+ regions"
     condition_threshold {
-      filter          = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND metric.label.check_id=\"${google_monitoring_uptime_check_config.service[each.key].uptime_check_id}\""
+      filter          = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND resource.type=\"${contains(var.private_services, each.key) ? "cloud_run_revision" : "uptime_url"}\" AND metric.label.check_id=\"${google_monitoring_uptime_check_config.service[each.key].uptime_check_id}\""
       comparison      = "COMPARISON_GT"
       threshold_value = 1
       duration        = "300s"
