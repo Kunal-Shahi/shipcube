@@ -25,6 +25,7 @@ agent ─MCP─> /mcp ─in-process─> /v1 (FastAPI) ──writes desired state
 | `deploy/mock.py` | DEV_MODE only |
 | `estimator.py` | `estimate_load` engine: load-estimator's `shipcube_placement` if installed, otherwise a typed `estimator_unavailable` error |
 | `profiler_guard.py` | Who may run the profiler sandbox: admission (2 in flight, 20/day per workspace), the claim's global ceiling (3, 1 per workspace, fairest first), the 10-minute queue limit, the $5/day ($1 per workspace) spend ledger, the brake, and strikes from the profiler's abuse signals (3 in 24 h suspend profiling for 24 h; `mining_pool` until a person clears it). Static estimates say why in `profile.measurements.static_reason` |
+| `upload_guard.py` | Estimate sources can't exhaust the worker: an upload is decompressed as a stream and refused past 256 MiB (`invalid_argument`) before tarfile sees it, and at most 2 upload or git sources are on disk per process |
 | `profiler_janitor.py` | Worker housekeeping: deletes leftover profiler jobs (30 min), builds (10 min) and `profiler-src/` objects (1 h); sets the brake if more than 5 sandbox executions run at once |
 | `telemetry.py` | Logs and metrics interface. The platform workstream installs the real implementation; without it the API answers 501. |
 | `auth.py` | PATs in `api_tokens` (HMAC with a pepper), Identity Platform ID tokens for console users |
@@ -102,6 +103,7 @@ Isolation locally is enforced by the deployer (the same `isolation.py` checks: o
 | `SHIPCUBE_PROFILER_ENABLED` | `1` | `0` is the manual off switch: every estimate runs static (`disabled`), read on every admission and run |
 | `SHIPCUBE_PROFILER_IN_FLIGHT`, `_PER_DAY`, `_GLOBAL_RUNS`, `_QUEUE_WAIT_S` | `2`, `20`, `3`, `600` | Profiler admission and claim limits (docs/research/profiler-sandbox.md §6) |
 | `SHIPCUBE_PROFILER_DAILY_USD`, `_WORKSPACE_DAILY_USD`, `_RUN_COST_USD` | `5`, `1`, `0.11` | Spend ledger: caps per UTC day, and the worst-case cost charged per profiled run (lower it to `0.05` once profiler builds stop at 300 s) |
+| `SHIPCUBE_ESTIMATE_STATIC_IN_FLIGHT`, `SHIPCUBE_ESTIMATE_UNPACK_MAX_MIB`, `SHIPCUBE_ESTIMATE_SOURCE_SLOTS` | `3`, `256`, `2` | Static estimates in flight per workspace (then 429), the decompressed-size budget for uploads, and sources on disk at once per worker process |
 | `SHIPCUBE_WORKER_LANES` | `deploy,estimate*3` | Worker threads per process (`run_lanes`): one deploy lane, three estimate lanes. `all` claims everything (one thread) |
 | `SHIPCUBE_EMBEDDED_WORKER` | `1` in DEV_MODE, else `0` | Run a worker thread in the API process. Not possible in production: the API's login (`shipcube_app`) is confined to the caller's workspace by RLS, and the worker needs `shipcube_worker`. |
 | `SHIPCUBE_LOG_LEVEL` | `INFO` | |

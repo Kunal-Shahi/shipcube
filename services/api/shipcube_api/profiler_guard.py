@@ -6,7 +6,8 @@ profiled or answered statically, and says why with a `static_reason` (§9):
 
 - Admission (API, `start_estimate`): at most 2 profiled estimates in flight per workspace (the
   third gets 429 `rate_limited` with `retry_after`), and 20 per workspace per day (more run static,
-  reason=quota). Image sources never run (reason=image_source).
+  reason=quota). Image sources never run (reason=image_source). Static estimates are admitted too:
+  at most 3 in flight per workspace, since they still unpack the source in the worker.
 - Claim (worker): at most 3 profiled runs at once, at most 1 per workspace, fairest workspace first.
   A profiled estimate that waited 10 minutes for a slot runs static (reason=busy).
 - Run start (worker): the spend ledger. Each profiled run adds its worst-case cost to today's
@@ -54,6 +55,7 @@ def _num(name: str, default: float) -> float:
 @dataclass(frozen=True)
 class Limits:
     in_flight_per_workspace: int
+    static_in_flight_per_workspace: int
     per_workspace_per_day: int
     global_runs: int
     queue_wait_s: int
@@ -65,6 +67,7 @@ class Limits:
     def from_env(cls) -> Limits:
         return cls(
             in_flight_per_workspace=int(_num("SHIPCUBE_PROFILER_IN_FLIGHT", 2)),
+            static_in_flight_per_workspace=int(_num("SHIPCUBE_ESTIMATE_STATIC_IN_FLIGHT", 3)),
             per_workspace_per_day=int(_num("SHIPCUBE_PROFILER_PER_DAY", 20)),
             global_runs=int(_num("SHIPCUBE_PROFILER_GLOBAL_RUNS", 3)),
             queue_wait_s=int(_num("SHIPCUBE_PROFILER_QUEUE_WAIT_S", 600)),
@@ -98,22 +101,30 @@ PROFILED: dict[str, Any] = {"profiled": True, "static_reason": None}
 def admit(conn, workspace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Profiled or static for a new estimate; raises RateLimited when the workspace already has
     the maximum number of profiled estimates in flight."""
-    if (payload.get("source") or {}).get("kind") == "image":
-        return static("image_source")
-    if not configured() or not enabled():
-        return static("disabled")
     lim = Limits.from_env()
     row = conn.execute(
-        "select count(*) filter (where status in ('queued','running')) as in_flight,"
-        "       count(*) filter (where created_at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc') as today"
-        " from operations where workspace_id = %s and kind = 'estimate' and (input->>'profiled')::boolean",
-        (workspace_id,)).fetchone()
-    if row["in_flight"] >= lim.in_flight_per_workspace:
-        raise RateLimited(f"{row['in_flight']} profiled estimates are already running or queued in this workspace "
+        "select count(*) filter (where status in ('queued','running') and profiled) as profiled_in_flight,"
+        "       count(*) filter (where status in ('queued','running') and not profiled) as static_in_flight,"
+        "       count(*) filter (where profiled and created_at >= date_trunc('day', now() at time zone 'utc') at time zone 'utc')"
+        "         as profiled_today"
+        " from (select status, created_at, coalesce((input->>'profiled')::boolean, false) as profiled from operations"
+        "       where workspace_id = %s and kind = 'estimate') e", (workspace_id,)).fetchone()
+    if (payload.get("source") or {}).get("kind") == "image":
+        decision = static("image_source")
+    elif not configured() or not enabled():
+        decision = static("disabled")
+    elif row["profiled_in_flight"] >= lim.in_flight_per_workspace:
+        raise RateLimited(f"{row['profiled_in_flight']} profiled estimates are already running or queued in this workspace "
                           f"(limit {lim.in_flight_per_workspace}); retry when one finishes", retry_after_s=60)
-    if row["today"] >= lim.per_workspace_per_day:
-        return static("quota")
-    return dict(PROFILED)
+    elif row["profiled_today"] >= lim.per_workspace_per_day:
+        decision = static("quota")
+    else:
+        return dict(PROFILED)
+    # Static estimates still download and unpack the source in the worker, next to the deploy lane.
+    if row["static_in_flight"] >= lim.static_in_flight_per_workspace:
+        raise RateLimited(f"{row['static_in_flight']} estimates are already running or queued in this workspace "
+                          f"(limit {lim.static_in_flight_per_workspace}); retry when one finishes", retry_after_s=30)
+    return decision
 
 
 # --- claim (worker) ----------------------------------------------------------------------------

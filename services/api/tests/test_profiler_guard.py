@@ -152,8 +152,21 @@ def test_image_sources_and_the_off_switch_are_static(client, monkeypatch):
     monkeypatch.setenv("SHIPCUBE_PROFILER_ENABLED", "0")
     off = _queued(client, ws)
     assert _op(off)["input"]["static_reason"] == "disabled"
-    # Static estimates don't count towards the in-flight limit.
+    # Static estimates don't count towards the profiled limit, but have their own: 3 in flight.
     _queued(client, ws)
+    r = _estimate(client, ws)
+    assert r.status_code == 429 and r.json()["error"]["code"] == "rate_limited"
+    assert r.headers["Retry-After"] == "30"
+
+
+def test_concurrent_static_estimates_are_limited_per_workspace(client, monkeypatch):
+    monkeypatch.setattr(profiler_guard, "configured", lambda: False)  # production today: every estimate is static
+    ws, other = new_workspace(), new_workspace()
+    ops = [_queued(client, ws) for _ in range(3)]
+    assert all(_op(o)["input"]["static_reason"] == "disabled" for o in ops)
+    assert _estimate(client, ws).status_code == 429
+    _queued(client, other)  # per workspace
+    _drain(_worker())  # one finishes: there's room again
     _queued(client, ws)
 
 

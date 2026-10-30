@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Protocol
 
 from .deploy.base import Deployer, DeployError
+from . import upload_guard
 from .settings import settings
 
 log = logging.getLogger(__name__)
@@ -56,12 +58,20 @@ class PlacementEstimator:
             # The sandbox (security §4: no-egress VPC, roleless SA) runs only once infra has created it.
             runner = CloudRunJobRunner(project=settings.apps_project, region=settings.region,
                                        service_account=settings.profiler_job) if settings.profiler_job else StaticRunner()
-        tmp = Path(tempfile.mkdtemp(prefix="shipcube-upload-"))
-
         def fetch_upload(upload_id: str) -> Path:
-            return self.d.download_upload(workspace_id, upload_id, tmp / f"{upload_id}.tgz")
+            tarball = self.d.download_upload(workspace_id, upload_id, tmp / f"{upload_id}.tgz")
+            upload_guard.check_tarball(tarball)  # before tarfile sees it: bounded memory and CPU
+            return tarball
 
-        res = estimate(source, {k: v for k, v in hints.items() if v is not None}, runner=runner, fetch_upload=fetch_upload)
+        # /tmp is memory on Cloud Run, shared with the deploy lane: limit how many sources are on disk
+        # at once, and always remove the download.
+        with upload_guard.source_slot(source):
+            tmp = Path(tempfile.mkdtemp(prefix="shipcube-upload-"))
+            try:
+                res = estimate(source, {k: v for k, v in hints.items() if v is not None}, runner=runner,
+                               fetch_upload=fetch_upload)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
         out = res.model_dump(mode="json") if hasattr(res, "model_dump") else dict(res.__dict__)
         out.setdefault("estimate_id", f"est_{op_id.replace('-', '')[:12]}")
         return out
