@@ -169,8 +169,15 @@ func run(log *slog.Logger) error {
 	}
 	limiter := &Limiter{DefaultTokensPerDay: lim[0], DefaultRequestsPerMin: int(lim[1]),
 		WorkspaceTokensPerDay: lim[2], WorkspaceRequestsPerMin: int(lim[3])}
+	// Shared caps through the control-plane API (#20). Without it, each instance counts on its own.
+	var shared *SharedLimiter
+	if u := os.Getenv("GATEWAY_COUNTERS_URL"); u != "" {
+		shared = &SharedLimiter{URL: u, Client: plain, Token: meta.get, Local: limiter, Log: log}
+	} else if !dev {
+		log.Warn("GATEWAY_COUNTERS_URL is not set: caps are per instance and restart with it")
+	}
 	g := &Gateway{
-		Auth: auth, Registry: reg, Secrets: secrets, Limiter: limiter, Usage: sinks,
+		Auth: auth, Registry: reg, Secrets: secrets, Limiter: limiter, Shared: shared, Usage: sinks,
 		MaxOutputTokens: lim[4], MetaModels: metaModels,
 		Upstream: guardedClient(allowPrivate, headerTimeout), Prices: prices, Log: log,
 		MetaBaseURL:      env("META_BASE_URL", "https://api.meta.ai/v1"),

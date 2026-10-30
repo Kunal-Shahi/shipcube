@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import auth, data_layer, db, obs, profiler_guard, store, workspace
+from . import auth, data_layer, db, gateway_counters, obs, profiler_guard, store, workspace
 from .auth import Caller
 from .deploy.base import DeployError
 from .models import (
@@ -351,6 +351,28 @@ def ai_config(app: AppName, body: AiConfigRequest, c: Annotated[Caller, Depends(
     except PermissionError as e:
         raise ApiError(403, "permission_denied", str(e)) from None
     return {"ai": ai, "gateway_url": f"{(settings.ai_gateway_url or 'http://localhost:8090').rstrip('/')}/v1/apps/{app}"}
+
+
+# --- internal: the AI gateway's shared caps (sc-gateway's ID token only) ---------------------
+
+
+def gateway_only(authorization: Annotated[str | None, Header()] = None) -> None:
+    try:
+        gateway_counters.verify_gateway(authorization)
+    except gateway_counters.Unauthorized as e:
+        log.warning("internal gateway route refused", extra={"error": str(e)[:200]})
+        raise ApiError(403, "permission_denied", "only the AI gateway may call this") from None
+
+
+@app.post("/internal/gateway/reserve", include_in_schema=False, dependencies=[Depends(gateway_only)])
+def gateway_reserve(body: gateway_counters.ReserveRequest):
+    return gateway_counters.reserve(body)
+
+
+@app.post("/internal/gateway/settle", status_code=204, include_in_schema=False, dependencies=[Depends(gateway_only)])
+def gateway_settle(body: gateway_counters.SettleRequest) -> Response:
+    gateway_counters.settle(body)
+    return Response(status_code=204)
 
 
 # --- console: AI providers, billing, linked GCP projects -----------------------------------

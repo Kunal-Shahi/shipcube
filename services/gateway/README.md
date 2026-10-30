@@ -89,6 +89,7 @@ spends reasoning tokens inside it (173 of 183 for a one-word reply).
 | `GATEWAY_META_MODELS` | Comma-separated models apps may request on ShipCube's key besides their configured one (others: `403 model_not_allowed`). |
 | `GATEWAY_DEFAULT_TOKENS_PER_DAY`, `GATEWAY_DEFAULT_REQUESTS_PER_MINUTE` | Per-app caps on ShipCube's key for apps whose registry entry sets none. Default 200000 and 60. |
 | `GATEWAY_WORKSPACE_TOKENS_PER_DAY`, `GATEWAY_WORKSPACE_REQUESTS_PER_MINUTE` | Caps on ShipCube's key across all of a workspace's apps. Default 1000000 and 300. |
+| `GATEWAY_COUNTERS_URL` | The control-plane API (the `shipcube-mcp` service URL). Caps are then kept in its `rate_counters`, shared by every instance and kept across restarts (`/internal/gateway/reserve` and `/settle`, with the gateway's ID token). If it can't be reached, platform-key requests get `503 caps_unavailable`; BYOK requests fall back to this instance's counters, logged. Unset: per-instance counters. |
 | `GATEWAY_MAX_OUTPUT_TOKENS` | Every request's `max_tokens` / `max_completion_tokens` is clamped to this (default 16000), and to what's left of its token caps. Only `n=1` is accepted. |
 | `GATEWAY_UPSTREAM_HEADER_TIMEOUT`, `GATEWAY_REQUEST_TIMEOUT`, `GATEWAY_UPSTREAM_RETRIES` | See "Timeouts and retries". |
 | `GOOGLE_CLOUD_PROJECT` | Project id, for the Cloud Logging trace field. |
@@ -131,10 +132,9 @@ completions are long by design. Usage per app: Logs Explorer with `jsonPayload.s
   rate cap. Strict limits need shared counters (Redis or Postgres), which aren't built.
 - **BYOK prices aren't known to the gateway.** Their `cost_usd` is 0 with `priced=false` until set in
   `GATEWAY_PRICES`, so spend caps don't bind for them; token caps do. (The platform model must be priced.)
-- **Caps are per instance.** Each request reserves its prompt estimate plus its output allowance before
-  the provider is called and settles to actual usage after, so concurrent requests can't overshoot within
-  an instance; across N instances a cap can be exceeded up to N times, and counters restart with an
-  instance. Shared counters in `rate_counters` need a database path for the gateway (DESIGN.md §3).
+- **Caps are shared only with `GATEWAY_COUNTERS_URL`.** Each request reserves its prompt estimate plus its
+  output allowance (and their cost) before the provider is called and settles to actual usage after. With
+  the API's counters that holds across instances and restarts; without them each instance counts alone.
 - **Streams without a usage chunk** (Meta sometimes omits it) are metered by a bytes/4 estimate,
   flagged `estimated=true`.
 - **Anthropic:** tool calls aren't translated yet. Requests with `tools` get a 400 instead of being
