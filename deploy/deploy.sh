@@ -49,6 +49,7 @@ apply() {  # apply <name>: render deploy/services/<name>.yaml and replace the Cl
   local out
   out="$(mktemp "${TMPDIR:-/tmp}/shipcube-$1.XXXXXX")"
   render "deploy/services/$1.yaml" > "$out"
+  python3 deploy/check_production.py "$out"  # nothing local in what Cloud Run will run (#29)
   gcloud run services replace "$out" --project "$PROJECT" --region "$REGION" --quiet
   rm -f "$out"
 }
