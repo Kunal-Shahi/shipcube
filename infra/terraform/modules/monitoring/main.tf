@@ -282,3 +282,50 @@ resource "google_monitoring_alert_policy" "public_hosted_service" {
     content   = "A hosted app's Cloud Run service can be called by `allUsers` or `allAuthenticatedUsers`, which skips IAP. The incident's `service` label names it. Remove the binding at once: `gcloud run services remove-iam-policy-binding SERVICE --project shipcube-apps-ks --region REGION --member allUsers --role roles/run.invoker` (or `allAuthenticatedUsers`), then find who added it in the apps project's Admin Activity audit log (`protoPayload.methodName:\"SetIamPolicy\"`). ${local.runbook}"
   }
 }
+
+# Heartbeat for the check above: the worker logs this INFO line after every successful run
+# (hourly), with services_checked. No heartbeat for 3 hours means the check stopped (worker down
+# or scaled to zero, or the check failing), so a public app would go unnoticed.
+locals {
+  exposure_heartbeat_message = "exposure check ran"
+}
+
+resource "google_logging_metric" "exposure_check_heartbeat" {
+  project     = var.project_id
+  name        = "shipcube/exposure_check_heartbeat"
+  description = "Successful runs of the worker's hourly public-service check."
+  filter      = "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"${var.worker_service}\" AND severity=INFO AND jsonPayload.message=\"${local.exposure_heartbeat_message}\""
+  metric_descriptor {
+    metric_kind = "DELTA"
+    value_type  = "INT64"
+    unit        = "1"
+  }
+}
+
+resource "google_monitoring_alert_policy" "exposure_check_stopped" {
+  project               = var.project_id
+  display_name          = "ShipCube public-app check stopped"
+  combiner              = "OR"
+  notification_channels = [google_monitoring_notification_channel.email.id]
+
+  conditions {
+    display_name = "No exposure-check heartbeat for 3 h"
+    condition_absent {
+      filter   = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.exposure_check_heartbeat.name}\" AND resource.type=\"cloud_run_revision\""
+      duration = "10800s"
+      aggregations {
+        alignment_period     = "3600s"
+        per_series_aligner   = "ALIGN_DELTA"
+        cross_series_reducer = "REDUCE_SUM"
+      }
+      trigger {
+        count = 1
+      }
+    }
+  }
+
+  documentation {
+    mime_type = "text/markdown"
+    content   = "The worker's hourly check that no hosted app is public hasn't completed for 3 hours, so a public app would go unnoticed. Check that `${var.worker_service}` is running (it may have been scaled to zero on purpose, in which case this is expected), then its logs for `exposure check failed`. ${local.runbook}"
+  }
+}

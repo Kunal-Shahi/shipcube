@@ -441,12 +441,13 @@ class Worker:
             regions = [r["region"] for r in conn.execute(
                 "select distinct region from apps where gcp_link_id is null and deleted_at is null")]
         try:
-            exposed = check(regions or [settings.region])
+            exposed, checked = check(regions or [settings.region])
         except Exception:  # noqa: BLE001
-            log.exception("exposure check failed")
+            log.exception("exposure check failed")  # no heartbeat: the absence alert fires after 3 h
             return
-        for name in exposed:  # this exact message feeds an alert (infra/terraform/modules/monitoring)
+        for name in exposed:  # these exact messages feed alerts (infra/terraform/modules/monitoring)
             log.critical("hosted service is public: anyone can call it past IAP", extra={"service": name})
+        log.info("exposure check ran", extra={"services_checked": checked, "public": len(exposed)})
 
 
 def current_deployment_exists(app_id: Any) -> bool:

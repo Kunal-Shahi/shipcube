@@ -543,21 +543,23 @@ class GcpDeployer:
         log.info("purged %s in %s", app.service, app.target.project)
 
 
-    def public_services(self, regions: list[str]) -> list[str]:
+    def public_services(self, regions: list[str]) -> tuple[list[str], int]:
         """Hosted services whose IAM policy names allUsers or allAuthenticatedUsers (anyone could call
-        them past IAP). Runs as the worker's own identity (run.developer in the apps project)."""
-        sess, out = self._session(None), []
+        them past IAP), and how many services were checked. Runs as the worker's own identity
+        (run.developer in the apps project)."""
+        sess, out, checked = self._session(None), [], 0
         for region in sorted(set(regions)):
             base = f"{RUN}/projects/{self.s.apps_project}/locations/{region}/services"
             page: str | None = ""
             while page is not None:
                 r = self._call(sess, "GET", base, params={"pageToken": page} if page else None)
                 for svc in r.get("services", []):
+                    checked += 1
                     policy = self._call(sess, "GET", f"{RUN}/{svc['name']}:getIamPolicy")
                     if any(m in ("allUsers", "allAuthenticatedUsers") for b in policy.get("bindings", []) for m in b.get("members", [])):
                         out.append(svc["name"])
                 page = r.get("nextPageToken") or None
-        return out
+        return out, checked
 
     def ensure_link_deployer(self, workspace_id: str, deployer_sa: str) -> None:
         """Create ws-<id>-deployer before the user runs link-project.sh (which fails on an unknown

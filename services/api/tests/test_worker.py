@@ -156,9 +156,9 @@ def test_exposure_check_logs_public_hosted_services_as_critical(client, caplog):
     class Exposed(MockDeployer):
         def public_services(self, regions):
             assert regions  # always at least the default region
-            return ["projects/shipcube-apps-ks/locations/asia-south1/services/leaky"]
+            return ["projects/shipcube-apps-ks/locations/asia-south1/services/leaky"], 3
 
-    with caplog.at_level("CRITICAL", logger="shipcube.worker"):
+    with caplog.at_level("INFO", logger="shipcube.worker"):
         Worker(Exposed(), worker_id="w-exposure").check_exposure()
     hits = [r for r in caplog.records if r.levelname == "CRITICAL" and "public" in r.getMessage()]
     assert hits and hits[0].service.endswith("/services/leaky")
@@ -167,6 +167,21 @@ def test_exposure_check_logs_public_hosted_services_as_critical(client, caplog):
     import re
     tf = (pathlib.Path(__file__).resolve().parents[3] / "infra/terraform/modules/monitoring/main.tf").read_text()
     assert hits[0].getMessage() == re.search(r'public_service_message = "([^"]+)"', tf)[1]
+    # And a heartbeat every run, so a check that stops running alerts too (absence alert, same file).
+    beats = [r for r in caplog.records if r.levelname == "INFO" and r.getMessage() == "exposure check ran"]
+    assert beats and beats[0].services_checked == 3 and beats[0].public == 1
+    assert beats[0].getMessage() == re.search(r'exposure_heartbeat_message = "([^"]+)"', tf)[1]
+
+
+def test_a_failed_exposure_check_sends_no_heartbeat(client, caplog):
+    class Broken(MockDeployer):
+        def public_services(self, regions):
+            raise RuntimeError("Cloud Run API unavailable")
+
+    with caplog.at_level("INFO", logger="shipcube.worker"):
+        Worker(Broken(), worker_id="w-exposure-3").check_exposure()
+    assert not [r for r in caplog.records if r.getMessage() == "exposure check ran"]
+    assert [r for r in caplog.records if r.getMessage() == "exposure check failed"]
     caplog.clear()
     with caplog.at_level("CRITICAL", logger="shipcube.worker"):
         Worker(MockDeployer(), worker_id="w-exposure-2").check_exposure()  # no check on the mock: nothing

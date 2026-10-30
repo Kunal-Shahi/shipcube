@@ -353,4 +353,4 @@ def test_public_services_finds_all_users_bindings(hosted):
                                            {"name": f"projects/shipcube-apps-ks/locations/asia-south1/services/b"}]}),
     })
     hosted._sessions[None] = adc
-    assert hosted.public_services(["asia-south1"]) == ["projects/shipcube-apps-ks/locations/asia-south1/services/a"]
+    assert hosted.public_services(["asia-south1"]) == (["projects/shipcube-apps-ks/locations/asia-south1/services/a"], 2)
