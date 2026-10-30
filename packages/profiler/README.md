@@ -38,6 +38,7 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
   - The sampler thread reads the app's `/proc` entries with `setfsuid`/`setfsgid` set to the app's uid, so the agent needs no `CAP_SYS_PTRACE`.
   - Signals the app aims at the agent count as `tamper_attempts`, which raises the abuse signal `agent_tamper`.
   - `docker run --init` keeps the agent off PID 1, so its protection comes from the uid split, not from PID 1's immunity to signals.
+- **No privilege gain.** The app runs with `PR_SET_NO_NEW_PRIVS` (set in its `preexec_fn`), and the image has every setuid and setgid bit stripped, since Cloud Run has no no-new-privileges flag.
 - **No symlinks.** Git checkouts contain none (see above); in uploads every symlink is deleted before anything reads the tree.
 - **Static fallbacks:** `estimate()` reports `profile.measurements.static_reason`, one of `STATIC_REASONS`. The control plane forces one with `StaticRunner(reason="quota" | "budget" | "suspended" | "busy" | "disabled")`.
 - **Abuse signals:** `profile.measurements.abuse_signals`, computed host-side by `abuse_signals(profile)`, for the control plane's strikes.

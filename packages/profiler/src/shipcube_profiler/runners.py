@@ -70,8 +70,21 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+PR_SET_NO_NEW_PRIVS = 38
+
+
+def _no_new_privs() -> None:
+    """Linux: execve can never grant this process (or its children) privileges, so a
+    setuid binary runs without them. Cloud Run has no no-new-privileges flag of its
+    own; the image also has its setuid bits stripped (gcp_runner.render_dockerfile)."""
+    if sys.platform.startswith("linux"):
+        if ctypes.CDLL(None, use_errno=True).prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), "prctl(PR_SET_NO_NEW_PRIVS) failed")
+
+
 def _preexec(limits: Limits):
     def fn():
+        _no_new_privs()   # before the app's execve; Popen has already dropped to app_uid
         os.setsid()
         cpu = int(limits.timeout_s * 4) + 5
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))

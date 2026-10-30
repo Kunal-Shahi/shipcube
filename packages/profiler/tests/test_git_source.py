@@ -64,7 +64,7 @@ def test_clone_is_shallow_single_branch_without_tags(tmp_path):
 def test_clone_over_the_size_cap_is_aborted_and_removed(tmp_path, monkeypatch):
     repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n", "data.bin": os.urandom(3 * 2**20)})
     monkeypatch.setattr(sources, "GIT_MAX_BYTES", 2**20)
-    with pytest.raises(SourceError, match="limit is 1 MiB"):
+    with pytest.raises(SourceError, match="1 MiB"):   # the tree listing, or the watchdog if it fires first
         clone(repo, tmp_path / "out")
     assert not (tmp_path / "out" / "repo").exists()
 

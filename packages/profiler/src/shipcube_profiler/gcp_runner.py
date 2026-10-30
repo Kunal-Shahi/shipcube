@@ -76,7 +76,8 @@ BUILD_TERMINAL = {"SUCCESS", "FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED"
 # The agent runs as root (inside the container) and starts the app as SANDBOX_UID,
 # which then holds no capabilities: it can't signal, ptrace or read the agent, which is
 # also non-dumpable. RLIMIT_NPROC counts only the app's uid. /app is read-only; only
-# /tmp is writable.
+# /tmp is writable. No setuid/setgid binaries are left in the image, and the app runs
+# with no_new_privs (runners._no_new_privs), since Cloud Run has no flag for either.
 SANDBOX_UID = 10001
 APPDEPS_UID = 10002
 REQUIREMENTS_FILE = "shipcube-requirements.txt"
@@ -94,6 +95,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN pip install --only-binary=:all: --index-url {PYPI_INDEX} --target /opt/shipcube "psutil>=6.0,<8" \\
  && useradd --uid {SANDBOX_UID} --no-create-home --shell /usr/sbin/nologin sandbox \\
  && useradd --uid {APPDEPS_UID} --no-create-home --shell /usr/sbin/nologin appdeps \\
+ && find / -xdev -perm /6000 -type f -exec chmod a-s {{}} + \\
  && chmod -R a-w /usr/local/lib/python3.12 /opt/shipcube \\
  && mkdir /opt/appdeps && chown {APPDEPS_UID}:{APPDEPS_UID} /opt/appdeps
 COPY {REQUIREMENTS_FILE} /opt/{REQUIREMENTS_FILE}

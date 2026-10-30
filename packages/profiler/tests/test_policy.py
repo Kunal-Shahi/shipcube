@@ -196,3 +196,10 @@ def test_nproc_limit_refuses_a_fork_bomb_on_linux(tmp_path):
     mine = len([p for p in psutil.process_iter(["uids"]) if p.info["uids"] and p.info["uids"].real == os.getuid()])
     p = LocalRunner(Limits(timeout_s=20, max_nproc=mine + 64, max_processes=10_000)).run(root, s, Hints())
     assert p.killed_reason and "processes" in p.killed_reason
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="prctl is Linux-only")
+def test_app_runs_with_no_new_privs_on_linux(tmp_path):
+    root, s = _script(tmp_path, "import sys\nst = open('/proc/self/status').read()\n"
+                                "sys.exit(0 if 'NoNewPrivs:\\t1' in st else 4)\n")
+    assert LocalRunner(Limits(timeout_s=20)).run(root, s, Hints()).exit_code == 0

@@ -404,3 +404,49 @@ def test_agent_is_root_and_app_has_its_own_uid(tmp_path):
                              "uid = int([l for l in st.splitlines() if l.startswith('Uid:')][0].split()[1])\n"
                              "sys.exit(0 if os.getuid() == 10001 and uid == 0 else 6)\n")
     assert DockerRunner().run(root, s, Hints()).exit_code == 0
+
+
+ESCALATE = r'''
+import os, shutil, subprocess, sys
+problems = []
+if "NoNewPrivs:\t1" not in open("/proc/self/status").read():
+    problems.append("no_new_privs not set")
+for cmd in (["su", "root", "-c", "id -u"], ["newgrp", "root"], ["sg", "root", "-c", "id -u"]):
+    if shutil.which(cmd[0]):
+        r = subprocess.run(cmd, input=b"\n", capture_output=True, timeout=10)
+        if r.returncode == 0 or b"\n0\n" in b"\n" + r.stdout:
+            problems.append("escalated with " + cmd[0])
+for d in ("/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/lib", "/usr/libexec"):
+    for dirpath, _, names in os.walk(d):
+        for n in names:
+            p = os.path.join(dirpath, n)
+            try:
+                if os.lstat(p).st_mode & 0o6000:
+                    problems.append("setuid/setgid: " + p)
+            except OSError:
+                pass
+if os.getuid() != 10001 or os.geteuid() != 10001:
+    problems.append("uid changed")
+print(problems, file=sys.stderr)
+sys.exit(8 if problems else 0)
+'''
+
+
+@needs_docker
+def test_app_cannot_gain_privileges(tmp_path):
+    root, s = _app(tmp_path, ESCALATE)
+    p = DockerRunner().run(root, s, Hints())
+    assert p.exit_code == 0, p.notes
+
+
+@needs_docker
+def test_image_has_no_setuid_or_setgid_files(tmp_path):
+    root, s = _app(tmp_path, "print('hi')\n")
+    image = DockerRunner().build(root)
+    r = subprocess.run(["docker", "run", "--rm", "--network", "none", "--entrypoint", "find", image,
+                        "/", "-xdev", "-perm", "/6000", "-type", "f"], capture_output=True, text=True)
+    assert r.returncode == 0 and r.stdout.strip() == ""
+    # The base image does ship them (so the strip step matters).
+    base = subprocess.run(["docker", "run", "--rm", "--network", "none", "--entrypoint", "find", "python:3.12-slim",
+                           "/", "-xdev", "-perm", "/6000", "-type", "f"], capture_output=True, text=True)
+    assert "/su" in base.stdout
