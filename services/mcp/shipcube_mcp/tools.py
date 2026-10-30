@@ -242,7 +242,7 @@ def register_tools(server: MCPServer, api: Api) -> None:
     async def ai_config(
         app: AppName,
         provider: Literal["meta", "openai_compatible", "openai", "anthropic"] = "meta",
-        model: str = "muse-spark",
+        model: str = "muse-spark-1.3",
     ) -> AiConfigResult:
         """Choose the model provider the app reaches through ShipCube's AI gateway. Muse is the default. A BYOK
         provider (openai, anthropic, openai_compatible) uses the key, and for openai_compatible the endpoint, that a
