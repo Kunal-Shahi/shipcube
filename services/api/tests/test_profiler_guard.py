@@ -302,7 +302,7 @@ class FakeCloud:
     def objects(self):
         return self.object_list
 
-    def delete_object(self, name):
+    def delete_object(self, name, bucket=None):
         self.removed.append(name)
 
 

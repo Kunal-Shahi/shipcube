@@ -110,7 +110,7 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
     prov = FakeSession({
         ("POST", ":setIamPolicy"): (200, {}),
         ("POST", "/repositories"): (409, {"error": {"message": "exists"}}),  # a retry: already created
-        ("GET", ":getIamPolicy"): (200, {"bindings": []}),
+        ("GET", ":getIamPolicy"): lambda _: (200, {"bindings": []}),  # a fresh policy per resource
         ("GET", "/iam"): (200, folder_iam),
         ("POST", ":getIamPolicy"): (200, {"etag": "e"}),
     })
@@ -134,7 +134,7 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
     sa_set = next(c for c in calls if c[1].endswith(f"serviceAccounts/{sa}:setIamPolicy"))
     assert sa_set[2]["policy"]["etag"] == "e" and sorted(b["role"] for b in sa_set[2]["policy"]["bindings"]) == [
         "roles/iam.serviceAccountTokenCreator", "roles/iam.serviceAccountUser"]
-    assert len(prov.calls) == 12  # SA, repo + IAM get/set, 2 folders + IAM get/put each, SA IAM get/set
+    assert len(prov.calls) == 18  # SA, repo + IAM get/set, 2 folders + IAM get/put each, SA IAM get/set, 2 mirrors x describe + IAM get/set
     # A hosted build provisions first, as the provisioner, never with the deployer's own identity.
     assert all("managedFolders" not in u and "repositories?" not in u for _, u, _, _ in deployer._sessions.get(None, FakeSession({})).calls)
 
@@ -271,3 +271,20 @@ def test_soft_delete_blocks_ingress_and_access(deployer):
     assert iam[2]["policy"]["bindings"] == []
     patch = next(c for c in sess.calls if c[0] == "PATCH")
     assert patch[2] == {"ingress": "INGRESS_TRAFFIC_INTERNAL_ONLY"} and patch[3] == {"updateMask": "ingress"}
+
+
+def test_ensure_builder_grants_read_on_the_profiler_mirrors_that_exist(deployer):
+    short = WS.replace("-", "")[:20]
+    member = f"serviceAccount:sc-build-{short}@shipcube-apps-ks.iam.gserviceaccount.com"
+    prov = FakeSession({
+        ("GET", "repositories/dockerhub-remote:getIamPolicy"): lambda _: (200, {"bindings": []}),
+        ("GET", "repositories/dockerhub-remote"): (404, {"error": {"message": "not found"}}),  # offline_builds off
+        ("GET", ":getIamPolicy"): lambda _: (200, {"bindings": []}),
+        ("POST", ":getIamPolicy"): (200, {"etag": "e"}),
+        ("GET", "/iam"): lambda _: (200, {"bindings": []}),
+    })
+    deployer._sessions[deployer.s.provisioner_sa] = prov
+    deployer.ensure_builder(WS)
+    sets = {c[1].split("/repositories/")[-1]: c[2] for c in prov.calls if c[1].endswith(":setIamPolicy") and "/repositories/" in c[1]}
+    assert sets["pypi-remote:setIamPolicy"]["policy"]["bindings"] == [{"role": "roles/artifactregistry.reader", "members": [member]}]
+    assert "dockerhub-remote:setIamPolicy" not in sets  # skipped: the mirror doesn't exist
