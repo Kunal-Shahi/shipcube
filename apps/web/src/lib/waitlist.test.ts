@@ -50,6 +50,13 @@ describe("submitAccessRequest", () => {
     expect(h).toEqual({ ok: false, message: "Too many requests from here. Try again in 45 seconds." });
   });
 
+  it("offers sign-in when the global anonymous budget is spent, not a per-IP wait", async () => {
+    const busy = await submitAccessRequest("https://api.example", fields, reply(429, { error: { code: "waitlist_busy", retry_after: 600 } }, { "Retry-After": "600" }));
+    expect(busy).toEqual({ ok: false, message: "We're getting a lot of requests. Sign in with Google to request access.", signIn: true });
+    const perIp = await submitAccessRequest("https://api.example", fields, reply(429, { error: { code: "rate_limited", retry_after: 600 } }));
+    expect(perIp).toEqual({ ok: false, message: "Too many requests from here. Try again in 10 minutes." });
+  });
+
   it("shows the API's reason for a bad field, and a plain retry message otherwise", async () => {
     const bad = await submitAccessRequest("https://api.example", fields, reply(400, { error: { code: "invalid_argument", message: "name is too long" } }));
     expect(bad).toEqual({ ok: false, message: "name is too long" });

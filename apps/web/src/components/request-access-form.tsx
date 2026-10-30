@@ -5,7 +5,7 @@ import { useState } from "react";
 import { requestAccessSignedInAction } from "@/app/(auth)/actions";
 import { cn } from "@/lib/cn";
 import { HONEYPOT, LIMITS, submitAccessRequest, validateAccessRequest, type FieldErrors } from "@/lib/waitlist";
-import { Button, Field, Input, inputClass } from "./ui";
+import { Button, ButtonLink, Field, Input, inputClass } from "./ui";
 
 /**
  * Early-access request. Anonymous, it posts from the browser straight to the API (its rate limit
@@ -16,6 +16,7 @@ import { Button, Field, Input, inputClass } from "./ui";
 export function RequestAccessForm({ apiBase, accountEmail }: { apiBase: string | null; accountEmail?: string }) {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [message, setMessage] = useState<string | null>(null);
+  const [offerSignIn, setOfferSignIn] = useState(false);
   const [pending, setPending] = useState(false);
   const [sent, setSent] = useState(false);
 
@@ -71,7 +72,10 @@ export function RequestAccessForm({ apiBase, accountEmail }: { apiBase: string |
         : await new Promise<{ ok: true }>((ok) => setTimeout(() => ok({ ok: true }), 400));
     setPending(false);
     if (r.ok) setSent(true);
-    else setMessage(r.message);
+    else {
+      setMessage(r.message);
+      setOfferSignIn(Boolean("signIn" in r && r.signIn));
+    }
   }
 
   return (
@@ -112,6 +116,12 @@ export function RequestAccessForm({ apiBase, accountEmail }: { apiBase: string |
           <p role="alert" className="text-[12px] text-critical">
             {message}
           </p>
+        )}
+        {offerSignIn && (
+          // Signed in without a workspace, the console opens /waitlist with a one-click request.
+          <ButtonLink href="/sign-in?returnTo=%2Fwaitlist" size="sm">
+            Sign in with Google
+          </ButtonLink>
         )}
       </div>
     </form>

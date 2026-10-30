@@ -23,7 +23,8 @@ export function validateAccessRequest(f: AccessRequestFields): FieldErrors {
   return e;
 }
 
-export type SubmitResult = { ok: true } | { ok: false; message: string };
+/** `signIn`: offer Google sign-in, because signed-in requests have their own budget. */
+export type SubmitResult = { ok: true } | { ok: false; message: string; signIn?: boolean };
 
 /**
  * Sends the request. The API answers 202 for every valid submission (new, duplicate, already
@@ -47,6 +48,10 @@ export async function submitAccessRequest(
   }
   if (res.status === 202 || res.ok) return { ok: true };
   const body = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string; retry_after?: number } };
+  // The API's global budget for anonymous requests is spent. Signed-in requests are counted separately.
+  if (res.status === 429 && body.error?.code === "waitlist_busy") {
+    return { ok: false, message: "We're getting a lot of requests. Sign in with Google to request access.", signIn: true };
+  }
   if (res.status === 429) {
     const s = Number(body.error?.retry_after ?? res.headers.get("Retry-After") ?? 0);
     const wait = s > 90 ? `${Math.ceil(s / 60)} minutes` : s > 0 ? `${s} seconds` : "a few minutes";
