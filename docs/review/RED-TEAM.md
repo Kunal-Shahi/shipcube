@@ -1,6 +1,6 @@
 # ShipCube red-team review
 
-**Date:** 2026-10-28, re-reviewed 2026-10-30. **Scope:** `Kunal-Shahi/shipcube` at `main` (`dd678f5`), the open hosting PR (`platform/hosted-deploy`), `Kunal-Shahi/shipcube-data` at `main` (`5cb920b`), and the live GCP configuration of `shipcube-control-ks` and `shipcube-apps-ks`.
+**Date:** 2026-10-28, re-reviewed 2026-10-30 (twice; the newest section is first). **Scope:** `Kunal-Shahi/shipcube` at `main` (`dd678f5`), the open hosting PR (`platform/hosted-deploy`), `Kunal-Shahi/shipcube-data` at `main` (`5cb920b`), and the live GCP configuration of `shipcube-control-ks` and `shipcube-apps-ks`.
 **Method:** code and Terraform review, read-only `gcloud`, and light unauthenticated or invalid-token requests against ShipCube's own services. Nothing was changed, no load was generated, and no third party was touched. Two findings (S-3, S-4) were reproduced with scratch tests against a local Postgres and the mock deployer.
 
 Severity is intrinsic: what happens if someone uses the issue. The **Live?** column says whether it can be reached in today's deployment:
@@ -9,6 +9,74 @@ Severity is intrinsic: what happens if someone uses the issue. The **Live?** col
 - **latent:** the code is merged but not deployed or not wired up yet. It becomes live when it ships.
 
 Owners: **security** (`infra/**`, IAM, DB roles), **networking** (`services/api`, `services/mcp`), **platform** (`services/gateway`, `deploy/`, CI, monitoring), **frontend** (`apps/web`), **load-estimator** (`packages/profiler`, `packages/placement`, `ml/`), **data-layer** (`shipcube-data`).
+
+---
+
+## Re-review 2, 2026-10-30 afternoon (`main` at `3320b7c`)
+
+Since the morning re-review, three PRs have merged:
+- **#44** sends build logs to per-workspace GCS and removes the project-wide `logWriter` (#28).
+- **#45** contains go-live fixes: `SHIPCUBE_AI_GATEWAY_URL` on the MCP service, the catalog startup check on the API's IAM-auth pool, and a registry-401 case in the isolation test.
+- **#46** grants `storage.buckets.get` on the uploads bucket so Cloud Build accepts the logs folder.
+
+All four services were redeployed. The method was as before: code review, read-only `gcloud` and Monitoring API calls, and unauthenticated or invalid-token requests.
+
+### Production now runs `main`
+
+| Check | Result |
+|---|---|
+| Images | `shipcube-mcp`, `-worker`, `-console` and `-gateway` all run `3fff7a6`, which is `main` minus #46. #46 is Terraform only. |
+| C-2 (data-layer version pin) | **Fixed in production.** The deployed MCP pins shipcube-data `ab16f4c`, which contains the fix (`62f1011`). shipcube-data #2 is closed. |
+| H-3 (MCP URL) | **Fixed in production.** The console has `SHIPCUBE_MCP_URL` set to ShipCube's own run.app URL. #17 can close. |
+| Gateway URL returned by `ai_config` | **Fixed:** `SHIPCUBE_AI_GATEWAY_URL` is set on `shipcube-mcp`. |
+| Dev mode in production | No `*DEV_MODE`, `SHIPCUBE_BACKEND`, local `SHIPCUBE_PROFILER` or local secret store env on any service. The code-level guard (#29) is still missing, but nothing sets the flags. |
+| Auth negative tests | `/v1/me`, `/v1/apps`, `/v1/data/cubes` and `/mcp` return 401 unauthenticated and with a bogus PAT. `/docs` and `/openapi.json` are still public (low, known). |
+| #28 | The `principalSet` `logWriter` binding is not in live IAM. Closed. |
+
+### C-1: half applied, not closed
+
+**Applied:**
+- `sc-provisioner` exists.
+- The first workspace has its own builder SA, its own registry repo `ws-<ws_short>`, and its managed folders under `ws/<uuid>/`.
+- The hosted build path in the code no longer runs as `sc-builder`.
+
+**Still open:**
+- **#46 is not applied.** The uploads bucket has no `storage.buckets.get` binding yet, and Cloud Build rejects a `logsBucket` the build SA can't read. Expect **every hosted build to fail** until it is applied. No hosted build has run in the apps project since the deploy (the only builds there are profiler builds from Oct 27). This is now the biggest risk for the demo. *(platform)*
+- **`sc-builder` keeps its legacy grants:**
+  - `storage.objectViewer` on the whole uploads bucket;
+  - `artifactregistry.writer` at project level and on the shared `shipcube` repo;
+  - the hand-made `logging.logWriter`.
+
+  Nothing builds as `sc-builder` now, so these grants are dormant. They are still the C-1 blast radius if anything can get a token for it. Finish infra/README step 4: set `legacy_shared_builder = false`, apply, then remove the `logWriter` binding. *(security)*
+- `hello-tracker` (the one tenant app) still runs a **tag** from the shared repo, not a digest in its own repo. Redeploy it through the new path once builds work, so `update_caps` doesn't refuse it.
+
+**#46 review: acceptable.** It binds a custom role holding only `storage.buckets.get` to every SA in the apps project, and only on the uploads bucket. That role allows no object reads, no listing and no IAM reads, so tenant runtime SAs learn the bucket's metadata and nothing else. A per-SA binding would be tighter, but builders are created at runtime, so this is a reasonable trade.
+
+**#45 review: no issues.** The catalog probe now runs on the API's pool under the nil workspace and only reads the migration ledger.
+
+### Unchanged since the morning
+
+- **R-1 (#42)** is still latent: the hosted gateway reads `GATEWAY_REGISTRY_FILE`, not `provider_configs`. `set_ai` is unchanged (`store.py:605-614`).
+- **S-3 and S-4 (#18, #19):** the code is unchanged (`store.py:576-580`), and they are now **live** because production runs `main`.
+- **H-1 (#15):** `sc-api` still holds `iam.serviceAccountAdmin` and `secretmanager.admin` on the control project.
+- **H-2 (#16):** `roles/editor` is still on both default compute SAs. Also note the App Engine default SA in the control project, which holds Editor too.
+- **O-1:** there are still zero alert policies and zero uptime checks in both projects.
+- **#29:** no `K_SERVICE` refusal outside the console. The localhost defaults remain (`settings.py:56`).
+- **A-1, G-1, P-1, P-3 (#20–#23):** unchanged.
+
+### Top 5 now (Nov 4 is in 5 days)
+
+1. **Make hosted deploys work, then close C-1.**
+   - Apply #46.
+   - Run one hosted build end to end and check that it runs as `sc-build-<ws>` and logs to `ws/<uuid>/build-logs/`.
+   - Redeploy `hello-tracker`.
+   - Set `legacy_shared_builder = false` and remove `sc-builder`.
+
+   *(platform, security)*
+2. **Revocation correctness (S-3, S-4):** now live in production. *(networking)*
+3. **Remove `roles/editor` from the default compute SAs** (and the App Engine SA). It's one command each and defuses H-2 and half of H-1. *(security)*
+4. **Alerts (O-1):** run `deploy/monitoring.py`. Nothing pages anyone today. *(platform)*
+5. **R-1 and #29 before anything else ships:** restrict `key_secret` by kind and provider before the gateway reads `provider_configs`, and add the shared `K_SERVICE` refusal. *(networking, platform)*
 
 ---
 
