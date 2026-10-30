@@ -190,7 +190,8 @@ export interface GcpLink {
 }
 
 export interface BillingOverview {
-  credits: { granted: number; used: number; expiresAt: string };
+  /** granted is 0 when the deployment has no credit grant configured; expiresAt may be unknown. */
+  credits: { granted: number; used: number; expiresAt?: string };
   gcp: GcpLink;
   monthToDate: number;
   forecast: number;

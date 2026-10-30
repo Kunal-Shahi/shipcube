@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvalFromOperation, camelize, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, linkFromApi, placementOf, providerFromApi, type ApiOperation } from "./http";
+import { approvalFromOperation, billingFromApi, camelize, capsFromApi, capsToApi, estimateFromApi, grantFromApi, healthOf, linkFromApi, placementOf, providerFromApi, summaryFromApi, type ApiOperation } from "./http";
 
 const op = (over: Partial<ApiOperation>): ApiOperation => ({
   id: "op_1",
@@ -177,5 +177,41 @@ describe("providerFromApi", () => {
       id: "anthropic", label: "Anthropic", description: "Your own Anthropic API key.", connected: true, isDefault: true,
       keyHint: "…Wxyz", baseUrl: undefined, defaultModel: "claude-haiku-5-5", addedAt: "2026-10-29T03:00:00Z",
     });
+  });
+});
+
+describe("billingFromApi", () => {
+  it("maps GET /v1/billing, with no credit expiry and no linked project", () => {
+    const b = billingFromApi({
+      credits: { granted_usd: 0, used_usd: 1.25, expires_at: null },
+      month_to_date_usd: 3.5,
+      forecast_usd: 10.85,
+      by_app: [{ app: "hello", billing: "shipcube", compute_usd: 1, data_usd: 0.5, llm_usd: 2 }],
+      daily: [{ date: "2026-10-29", cost_usd: 0.4 }],
+      gcp: null,
+      source: "usage_daily",
+    });
+    expect(b).toEqual({
+      credits: { granted: 0, used: 1.25, expiresAt: undefined },
+      gcp: { linked: false },
+      monthToDate: 3.5,
+      forecast: 10.85,
+      byApp: [{ appId: "hello", name: "hello", billing: "shipcube", compute: 1, data: 0.5, llm: 2 }],
+      daily: [{ t: "2026-10-29", value: 0.4 }],
+    });
+  });
+});
+
+describe("summaryFromApi", () => {
+  it("keeps soft-deleted apps, marked, for the Recently deleted list", () => {
+    const base = { name: "old", url: "https://old.run.app", tier: "T1", status: "running", updated_at: "2026-10-28T00:00:00Z" };
+    expect(summaryFromApi({ ...base, target: "shipcube", deleted_at: "2026-10-29T00:00:00Z" })).toMatchObject({
+      id: "old",
+      health: "down",
+      billing: "shipcube",
+      deletedAt: "2026-10-29T00:00:00Z",
+    });
+    expect(summaryFromApi({ ...base, target: "acme-prod" })).toMatchObject({ billing: "own-gcp", deletedAt: undefined });
+    expect(summaryFromApi({ ...base, target: "local" }).billing).toBeUndefined();
   });
 });
