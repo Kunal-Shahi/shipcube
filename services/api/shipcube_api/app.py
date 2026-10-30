@@ -340,13 +340,16 @@ def set_caps(app: AppName, body: Caps, c: Annotated[Caller, Depends(scope("caps:
 @app.patch("/v1/apps/{app}/access", response_model=AccessResult)
 def set_access(app: AppName, body: AccessChange, c: Annotated[Caller, Depends(scope("access:write"))],
                idem: IdemKey = None):
-    access, op = store.set_access(c, app, [g.model_dump() for g in body.add], body.remove, idem)
-    return {"access": access, "operation": op}
+    access, gated, pushed = store.set_access(c, app, [g.model_dump() for g in body.add], body.remove, idem)
+    return {"access": access, "operation": gated or pushed, "applied": pushed if gated else None}
 
 
 @app.put("/v1/apps/{app}/ai", response_model=AiConfigResult)
 def ai_config(app: AppName, body: AiConfigRequest, c: Annotated[Caller, Depends(scope("secrets:write"))]):
-    ai = store.set_ai(c, app, body.provider, body.model, body.key_secret, body.base_url)
+    try:
+        ai = store.set_ai(c, app, body.provider, body.model, body.key_secret, body.base_url)
+    except PermissionError as e:
+        raise ApiError(403, "permission_denied", str(e)) from None
     return {"ai": ai, "gateway_url": f"{(settings.ai_gateway_url or 'http://localhost:8090').rstrip('/')}/v1/apps/{app}"}
 
 

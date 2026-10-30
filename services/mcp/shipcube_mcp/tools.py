@@ -242,13 +242,12 @@ def register_tools(server: MCPServer, api: Api) -> None:
     async def ai_config(
         app: AppName,
         provider: Literal["meta", "openai_compatible", "openai", "anthropic"] = "meta",
-        model: str = "muse-spark",
-        key_secret: Annotated[str | None, Field(description="Secret name holding the BYOK API key")] = None,
-        base_url: Annotated[str | None, Field(description="For openai_compatible providers")] = None,
+        model: str = "muse-spark-1.3",
     ) -> AiConfigResult:
-        """Choose the model provider the app reaches through ShipCube's AI gateway. Muse is the default; BYOK keys are
-        referenced by secret name."""
-        body = {"provider": provider, "model": model, "key_secret": key_secret, "base_url": base_url}
+        """Choose the model provider the app reaches through ShipCube's AI gateway. Muse is the default. A BYOK
+        provider (openai, anthropic, openai_compatible) uses the key, and for openai_compatible the endpoint, that a
+        person saved for it in the console (Settings, AI); keys and endpoints are never passed through this tool."""
+        body = {"provider": provider, "model": model}
         return AiConfigResult.model_validate(await call("PUT", f"/v1/apps/{app}/ai", body=body))
 
     @server.tool(title="Delete app", annotations=DESTRUCTIVE)
