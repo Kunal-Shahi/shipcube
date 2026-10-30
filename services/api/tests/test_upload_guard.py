@@ -26,13 +26,59 @@ def _tar(files: dict[str, int]) -> bytes:
     return buf.getvalue()
 
 
-def test_a_normal_upload_passes_in_every_compression(tmp_path):
+def test_a_normal_upload_passes_in_every_accepted_compression(tmp_path):
     raw = _tar({"app.py": 1000, "requirements.txt": 20})
-    for name, data in [("a.tgz", gzip.compress(raw)), ("a.tbz", bz2.compress(raw)), ("a.txz", lzma.compress(raw)),
-                       ("a.tar", raw)]:
+    for name, data in [("a.tgz", gzip.compress(raw)), ("a.txz", lzma.compress(raw)),
+                       ("a.tar.lzma", lzma.compress(raw, format=lzma.FORMAT_ALONE)), ("a.tar", raw)]:
         p = tmp_path / name
         p.write_bytes(data)
-        assert upload_guard.check_tarball(p) == len(raw)
+        got = upload_guard.check_tarball(p)
+        assert got["members"] == 2 and got["declared_bytes"] == 1020 and got["decompressed_bytes"] >= 1020, name
+        with tarfile.open(p, "r:*") as tar:  # what the profiler opens is exactly what was measured
+            assert len(tar.getmembers()) == 2
+
+
+def test_bzip2_is_refused(tmp_path):
+    p = tmp_path / "a.tbz"
+    p.write_bytes(bz2.compress(_tar({"app.py": 10})))
+    with pytest.raises(DeployError, match="bzip2"):
+        upload_guard.check_tarball(p)
+
+
+def _refused(tmp_path, data, match, name="x.tgz"):
+    p = tmp_path / name
+    p.write_bytes(data)
+    t0 = time.monotonic()
+    with pytest.raises(DeployError, match=match) as e:
+        upload_guard.check_tarball(p)
+    assert e.value.code == "invalid_argument" and time.monotonic() - t0 < 10
+
+
+def _bomb(member: tarfile.TarInfo, fill: int) -> bytes:
+    raw = io.BytesIO()
+    raw.write(member.tobuf(format=tarfile.GNU_FORMAT))
+    chunk = b"\0" * (16 << 20)
+    for _ in range(fill // len(chunk)):
+        raw.write(chunk)
+    return raw.getvalue()
+
+
+def test_a_legacy_lzma_bomb_is_refused(tmp_path):
+    # The red team's repro: an .lzma ("alone") file of a few hundred KiB holding a 2 GiB member, which
+    # tarfile.open("r:*") decodes. Built from a 64 MiB body so the test stays fast; the header declares 2 GiB.
+    info = tarfile.TarInfo("zeros")
+    info.size = 2 << 30
+    data = lzma.compress(_bomb(info, 64 << 20), format=lzma.FORMAT_ALONE)
+    assert len(data) < 1 << 20
+    _refused(tmp_path, data, "more than 256 MiB", "bomb.tar.lzma")
+
+
+def test_a_pax_header_declaring_gigabytes_is_never_read(tmp_path):
+    # tarfile reads a pax header's whole declared size into memory; the budget refuses the read first.
+    info = tarfile.TarInfo("././@PaxHeader")
+    info.type = tarfile.XHDTYPE
+    info.size = 1 << 30
+    _refused(tmp_path, gzip.compress(_bomb(info, 32 << 20)), "more than 256 MiB")
 
 
 def test_a_gzip_bomb_is_refused_without_inflating_it_all(tmp_path):
@@ -54,11 +100,89 @@ def test_a_gzip_bomb_is_refused_without_inflating_it_all(tmp_path):
     assert time.monotonic() - t0 < 10
 
 
+def test_too_many_members_are_refused(tmp_path):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for i in range(upload_guard.MAX_MEMBERS + 1):
+            tar.addfile(tarfile.TarInfo(f"f{i}"), io.BytesIO(b""))
+    _refused(tmp_path, buf.getvalue(), "more than 20000 entries")
+
+
+def test_declared_sizes_are_capped_even_when_the_bytes_are_small(tmp_path, monkeypatch):
+    monkeypatch.setenv("SHIPCUBE_ESTIMATE_UNPACK_MAX_MIB", "1")
+    _refused(tmp_path, gzip.compress(_tar({"a": 600 << 10, "b": 600 << 10})), "files add up to more than 1 MiB")
+
+
+def _member_tar(info: tarfile.TarInfo, fmt=tarfile.PAX_FORMAT) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w", format=fmt) as tar:
+        tar.addfile(info, io.BytesIO(b"\0" * info.size) if info.isfile() else None)
+    return gzip.compress(buf.getvalue())
+
+
+@pytest.mark.parametrize("make, match", [
+    (lambda: tarfile.TarInfo("a/" * 520 + "x"), "longer than 1024"),
+    (lambda: tarfile.TarInfo("d" * 300), "longer than 1024"),
+    (lambda: tarfile.TarInfo("/etc/passwd"), "outside the archive"),
+    (lambda: tarfile.TarInfo("app/../../escape"), "outside the archive"),
+])
+def test_long_and_escaping_paths_are_refused(tmp_path, make, match):
+    _refused(tmp_path, _member_tar(make()), match)
+
+
+def _typed(name, kind, linkname=""):
+    info = tarfile.TarInfo(name)
+    info.type, info.linkname = kind, linkname
+    return info
+
+
+@pytest.mark.parametrize("info, match", [
+    (_typed("disk", tarfile.BLKTYPE), "not a regular file"),
+    (_typed("tty", tarfile.CHRTYPE), "not a regular file"),
+    (_typed("pipe", tarfile.FIFOTYPE), "not a regular file"),
+    (_typed("app/link", tarfile.SYMTYPE, "../../etc/passwd"), "links outside"),
+    (_typed("app/abs", tarfile.SYMTYPE, "/etc/passwd"), "links outside"),
+    (_typed("hard", tarfile.LNKTYPE, "../secret"), "links outside"),
+])
+def test_devices_fifos_and_escaping_links_are_refused(tmp_path, info, match):
+    _refused(tmp_path, _member_tar(info), match)
+
+
+def test_links_inside_the_archive_are_fine(tmp_path):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        f = tarfile.TarInfo("app/main.py")
+        f.size = 3
+        tar.addfile(f, io.BytesIO(b"x=1"))
+        tar.addfile(_typed("app/alias.py", tarfile.SYMTYPE, "main.py"))
+        tar.addfile(_typed("app/copy.py", tarfile.LNKTYPE, "app/main.py"))
+    p = tmp_path / "ok.tgz"
+    p.write_bytes(buf.getvalue())
+    assert upload_guard.check_tarball(p)["members"] == 3
+
+
+def test_sparse_members_are_refused(tmp_path):
+    # A GNU sparse member ("S"), and a PAX 1.0 sparse member (GNU.sparse.* headers).
+    gnu = tarfile.TarInfo("holes.bin")
+    gnu.type = tarfile.GNUTYPE_SPARSE
+    raw = gnu.tobuf(format=tarfile.GNU_FORMAT) + b"\0" * 1024
+    _refused(tmp_path, gzip.compress(raw), "sparse", "gnu.tgz")
+
+    pax = tarfile.TarInfo("holes2.bin")
+    pax.size = 512
+    pax.pax_headers = {"GNU.sparse.major": "1", "GNU.sparse.minor": "0", "GNU.sparse.name": "holes2.bin",
+                       "GNU.sparse.realsize": str(1 << 40)}
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        tar.addfile(pax, io.BytesIO(b"1\n0\n512\n".ljust(512, b"\0")))
+    _refused(tmp_path, gzip.compress(buf.getvalue()), "sparse", "pax.tgz")
+
+
 def test_the_budget_is_configurable_and_garbage_is_refused(tmp_path, monkeypatch):
     monkeypatch.setenv("SHIPCUBE_ESTIMATE_UNPACK_MAX_MIB", "1")
     p = tmp_path / "two.tgz"
     p.write_bytes(gzip.compress(_tar({"big.bin": 2 << 20})))
-    with pytest.raises(DeployError, match="1 MiB"):
+    with pytest.raises(DeployError, match="more than 1 MiB"):
         upload_guard.check_tarball(p)
     bad = tmp_path / "bad.tgz"
     bad.write_bytes(b"\x1f\x8b" + b"not really gzip")

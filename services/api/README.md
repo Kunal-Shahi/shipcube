@@ -25,7 +25,7 @@ agent ─MCP─> /mcp ─in-process─> /v1 (FastAPI) ──writes desired state
 | `deploy/mock.py` | DEV_MODE only |
 | `estimator.py` | `estimate_load` engine: load-estimator's `shipcube_placement` if installed, otherwise a typed `estimator_unavailable` error |
 | `profiler_guard.py` | Who may run the profiler sandbox: admission (2 in flight, 20/day per workspace), the claim's global ceiling (3, 1 per workspace, fairest first), the 10-minute queue limit, the $5/day ($1 per workspace) spend ledger, the brake, and strikes from the profiler's abuse signals (3 in 24 h suspend profiling for 24 h; `mining_pool` until a person clears it). Static estimates say why in `profile.measurements.static_reason` |
-| `upload_guard.py` | Estimate sources can't exhaust the worker: an upload is decompressed as a stream and refused past 256 MiB (`invalid_argument`) before tarfile sees it, and at most 2 upload or git sources are on disk per process |
+| `upload_guard.py` | Estimate sources can't exhaust the worker: an upload is walked with tarfile's own stream decoder under a 256 MiB decompressed budget, ≤ 20,000 members, ≤ 1,024-byte paths, no sparse files, devices, fifos or links out of the archive, and no bzip2; refused uploads fail with `invalid_argument`. At most 2 upload or git sources are on disk per process |
 | `profiler_janitor.py` | Worker housekeeping: deletes leftover profiler jobs (30 min), builds (10 min) and `profiler-src/` objects (1 h); sets the brake if more than 5 sandbox executions run at once |
 | `telemetry.py` | Logs and metrics interface. The platform workstream installs the real implementation; without it the API answers 501. |
 | `auth.py` | PATs in `api_tokens` (HMAC with a pepper), Identity Platform ID tokens for console users |
