@@ -49,12 +49,20 @@ func (e *CapError) Error() string {
 	return fmt.Sprintf("%s cap of %g reached; resets at %s", e.Cap, e.Limit, e.ResetsAt.UTC().Format(time.RFC3339))
 }
 
-// Reservation is what Admit counted for one request, to be settled when it finishes.
+// Reservation is what Admit counted for one request, to be settled when it finishes. day and
+// month say which counters it was added to, so a request that ends after midnight (or the month's
+// end) never refunds into the new period's counters.
 type Reservation struct {
 	cfg      *AppConfig
 	platform bool
 	tokens   int64
+	usd      float64
+	day      string
+	month    string
 }
+
+// Rate is a model's price in USD per million tokens, [input, output]; nil when it has none.
+type Rate *[2]float64
 
 // limits are the caps that apply to one request.
 type limits struct {
@@ -126,10 +134,11 @@ func takeToken(u *usage, rpm int, now time.Time, name string) *CapError {
 
 // Admit admits one request or returns the cap that blocks it. inTokens is an estimate of the
 // prompt, wantOut the output tokens the request may use (already bounded by the gateway's maximum).
-// It returns the output tokens granted, at most wantOut and never more than today's remaining
-// tokens leave room for, and reserves inTokens plus that grant. platform is true on the platform
-// key, where defaults and workspace caps apply.
-func (l *Limiter) Admit(cfg *AppConfig, platform bool, inTokens, wantOut int64) (int64, *Reservation, *CapError) {
+// It returns the output tokens granted: at most wantOut, and no more than today's remaining tokens
+// or (when the model has a rate) this month's remaining spend leave room for. It reserves inTokens
+// plus that grant, and their cost. platform is true on the platform key, where defaults and
+// workspace caps apply.
+func (l *Limiter) Admit(cfg *AppConfig, platform bool, inTokens, wantOut int64, rate Rate) (int64, *Reservation, *CapError) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -156,8 +165,26 @@ func (l *Limiter) Admit(cfg *AppConfig, platform bool, inTokens, wantOut int64) 
 		}
 		granted = min(granted, room)
 	}
-	if lim.spendUSD > 0 && app.spentUSD >= lim.spendUSD {
-		return 0, nil, &CapError{"spend_usd_per_month", lim.spendUSD, time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, time.UTC)}
+	usd := 0.0
+	if lim.spendUSD > 0 {
+		spendErr := &CapError{"spend_usd_per_month", lim.spendUSD, time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, time.UTC)}
+		room := lim.spendUSD - app.spentUSD
+		if room <= 0 {
+			return 0, nil, spendErr
+		}
+		if rate != nil {
+			inUSD := float64(inTokens) * rate[0] / 1e6
+			if inUSD >= room {
+				return 0, nil, spendErr
+			}
+			if rate[1] > 0 {
+				granted = min(granted, int64((room-inUSD)/(rate[1]/1e6)+1e-6)) // epsilon: float rounding
+				if granted <= 0 {
+					return 0, nil, spendErr
+				}
+			}
+			usd = inUSD + float64(granted)*rate[1]/1e6
+		}
 	}
 	// Check both buckets before taking from either, so a refusal costs nothing.
 	if err := takeToken(app, lim.appRPM, now, "requests_per_minute"); err != nil {
@@ -169,8 +196,9 @@ func (l *Limiter) Admit(cfg *AppConfig, platform bool, inTokens, wantOut int64) 
 			return 0, nil, err
 		}
 	}
-	res := &Reservation{cfg: cfg, platform: platform, tokens: inTokens + granted}
+	res := &Reservation{cfg: cfg, platform: platform, tokens: inTokens + granted, usd: usd, day: app.day, month: app.month}
 	app.tokens += res.tokens
+	app.spentUSD += usd
 	if ws != nil {
 		ws.tokens += res.tokens
 	}
@@ -187,10 +215,28 @@ func (l *Limiter) Settle(res *Reservation, tokens int64, costUSD float64) {
 	now := l.now()
 	lim := l.limitsFor(res.cfg, res.platform)
 	app := l.get(&l.apps, res.cfg.AppID, lim.appRPM, res.cfg.UsedTokensToday, res.cfg.SpentUSDMonth, now)
-	app.tokens += tokens - res.tokens
-	app.spentUSD += costUSD
+	settle(app, res, tokens, costUSD)
 	if res.platform {
 		ws := l.get(&l.ws, res.cfg.WorkspaceID, lim.wsRPM, 0, 0, now)
-		ws.tokens += tokens - res.tokens
+		settle(ws, res, tokens, 0)
+	}
+}
+
+// settle swaps the reservation for actual usage in the period it was reserved in. When that period
+// has ended, its counters are gone: the new period is charged only what went beyond the reservation.
+func settle(u *usage, res *Reservation, tokens int64, costUSD float64) {
+	if u.day == res.day {
+		u.tokens += tokens - res.tokens
+	} else {
+		u.tokens += max(0, tokens-res.tokens)
+	}
+	u.tokens = max(0, u.tokens)
+	if costUSD > 0 || res.usd > 0 {
+		if u.month == res.month {
+			u.spentUSD += costUSD - res.usd
+		} else {
+			u.spentUSD += max(0, costUSD-res.usd)
+		}
+		u.spentUSD = max(0, u.spentUSD)
 	}
 }

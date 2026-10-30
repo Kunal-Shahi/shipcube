@@ -172,7 +172,11 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 	// Reserve the most this request can use before calling the provider: a prompt estimate (about
 	// 3 bytes per token, generous) plus its output allowance. Settle replaces it with actual usage.
 	wantOut := requestedOutput(body, g.maxOutput())
-	grantedOut, res, capErr := g.Limiter.Admit(cfg, platform, int64(len(raw))/3+1, wantOut)
+	var rate Rate
+	if p, ok := g.Prices[kind+"/"+model]; ok {
+		rate = &p
+	}
+	grantedOut, res, capErr := g.Limiter.Admit(cfg, platform, int64(len(raw))/3+1, wantOut, rate)
 	reservation = res
 	if capErr != nil {
 		c.status, ev.CapHit = http.StatusTooManyRequests, capErr.Cap

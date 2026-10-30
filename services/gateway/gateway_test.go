@@ -357,12 +357,12 @@ func TestDailyTokenCapClampsThenBlocks(t *testing.T) {
 func TestSpendCap(t *testing.T) {
 	l := &Limiter{Now: func() time.Time { return time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC) }}
 	cfg := &AppConfig{AppID: "a", Caps: Caps{SpendUSDPerMonth: 1}, SpentUSDMonth: 0.9}
-	_, res, err := l.Admit(cfg, false, 10, 10)
+	_, res, err := l.Admit(cfg, false, 10, 10, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	l.Settle(res, 10, 0.2)
-	_, _, err = l.Admit(cfg, false, 10, 10)
+	_, _, err = l.Admit(cfg, false, 10, 10, nil)
 	if err == nil || err.Cap != "spend_usd_per_month" || !err.ResetsAt.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) {
 		t.Fatalf("got %v", err)
 	}
