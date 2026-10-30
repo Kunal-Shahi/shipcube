@@ -17,7 +17,7 @@ spec:
         run.googleapis.com/cpu-throttling: "true"
         run.googleapis.com/startup-cpu-boost: "true"
         run.googleapis.com/execution-environment: gen2
-        run.googleapis.com/cloudsql-instances: ${SQL_INSTANCE}
+        run.googleapis.com/cloudsql-instances: ${CLOUDSQL_INSTANCES}
     spec:
       serviceAccountName: ${SA_API}
       containerConcurrency: 40
@@ -42,6 +42,9 @@ spec:
             # Returned to agents by ai_config; unset, it falls back to http://localhost:8090 (#41).
             - {name: SHIPCUBE_AI_GATEWAY_URL, value: "${GATEWAY_URL}"}
             - {name: SHIPCUBE_DATA_WORKSPACE, value: "${DATA_WORKSPACE}"}
+            # Warehouse credentials live in this project's Secret Manager (ws-<id>-… secrets); unset, every warehouse with a password is refused.
+            - {name: SHIPCUBE_DATA_SECRET_PROJECT, value: "${PROJECT}"}
+            - {name: SHIPCUBE_DATA_ALLOWED_DB_HOSTS, value: "${DATA_ALLOWED_DB_HOSTS}"}
             - {name: SHIPCUBE_MONITOR, value: gcp}
             - {name: ALLOWED_HOSTS, value: "${MCP_HOST}"}
             - {name: GOOGLE_CLOUD_PROJECT, value: "${PROJECT}"}
