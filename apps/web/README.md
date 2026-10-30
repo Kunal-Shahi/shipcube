@@ -131,17 +131,8 @@ The console's Cloud Run service needs:
 
 These are honest gaps, tracked in the PR.
 
-- **API endpoints that don't exist yet.** Each of these pages shows a "not available yet" state in production, naming the endpoint it needs:
-  - Approvals inbox: `GET /v1/operations?status=awaiting_approval`
-  - API tokens: `/v1/tokens`
-  - AI provider keys: `/v1/ai/providers`
-  - Billing: `/v1/billing`
-  - GCP project linking: `/v1/gcp-targets`
-  - Data model: the data-layer endpoints
-  - Recently deleted apps: `?include_deleted=true`
-
-  Individual approval pages, apps, caps, access, logs, metrics and restore use the real API.
-- **The API must accept the console's session.** The console sends the Identity Platform session cookie as `Authorization: Bearer`. The API needs to verify it with the Admin SDK's `verify_session_cookie`. Its skeleton accepts `sc_ses_…` tokens instead.
+- **Every console page reads the real API.** That covers apps, approvals and the approvals inbox, API tokens, AI providers, billing, GCP linking, the data model and recently deleted apps. `AVAILABLE` in `src/lib/server/data/http.ts` lists them; a page whose feature is missing from it shows a "not available yet" state naming the endpoint.
+- **API sessions aren't checked for revocation by the API itself.** The API verifies the console's Identity Platform session cookie (signature, issuer, project) but doesn't check whether it was revoked; the console does, on every request, before it forwards the cookie. Checking it in the API needs `roles/firebaseauth.viewer` for `sc-api`.
 - **API data the console doesn't get yet:** app lists don't include cost, request counts or who deployed. Metrics have no time series, so the latency and daily-cost charts only appear in `DEV_MODE`. Approval pages show the API's reasons, not a before/after impact table or the original tool arguments.
 - **Onboarding** is remembered per browser (a cookie), not per account.
 - **Not tested here:** the Identity Platform adapter. No Firebase emulator or live project was available, so the sign-in flow was only exercised with the mock provider.
