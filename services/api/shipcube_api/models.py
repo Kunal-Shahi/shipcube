@@ -191,7 +191,7 @@ class ApprovalDecision(_Model):
 
 class AiConfigRequest(_Model):
     provider: Literal["meta", "openai_compatible", "openai", "anthropic"] = "meta"
-    model: str = "muse-spark"
+    model: str = "muse-spark-1.3"  # the only Muse id Meta serves (and the gateway prices and allows)
     key_secret: str | None = Field(None, description="Secret name holding the BYOK API key")
     base_url: str | None = Field(None, description="For openai_compatible providers")
 

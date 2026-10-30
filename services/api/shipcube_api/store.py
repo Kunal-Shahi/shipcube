@@ -245,7 +245,7 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
                     "role": "owner" if g["principal_type"] == "user" and g["principal"] == creator else "viewer",
                     "granted_at": _iso(g["created_at"]), "sync_state": g["sync_state"]} for g in grants(conn, app["id"])],
         "ai": {"provider": ai["provider"], "model": ai["model"], "key_secret": ai["key_secret"]} if ai
-        else {"provider": "meta", "model": "muse-spark", "key_secret": None},
+        else {"provider": "meta", "model": "muse-spark-1.3", "key_secret": None},
         "updated_at": _iso(dep["finished_at"] if dep and dep["finished_at"] else app["created_at"]),
         "deleted_at": _iso(app["deleted_at"]), "restorable_until": _iso(app["purge_after"]),
         "estimate": {"estimate_id": est["reasoning"].get("estimate_id"), "workload_class": est["workload_class"],
