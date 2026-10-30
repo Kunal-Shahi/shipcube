@@ -61,6 +61,7 @@ export PROJECT APPS_PROJECT REGION TAG SQL_INSTANCE CONSOLE_URL MCP_URL GATEWAY_
 export SA_API SA_WORKER SA_GATEWAY SA_WEB SA_HOSTED_DEPLOYER
 export IMAGE_API="$IMAGES/api:$TAG" IMAGE_GATEWAY="$IMAGES/gateway:$TAG" IMAGE_CONSOLE="$IMAGES/console:$TAG"
 export MCP_HOST="${MCP_URL#https://}"
+export CONSOLE_ORIGINS   # both the API (waitlist CORS) and the console (where the form shows) read it
 
 if want mcp; then
   if [ -z "${DATA_WORKSPACE:-}" ]; then
@@ -76,7 +77,7 @@ if want mcp; then
       *) PLATFORM_ADMINS="$account" ;;
     esac
   fi
-  export PLATFORM_ADMINS="${PLATFORM_ADMINS:-}" MAX_WORKSPACES CONSOLE_ORIGINS
+  export PLATFORM_ADMINS="${PLATFORM_ADMINS:-}" MAX_WORKSPACES
   CLOUDSQL_INSTANCES="$SQL_INSTANCE${DATA_SQL_INSTANCES:+,$DATA_SQL_INSTANCES}"
   DATA_ALLOWED_DB_HOSTS="$(echo "$DATA_SQL_INSTANCES" | tr ',' '\n' | sed '/^$/d; s|^|/cloudsql/|' | paste -sd, -)"
   export CLOUDSQL_INSTANCES DATA_ALLOWED_DB_HOSTS

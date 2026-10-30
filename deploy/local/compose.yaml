@@ -185,7 +185,9 @@ services:
       SHIPCUBE_PUBLIC_API_URL: http://localhost:${SHIPCUBE_API_PORT:-18080}   # the browser's waitlist form
       SHIPCUBE_API_TIMEOUT_MS: "30000"
       SHIPCUBE_MCP_URL: http://localhost:${SHIPCUBE_API_PORT:-18080}/mcp
-      SHIPCUBE_DEV_API_SESSION: ${SHIPCUBE_DEV_CONSOLE_TOKEN:-}   # the API can't verify emulator tokens
+      # The API verifies the Auth emulator's sessions, so each signed-in person is themselves. Set this only
+      # to make every console user the API's bootstrap user (the waitlist e2e needs it unset).
+      SHIPCUBE_DEV_API_SESSION: ${SHIPCUBE_CONSOLE_DEV_API_SESSION:-}
     env_file:
       - path: .state/seed.env
         required: false
