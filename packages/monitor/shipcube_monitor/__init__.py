@@ -51,7 +51,8 @@ def provider_from_env(usage: UsageSource | None = None) -> MonitorProvider:
     if mode == "mock":
         # SHIPCUBE_DEV_MODE is the one switch name (#29); DEV_MODE still works, with a warning.
         if os.environ.get("SHIPCUBE_DEV_MODE") != "1" and os.environ.get("DEV_MODE") != "1":
-            raise RuntimeError("SHIPCUBE_MONITOR=mock is only allowed with SHIPCUBE_DEV_MODE=1 (DEV_MODE=1) (local development)")
+            raise RuntimeError("SHIPCUBE_MONITOR=mock is only allowed with SHIPCUBE_DEV_MODE=1 "
+                               "(or the deprecated DEV_MODE=1): local development")
         if os.environ.get("SHIPCUBE_DEV_MODE") != "1":
             logging.getLogger("shipcube.monitor").warning("DEV_MODE=1 is deprecated; use SHIPCUBE_DEV_MODE=1")
         return MockMonitor()
