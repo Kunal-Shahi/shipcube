@@ -1,6 +1,6 @@
 # ShipCube red-team review
 
-**Date:** 2026-10-28. **Scope:** `Kunal-Shahi/shipcube` at `main` (`dd678f5`), the open hosting PR (`platform/hosted-deploy`), `Kunal-Shahi/shipcube-data` at `main` (`5cb920b`), and the live GCP configuration of `shipcube-control-ks` and `shipcube-apps-ks`.
+**Date:** 2026-10-28, re-reviewed 2026-10-30 (twice; the newest section is first). **Scope:** `Kunal-Shahi/shipcube` at `main` (`dd678f5`), the open hosting PR (`platform/hosted-deploy`), `Kunal-Shahi/shipcube-data` at `main` (`5cb920b`), and the live GCP configuration of `shipcube-control-ks` and `shipcube-apps-ks`.
 **Method:** code and Terraform review, read-only `gcloud`, and light unauthenticated or invalid-token requests against ShipCube's own services. Nothing was changed, no load was generated, and no third party was touched. Two findings (S-3, S-4) were reproduced with scratch tests against a local Postgres and the mock deployer.
 
 Severity is intrinsic: what happens if someone uses the issue. The **Live?** column says whether it can be reached in today's deployment:
@@ -12,7 +12,229 @@ Owners: **security** (`infra/**`, IAM, DB roles), **networking** (`services/api`
 
 ---
 
-## Top 5 to fix before Nov 4
+## Re-review 2, 2026-10-30 afternoon (`main` at `3320b7c`)
+
+Since the morning re-review, three PRs have merged:
+- **#44** sends build logs to per-workspace GCS and removes the project-wide `logWriter` (#28).
+- **#45** contains go-live fixes: `SHIPCUBE_AI_GATEWAY_URL` on the MCP service, the catalog startup check on the API's IAM-auth pool, and a registry-401 case in the isolation test.
+- **#46** grants `storage.buckets.get` on the uploads bucket so Cloud Build accepts the logs folder.
+
+All four services were redeployed. The method was as before: code review, read-only `gcloud` and Monitoring API calls, and unauthenticated or invalid-token requests.
+
+### Production now runs `main`
+
+| Check | Result |
+|---|---|
+| Images | `shipcube-mcp`, `-worker`, `-console` and `-gateway` all run `3fff7a6`, which is `main` minus #46. #46 is Terraform only. |
+| C-2 (data-layer version pin) | **Fixed in production.** The deployed MCP pins shipcube-data `ab16f4c`, which contains the fix (`62f1011`). shipcube-data #2 is closed. |
+| H-3 (MCP URL) | **Fixed in production.** The console has `SHIPCUBE_MCP_URL` set to ShipCube's own run.app URL. #17 can close. |
+| Gateway URL returned by `ai_config` | **Fixed:** `SHIPCUBE_AI_GATEWAY_URL` is set on `shipcube-mcp`. |
+| Dev mode in production | No `*DEV_MODE`, `SHIPCUBE_BACKEND`, local `SHIPCUBE_PROFILER` or local secret store env on any service. The code-level guard (#29) is still missing, but nothing sets the flags. |
+| Auth negative tests | `/v1/me`, `/v1/apps`, `/v1/data/cubes` and `/mcp` return 401 unauthenticated and with a bogus PAT. `/docs` and `/openapi.json` are still public (low, known). |
+| #28 | The `principalSet` `logWriter` binding is not in live IAM. Closed. |
+
+### C-1: half applied, not closed
+
+**Applied:**
+- `sc-provisioner` exists.
+- The first workspace has its own builder SA, its own registry repo `ws-<ws_short>`, and its managed folders under `ws/<uuid>/`.
+- The hosted build path in the code no longer runs as `sc-builder`.
+
+**Still open:**
+- **#46 is not applied.** The uploads bucket has no `storage.buckets.get` binding yet, and Cloud Build rejects a `logsBucket` the build SA can't read. Expect **every hosted build to fail** until it is applied. No hosted build has run in the apps project since the deploy (the only builds there are profiler builds from Oct 27). This is now the biggest risk for the demo. *(platform)*
+- **`sc-builder` keeps its legacy grants:**
+  - `storage.objectViewer` on the whole uploads bucket;
+  - `artifactregistry.writer` at project level and on the shared `shipcube` repo;
+  - the hand-made `logging.logWriter`.
+
+  Nothing builds as `sc-builder` now, so these grants are dormant. They are still the C-1 blast radius if anything can get a token for it. Finish infra/README step 4: set `legacy_shared_builder = false`, apply, then remove the `logWriter` binding. *(security)*
+- `hello-tracker` (the one tenant app) still runs a **tag** from the shared repo, not a digest in its own repo. Redeploy it through the new path once builds work, so `update_caps` doesn't refuse it.
+
+**#46 review: acceptable.** It binds a custom role holding only `storage.buckets.get` to every SA in the apps project, and only on the uploads bucket. That role allows no object reads, no listing and no IAM reads, so tenant runtime SAs learn the bucket's metadata and nothing else. A per-SA binding would be tighter, but builders are created at runtime, so this is a reasonable trade.
+
+**#45 review: no issues.** The catalog probe now runs on the API's pool under the nil workspace and only reads the migration ledger.
+
+### Verified after the C-1 steps (2026-10-30, later)
+
+Lead ran the C-1 steps; checked live, read-only:
+
+- **Verified:** #46 binding on the uploads bucket (`storage.buckets.get` only). Two hosted builds (`01a602fb`, `9d8804e7`) ran as `sc-build-<ws_short>`, `GCS_ONLY`, logs in `ws/<uuid>/build-logs/`; `golive-check` runs `ws-<ws_short>/…@sha256:…` as its own runtime SA. `sc-builder` has no project or bucket roles and no user-managed keys. The `ws-` repo grants writer to its own builder only. C-1 is closed for new builds.
+- **Mismatch 1:** `sc-builder` still holds `artifactregistry.writer` **on the shared `shipcube` repo** (a repo-level binding from `scripts/gcp_setup.sh`, outside Terraform, so `legacy_shared_builder=false` didn't remove it). Dormant (nothing builds as `sc-builder`), and deleting the SA (#47) ends it, but remove the binding too so the repo policy doesn't keep a `deleted:` member. *(security)*
+- **Mismatch 2:** the `firebase-adminsdk-fbsvc` change was made in the **control** project only. In **`shipcube-apps-ks`** that SA still has project-level `roles/iam.serviceAccountTokenCreator`, i.e. it can mint tokens for every SA there, including the Editor compute SA and every tenant runtime and builder SA. No user-managed keys exist, so it's not exploitable from outside today; apply the same self-only fix there. *(security)*
+- **Both mismatches fixed, re-verified live:** the shared `shipcube` repo policy is empty, `sc-builder` is deleted (no `deleted:` members left on the project, bucket or repo), and the apps-project `firebase-adminsdk-fbsvc` has only `firebase.sdkAdminServiceAgent` at project level, `tokenCreator` on itself only, and no user-managed keys.
+- **Still open:** `hello-tracker` on a shared-repo tag; H-2 (`roles/editor` on default compute and App Engine SAs); O-1 (no alerts).
+
+### Unchanged since the morning
+
+- **R-1 (#42)** is still latent: the hosted gateway reads `GATEWAY_REGISTRY_FILE`, not `provider_configs`. `set_ai` is unchanged (`store.py:605-614`).
+- **S-3 and S-4 (#18, #19):** the code is unchanged (`store.py:576-580`), and they are now **live** because production runs `main`.
+- **H-1 (#15):** `sc-api` still holds `iam.serviceAccountAdmin` and `secretmanager.admin` on the control project.
+- **H-2 (#16):** `roles/editor` is still on both default compute SAs. Also note the App Engine default SA in the control project, which holds Editor too.
+- **O-1:** there are still zero alert policies and zero uptime checks in both projects.
+- **#29:** no `K_SERVICE` refusal outside the console. The localhost defaults remain (`settings.py:56`).
+- **A-1, G-1, P-1, P-3 (#20–#23):** unchanged.
+
+### Top 5 now (Nov 4 is in 5 days)
+
+1. **Make hosted deploys work, then close C-1.**
+   - Apply #46.
+   - Run one hosted build end to end and check that it runs as `sc-build-<ws>` and logs to `ws/<uuid>/build-logs/`.
+   - Redeploy `hello-tracker`.
+   - Set `legacy_shared_builder = false` and remove `sc-builder`.
+
+   *(platform, security)*
+2. **Revocation correctness (S-3, S-4):** now live in production. *(networking)*
+3. **Remove `roles/editor` from the default compute SAs** (and the App Engine SA). It's one command each and defuses H-2 and half of H-1. *(security)*
+4. **Alerts (O-1):** run `deploy/monitoring.py`. Nothing pages anyone today. *(platform)*
+5. **R-1 and #29 before anything else ships:** restrict `key_secret` by kind and provider before the gateway reads `provider_configs`, and add the shared `K_SERVICE` refusal. *(networking, platform)*
+
+---
+
+## Re-review, 2026-10-30 (`main` at `490642d`)
+
+Since the first review, 12 PRs have merged: #24–#27 and #30–#40, covering the local stack, the C-1 fixes, the configurable MCP URL, the console endpoints (approvals inbox, BYOK, billing, GCP targets), the data layer in the API, hosted deploy v2 and the link-your-own-project flow. shipcube-data issues #2–#6 were closed, and its `main` (`8ded06b`) was re-checked. Method as before: code review, read-only `gcloud`, and offline tests. shipcube-data ran 161 passed and 274 skipped (the Postgres variants need a DB).
+
+### The headline: `main` is not what's running
+
+Most fixes landed on `main`, but **production still runs code from before them**:
+
+| Service | Deployed image | Contains the fixes from #25/#26/#33/#35? |
+|---|---|---|
+| `shipcube-mcp` (API + MCP) | `api:7344f4768c5e` (Oct 28 02:22) | no |
+| `shipcube-worker`, `shipcube-console` | `api:caf0a2c688cd`, `console:caf0a2c688cd` | no |
+| `shipcube-gateway` | `gateway:f6630a2241de` | no |
+
+The C-1 Terraform (#27) **isn't applied** either. `sc-provisioner` doesn't exist, there are no `ws-*` repos, and `sc-builder` still has project-wide `artifactregistry.writer` plus bucket-wide `objectViewer`. As a result:
+- **C-1 (shared builder) is still live** for any token holder.
+- **C-2 (version pin bypasses access rules) is now live.** `shipcube-mcp` has `SHIPCUBE_DATA_WORKSPACE` set, so the data tools are mounted. Its lockfile pins shipcube-data `5cdc6f8`, which predates the fix and ships the demo's `0005_access` rules. The data is the public Olist demo, so the impact is a broken access-control demo, not a customer-data leak. Every workspace's PAT queries that one demo catalog.
+- The fixed code on `main` (`ab16f4c`) isn't deployed.
+
+**Required order for the deploy:**
+1. Fix #28.
+2. Apply Terraform (`build_isolation`).
+3. Deploy `main` (API, worker, console, gateway).
+4. Check that a hosted build works as `sc-build-<ws>`.
+5. Set `legacy_shared_builder=false`, apply, and delete `sc-builder`.
+
+Deploying #26's code without step 2 breaks hosted builds, because the provisioner is missing.
+
+### Status of earlier findings
+
+| ID | On `main` | Live | Notes |
+|---|---|---|---|
+| C-1 shared builder | **fixed** (#26, #27) | **open** | Not applied or deployed. #27 adds R-9 and #28. |
+| C-2 data version pin | **fixed** (shipcube-data `62f1011`, pinned `ab16f4c`) | **open, now live** | Gap: a pin restores old member SQL, so it can undo a masking `change_sql` (D-R3). |
+| H-1 `sc-api` admin roles | open | open | Unchanged in Terraform and live. |
+| H-2 hosted deployer project-wide actAs; Editor on default compute SAs | open | open | Unchanged live. R-9 adds a similar path. |
+| H-3 unowned MCP host | **fixed** (#25) | fixed | Console requires `SHIPCUBE_MCP_URL`; a CI guard bans the old domain. |
+| S-3 domain grant drops revocations | open | open | `store.py:576-580` unchanged. |
+| S-4 push-op idempotency | partial | open | `set_caps` now hashes caps (`store.py:542`). `set_access` push is still constant (`:580`), and MCP keys are still time-bucketed. |
+| G-1 Muse key uncapped | partial | open | Registry now sets 200k tokens/day and 60 rpm per app (`deploy/gateway_registry.py:21-22`), so `max_tokens` is clamped. Still no prices, and counters are per instance. Gateway image predates this. |
+| A-1 any image | partial | open | Cross-tenant pulls closed (`isolation.py:71-91`); arbitrary public images still deploy on hosted. |
+| P-1, P-3 profiler build and git | open | latent | |
+| D-2 BigQuery ADC | fixed | — | Verified projects only; no ADC fallback. |
+| D-3 secret_ref and hosts | partial | — | Workspace-prefixed secrets, public hosts and `verify-full` enforced. A URL-form secret can carry `hostaddr=` to an internal IP (D-R4). |
+| D-4 DuckDB file reads | fixed | — | Refused outside dev mode; sealed with `enable_external_access=false`. |
+| D-5 widening migrations / self-approval | partial | — | Approvals compare people, and widening ops need an admin. `add_segment` is still developer-approvable (D-R1). |
+| O-1 no alerts | open | open | Still zero alert policies and uptime checks in both projects. |
+| S-5, S-7, S-8, A-2, A-3, A-4, S-11, S-12, W-1, W-2, L-1 | open | open | Unchanged. W-1: `google-sign-in.tsx:115` still lets `/\evil.com` through. |
+| S-10 console token verification | partial | — | The API now accepts session cookies with their own issuer and certs (`auth.py:140-150`). There's no revocation check, so a cookie stays valid at the API after sign-out; no `email_verified` check; certs are fetched on every request. |
+| CI-1 CI deployer | **wider** | — | `deploy/wif.sh:28` lets CI act as `sc-worker` (BYPASSRLS, can impersonate the provisioner). |
+
+### New findings
+
+| ID | Finding | Sev | Live? | Owner |
+|---|---|---|---|---|
+| R-1 | BYOK: a PAT can point any stored secret at an attacker host | high | latent (MCP tool is live) | networking, platform |
+| R-2 | #28: project-wide `logWriter` for every apps-project SA (merged, not yet applied) | high | latent | security |
+| R-3 | Dev-mode gates incomplete (#29): `SHIPCUBE_PROFILER=local` and `SHIPCUBE_MONITOR=local` ungated; localhost fallbacks in production paths | medium | latent | platform, load-estimator, networking |
+| D-R1 | Data: `add_segment` can embed arbitrary SQL (`query_to_xml`) and hidden members, approved by any developer | medium-high | latent (data routes) | data-layer |
+| D-R2 | Data: model SQL can call `query_to_xml`, `set_config` and `dblink*` | medium | latent | data-layer |
+| R-4 | Link verification checks project-level permissions that the link script grants per resource, which pushes users into over-granting | medium | live once #40 deploys | networking, security |
+| R-9 | Build provisioner's custom role has `setIamPolicy` on every SA and repo in the apps project; the worker can impersonate it | medium | latent | security |
+| R-5 | `GET /v1/gcp-targets` creates a control-project SA per workspace, for any `apps:read` token | low-medium | latent | networking |
+| R-6 | PAT scopes aren't capped by the caller's role | low-medium | latent | networking |
+| D-R3 | Data: a version pin restores old member SQL (can undo masking) | low-medium | latent | data-layer |
+| D-R4 | Data: `hostaddr=` in a URL-form warehouse secret bypasses the host check | low-medium | latent | data-layer |
+| R-7 | Catalog RLS is workspace-only (no role predicate); `catalog.audit_log` is mutable by `shipcube_app` | low | latent | data-layer, security |
+| R-8 | Local deployer: `git checkout <ref>` with no `--` (option injection; local only) | low | dev only | platform |
+| R-10 | `sc-web` has project-wide `roles/firebaseauth.admin` (`infra/terraform/platform.tf:14-18`) | low | latent | security |
+| R-11 | Billing page shows ShipCube's platform-wide credit grant to every workspace (`workspace.py:255`) | info | latent | frontend |
+
+**R-1. BYOK: a PAT can point any stored secret at an attacker host — high — networking, platform**
+- **Evidence:** `services/api/shipcube_api/store.py:605-614` (`set_ai`) and `app.py:341-342`. `PUT /v1/apps/{app}/ai` needs only the `secrets:write` scope and is also the MCP tool `ai_config` (`services/mcp/shipcube_mcp/tools.py:241-251`).
+  - `key_secret` is matched against **any** secret label in the workspace, of any kind. That includes console-saved provider keys and `warehouse-primary`.
+  - `base_url` is stored unvalidated on this path.
+- **Scenario:** a prompt-injected agent sets `provider=openai_compatible`, `base_url=https://<attacker>` and `key_secret=<the workspace's OpenAI key or warehouse credential>`. The gateway then sends that secret as a bearer token to the attacker. This contradicts the design rule that keys never pass through MCP. It's latent only because the hosted gateway still uses a static registry (`deploy/gateway_registry.py`). It goes live when the gateway resolves `provider_configs`.
+- **Fix:**
+  - Accept only `kind='ai_key'` secrets whose provider matches.
+  - Don't take `base_url` from PAT callers: require a console session or an approval for `openai_compatible`.
+  - In the gateway, bind each key to the base URL it was saved with.
+
+**R-2. Project-wide `logWriter` for every apps-project SA (#28) — high — security**
+- **Evidence:** `infra/terraform/modules/build_isolation/main.tf:81-85`. It was merged in #27 with the blocker unresolved. It isn't applied yet (live IAM has no `principalSet` binding), so it can still be fixed before the C-1 apply.
+- **Scenario:** any tenant app's runtime SA can write log entries labelled as another tenant's service (poisoning that tenant's `get_logs`) or as a `prof-*` job (forging profiler results). It can also ingest logs without limit.
+- **Fix:** Cloud Build `options.logging: GCS_ONLY` with a per-workspace logs location, then delete the binding.
+
+**R-3. Dev-mode gates incomplete (#29) — medium — platform, load-estimator, networking**
+- Gated correctly now: `SHIPCUBE_BACKEND=local` (`store_runtime.py:21-23`), the local secret store (`secret_store.py:91`), the estimator, dev console sessions, the gateway, and the console (which also refuses on `K_SERVICE` and refuses `FIREBASE_AUTH_EMULATOR_HOST` outside dev mode).
+- **Not gated:**
+  - `SHIPCUBE_PROFILER=local` (`packages/profiler/.../runners.py:429-431`): the Docker runner;
+  - `SHIPCUBE_MONITOR=local` (`packages/monitor/shipcube_monitor/__init__.py:40-43`).
+  
+  Today, only the absence of a Docker socket in the production image stops the profiler escalation.
+- The API, profiler and monitor still don't refuse dev mode under `K_SERVICE`, and two names remain (`SHIPCUBE_DEV_MODE`, `DEV_MODE`).
+- `infra/local/localsecrets.py` says production refuses `sclocal_`-prefixed secrets, but no production code checks the prefix.
+- **Localhost fallbacks in production paths:**
+  - `app.py:344` returns `http://localhost:8090` as the app's `gateway_url` when `SHIPCUBE_AI_GATEWAY_URL` is unset, and `shipcube-mcp` doesn't set it live.
+  - `settings.py:56` (`console_url`) and `services/mcp/shipcube_mcp/server.py:62` (OAuth `issuer_url`) also default to `http://localhost:3000`. The live services do set `SHIPCUBE_CONSOLE_URL`.
+- **Fix:** as in #29. One switch name; refuse under `K_SERVICE`/`CLOUD_RUN_JOB`; gate every `local` choice; make an unset or localhost URL a startup error outside dev mode; implement the `sclocal_` refusal or drop the claim.
+
+**D-R1. `add_segment` embeds arbitrary SQL — medium-high — data-layer**
+- **Evidence:** shipcube-data `ops.py:500-516`. `add_segment` isn't in `WIDENS_EXPOSURE` (`ops.py:703`). Segments skip `visible()` (`compiler.py:442-448`), and `sqlutil.py:37-68` lets `query_to_xml`, `table_to_xml`, `dblink_exec` and `set_config` through.
+- **Scenario:** an agent proposes a segment whose SQL runs `query_to_xml('select … from <another tenant schema>.…')` or references a hidden member, and any other developer approves it. Verified offline: an analyst got 22 vs 400 rows by filtering on an `hr`-only column.
+- **Fix:** treat `add_segment` as widening, check visibility on segment references, and use a function allowlist for all model SQL (D-R2).
+
+**R-4. Link verification pushes users into over-granting — medium — networking, security**
+- **Evidence:** `services/api/shipcube_api/deploy/gcp.py:49-52,537-551` run project-level `testIamPermissions` for `iam.serviceAccounts.actAs` and `artifactregistry.repositories.uploadArtifacts`. `infra/scripts/link-project.sh` grants those per SA and per repo, so a correctly linked project reports "missing permissions".
+- **Scenario:** to make the console turn green, the user grants project-wide `serviceAccountUser`. ShipCube can then act as the customer's default compute SA (Editor), which makes L-1 worse.
+- **Fix:** test `actAs` on the two SAs and `uploadArtifacts` on the repo, at resource level.
+
+**R-9. Provisioner can undo the isolation it creates — medium — security**
+- **Evidence:** `infra/terraform/modules/build_isolation/main.tf:31-46` grants `iam.serviceAccounts.setIamPolicy` and `artifactregistry.repositories.setIamPolicy` project-wide. `sc-worker` can impersonate `sc-provisioner`.
+- **Scenario:** a compromised worker grants itself `actAs` on any app's runtime SA, or write on any workspace's repo. With Editor still on the default compute SA, it can also reach Editor.
+- **Fix:** IAM conditions on `resource.name` prefixes (`sc-build-*`, `ws-*`) where supported. Remove Editor from the default compute SA (H-2).
+
+**R-5, R-6, D-R2, D-R3, D-R4, R-7, R-8, R-10, R-11** are summarised in the table above:
+- R-5: the SA is created by a `GET` (`workspace.py:185-186`). There's a quota of about 100 SAs per project.
+- R-6: `create_token` (`store.py:656`) only checks `data:raw`.
+- D-R4: `datasources.py:201-209` checks `host` but not `hostaddr`.
+- R-8: `deploy/local.py:212`.
+
+### Local stack against the four rules (#30–#34)
+
+| Rule | Verdict | Evidence |
+|---|---|---|
+| 1. No local adapter in production | **partial** | R-3. Production images still ship the local code (`deploy/local.py`, `local_iap.py`, `docker_runner.py`, `monitor/local.py`); only the gates keep it off. The API image has no docker CLI and no `pack`, which limits the damage. |
+| 2. No default credentials or committed secrets | **pass** | Secrets are generated with mode 0600 and gitignored twice (`/.local/` and `.local/.gitignore`). `refuse_production()` stops the generator on Cloud Run. The `sclocal_` refusal claim is unimplemented (R-3). |
+| 3. Low dev/prod drift | **pass, with caveats** | Same IAM login names, `bootstrap.sql`, `owner_defaults.sql`, `alter role … set role` defaults, migrator, migrations and catalog. The local deployer reuses `isolation.py`. **Local can't test:** tenant network isolation (all app containers share one Docker network and can call each other directly, bypassing local IAP; `deploy/local.py:253-259`); IAM; egress; the Cloud Build path; real IAP. The local warehouse uses the Postgres superuser. |
+| 4. Sandbox and deployer don't expose the host | **pass (profiler) / partial (API)** | Profiler container: `--network none`, read-only root, uid 10001, `--cap-drop ALL`, `no-new-privileges`, memory, CPU and pids limits, no host env (`docker_runner.py:90-103`). Local IAP strips client identity headers (`local_iap.py:148-156`). All published ports bind `127.0.0.1` (`deploy/local/compose.yaml`). **But** the API and worker containers mount `/var/run/docker.sock` (`compose.yaml:17,90`), so locally built user code that escapes its container reaches the host. That's acceptable only because it's dev-only and gated. Don't run untrusted repos on the local stack. |
+
+### Top 5 now (Nov 4 is in 5 days)
+
+1. **Ship what's on `main`, in the right order (C-1, C-2 live).** Fix #28, apply `build_isolation`, deploy all four services from `main`, test a hosted build, then retire `sc-builder`. Until then, fixing things on `main` changes nothing for users. *(security, platform)*
+2. **Close R-1 before the gateway reads `provider_configs`.** Restrict `key_secret` by kind and provider; `base_url` only from console sessions. *(networking)*
+3. **Revocation correctness (S-3, S-4).** Unchanged since the first review, and still the most user-visible security bug. *(networking)*
+4. **IAM narrowing (H-1, H-2, R-9, CI-1).** At minimum, remove `roles/editor` from both default compute SAs today. That one change defuses H-2, R-9 and the compute-SA half of H-1. *(security)*
+5. **Alerts and dev-mode guards (O-1, R-3).** Run `deploy/monitoring.py` (still zero alert policies), set `SHIPCUBE_AI_GATEWAY_URL` on `shipcube-mcp`, and add the shared refusal under `K_SERVICE`. *(platform)*
+
+New issues for this pass: see the PR description. The original findings follow, unchanged except where the table above says otherwise.
+
+---
+
+## Original review (2026-10-28)
+
+### Top 5 to fix before Nov 4 (original)
 
 1. **Isolate builds per tenant (C-1).** User build code runs as one shared builder identity that can read every tenant's source and write every tenant's images. Use a per-workspace builder SA, or at minimum IAM conditions on bucket prefix and AR package. Deploy by digest only. *(security + networking)*
 2. **Remove the admin roles from internet-facing identities (H-1, H-2).** `sc-api` holds `iam.serviceAccountAdmin` and `secretmanager.admin` on the control project. The hosted deployer holds project-wide `serviceAccountUser` and `serviceAccountAdmin` on the apps project, where the default compute SA is Editor. Replace these with narrow custom roles and per-SA bindings, and drop Editor from both default compute SAs. *(security)*
