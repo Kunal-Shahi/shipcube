@@ -23,7 +23,7 @@ type Gateway struct {
 	Limiter  *Limiter
 	// Shared, when set, keeps the caps in the control-plane API so every instance shares them (#20).
 	// If it can't be reached, platform-key requests fail with 503; BYOK requests use Limiter, logged.
-	Shared *SharedLimiter
+	Shared   *SharedLimiter
 	Usage    UsageSink
 	Upstream *http.Client
 	Prices   map[string][2]float64
