@@ -2,15 +2,19 @@
 
 Source shapes follow the control-plane contract (services/api models):
   {kind: "inline", files: [{path, content}]}   ≤50 files, ≤256 KB
-  {kind: "git", url, ref?, subdir?}
+  {kind: "git", url, ref?, subdir?}           https only; shallow, capped (see _clone)
   {kind: "upload", upload_id}                  tarball in GCS; needs a fetcher
   {kind: "image", uri}                         can't be profiled locally
 """
 
 from __future__ import annotations
 
+import os
+import shutil
+import signal
 import subprocess
 import tarfile
+import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
@@ -18,6 +22,9 @@ INLINE_MAX_FILES = 50
 INLINE_MAX_BYTES = 256 * 1024
 UNPACKED_MAX_FILES = 20_000      # the sandbox itself takes up to 10,000 (policy.py); bigger is refused
 UNPACKED_MAX_BYTES = 1 * 2**30   # outright, beyond that the estimate is static (too_large)
+GIT_MAX_BYTES = 256 * 2**20      # whole clone, .git included (matches the API's unpack budget)
+GIT_MAX_BLOB_BYTES = 50 * 2**20  # any single file; larger blobs aren't fetched
+GIT_CLONE_TIMEOUT_S = 120.0
 
 
 class SourceError(ValueError):
@@ -33,6 +40,77 @@ class NotRunnable(Exception):
 UploadFetcher = Callable[[str], Path]
 
 
+def _tree_bytes(path: Path) -> tuple[int, int]:
+    total = files = 0
+    for dirpath, _, names in os.walk(path):
+        for n in names:
+            try:
+                total += os.lstat(os.path.join(dirpath, n)).st_size
+                files += 1
+            except OSError:
+                continue
+    return total, files
+
+
+def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) -> Path:
+    """A shallow, size- and time-capped clone of one branch.
+
+    - `--depth 1 --single-branch --no-tags`: one commit, no history or tags.
+    - `--filter=blob:limit`: blobs over GIT_MAX_BLOB_BYTES aren't sent, and with
+      GIT_NO_LAZY_FETCH the checkout can't fetch them later, so the clone fails instead.
+      Servers that ignore filters are still held by the size watchdog.
+    - A watchdog kills git once the clone passes GIT_MAX_BYTES or GIT_CLONE_TIMEOUT_S.
+    - No submodules, no LFS (smudge skipped, filters unset), no system or user git
+      config (no insteadOf rewrites or credential helpers), https only (plus file in tests).
+    """
+    protocols = ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always"]
+    if allow_file:
+        protocols += ["-c", "protocol.file.allow=always"]
+    cmd = ["git", *protocols,
+           "-c", "submodule.recurse=false", "-c", "core.hooksPath=/dev/null",
+           "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=", "-c", "filter.lfs.required=false",
+           "clone", "--quiet", "--depth", "1", "--single-branch", "--no-tags", "--no-recurse-submodules",
+           f"--filter=blob:limit={GIT_MAX_BLOB_BYTES}"]
+    if ref:
+        cmd += ["--branch", ref]
+    cmd += ["--", url, str(target)]
+    env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(target.parent),
+           "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+           "GIT_LFS_SKIP_SMUDGE": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_ASKPASS": "/bin/false"}
+    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            start_new_session=True)
+    end = time.monotonic() + GIT_CLONE_TIMEOUT_S
+    why = None
+    while proc.poll() is None:
+        if time.monotonic() > end:
+            why = f"git clone took longer than {GIT_CLONE_TIMEOUT_S:.0f}s"
+        elif target.exists() and _tree_bytes(target)[0] > GIT_MAX_BYTES:
+            why = f"git clone is over {GIT_MAX_BYTES // 2**20} MiB"
+        if why:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+            break
+        time.sleep(0.1)
+    err = proc.stderr.read().decode(errors="replace")[-300:] if proc.stderr else ""
+    if why is None and proc.returncode != 0:
+        why = f"git clone failed: {err.strip()!r}"
+        if "lazy fetch" in err or "unable to read" in err or "missing" in err:
+            why += f" (a file is over the {GIT_MAX_BLOB_BYTES // 2**20} MiB per-file limit)"
+    if why is None:
+        size, files = _tree_bytes(target)
+        if size > GIT_MAX_BYTES:
+            why = f"git clone is over {GIT_MAX_BYTES // 2**20} MiB"
+        elif files > UNPACKED_MAX_FILES:
+            why = f"git clone has {files} files; the limit is {UNPACKED_MAX_FILES}"
+    if why:
+        shutil.rmtree(target, ignore_errors=True)
+        raise SourceError(why)
+    return target
+
+
 def _safe_rel(path: str) -> PurePosixPath:
     p = PurePosixPath(path)
     if p.is_absolute() or ".." in p.parts or not p.parts:
@@ -40,8 +118,12 @@ def _safe_rel(path: str) -> PurePosixPath:
     return p
 
 
-def materialize(source: dict, dest: Path, *, fetch_upload: UploadFetcher | None = None) -> Path:
-    """Write the source's files under dest and return the app root directory."""
+def materialize(source: dict, dest: Path, *, fetch_upload: UploadFetcher | None = None,
+                allow_file_urls: bool = False) -> Path:
+    """Write the source's files under dest and return the app root directory.
+
+    allow_file_urls permits file:// git sources (tests). Production refuses them: a tenant
+    must never make the worker clone one of its local paths."""
     dest.mkdir(parents=True, exist_ok=True)
     kind = source.get("kind")
     if kind == "inline":
@@ -58,17 +140,9 @@ def materialize(source: dict, dest: Path, *, fetch_upload: UploadFetcher | None 
         return dest
     if kind == "git":
         url = source["url"]
-        if not url.startswith(("https://", "file://")):
+        if not url.startswith(("https://", "file://") if allow_file_urls else "https://"):
             raise SourceError("git sources must be https:// URLs")
-        cmd = ["git", "clone", "--depth", "1", "--quiet"]
-        if source.get("ref"):
-            cmd += ["--branch", source["ref"]]
-        try:
-            subprocess.run([*cmd, url, str(dest / "repo")], check=True, capture_output=True,
-                           timeout=120, env={"GIT_TERMINAL_PROMPT": "0", "PATH": "/usr/bin:/bin:/opt/homebrew/bin"})
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-            raise SourceError(f"git clone failed: {getattr(e, 'stderr', b'')[-300:]!r}") from e
-        root = dest / "repo"
+        root = _clone(url, source.get("ref"), dest / "repo", allow_file=allow_file_urls)
         if source.get("subdir"):
             root = root / _safe_rel(source["subdir"])
             if not root.is_dir():

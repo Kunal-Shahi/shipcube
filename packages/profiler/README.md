@@ -36,6 +36,11 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
   - Tested with an upload that shadows the agent's modules and with a local malicious wheel (`.pth`, a `.data` stdlib overwrite, a psutil shadow). Against the previous image design both attacks got into the agent; now both runs are genuine.
 - **Static fallbacks:** `estimate()` reports `profile.measurements.static_reason`, one of `STATIC_REASONS`. The control plane forces one with `StaticRunner(reason="quota" | "budget" | "suspended" | "busy" | "disabled")`.
 - **Abuse signals:** `profile.measurements.abuse_signals`, computed host-side by `abuse_signals(profile)`, for the control plane's strikes.
+- **Git sources:**
+  - `https://` only. `file://`, ssh, `git://` and `ext::` are refused; `materialize(..., allow_file_urls=True)` exists for tests.
+  - Clones are shallow: `--depth 1 --single-branch --no-tags`.
+  - Caps: files over 50 MiB aren't fetched (`--filter=blob:limit` plus `GIT_NO_LAZY_FETCH`), a watchdog aborts past 256 MiB or 120 s, and a partial clone is removed.
+  - No submodules or LFS, and the worker's system and global git config is ignored.
 - **Uploads:** checked for unpacked size (1 GiB) and entry count (20,000) before extraction.
 
 ## Configure
