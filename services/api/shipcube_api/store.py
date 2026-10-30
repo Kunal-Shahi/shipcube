@@ -314,13 +314,39 @@ def _slug(conn, app_id: Any) -> str | None:
     return r["slug"] if r else None
 
 
+def _request_hash(kind: str, app_id: Any, payload: dict[str, Any]) -> bytes:
+    return hashlib.sha256(json.dumps([kind, str(app_id) if app_id else None, payload], sort_keys=True, default=str).encode()).digest()
+
+
+def replay(conn, workspace_id: str, kind: str, app_id: Any, payload: dict[str, Any], idem: str | None
+           ) -> tuple[Operation | None, str | None]:
+    """Idempotency for operations that change an app's state (set_access, set_caps): (operation, key).
+
+    A retry with the same key and body returns its operation, but only while that operation is still
+    the app's latest of this kind. Once a later change has run (remove, add, remove again with the same
+    derived key), the old operation describes a state the app no longer has, so the request is applied
+    again as a new operation (key None) instead of returning a stale result (#19). The same key with a
+    different body is a conflict, as in enqueue."""
+    if idem is None:
+        return None, None
+    prior = conn.execute("select * from operations where workspace_id = %s and idem_key = %s", (workspace_id, idem)).fetchone()
+    if prior is None:
+        return None, idem
+    if bytes(prior["request_hash"]) != _request_hash(kind, app_id, payload):
+        raise Conflict("idempotency key reused with a different request")
+    latest = conn.execute("select id from operations where app_id = %s and kind = %s order by created_at desc limit 1",
+                          (app_id, kind)).fetchone()
+    if latest is not None and latest["id"] == prior["id"]:
+        return op_view(prior, _slug(conn, prior["app_id"])), idem
+    return None, None
+
+
 def enqueue(conn, caller: Caller | None, workspace_id: str, kind: str, app_id: Any, target_project: str,
             payload: dict[str, Any], idem_key: str | None, approvals: list[tuple[str, str]] | None = None,
             summary: str | None = None, extra: dict[str, Any] | None = None) -> Operation:
     """Insert an operation (and its approval) in the caller's transaction. Same key + same body
     returns the existing operation; same key + different body is a conflict."""
-    body = json.dumps([kind, str(app_id) if app_id else None, payload], sort_keys=True, default=str).encode()
-    request_hash = hashlib.sha256(body).digest()
+    request_hash = _request_hash(kind, app_id, payload)
     key = idem_key or f"auto:{uuid.uuid4().hex}"
     prior = conn.execute("select * from operations where workspace_id = %s and idem_key = %s", (workspace_id, key)).fetchone()
     if prior is not None:
@@ -548,12 +574,15 @@ def set_caps(caller: Caller, slug: str, caps: dict[str, Any], idem: str | None) 
         app = _app_row(conn, caller.workspace_id, slug)
         project = app_ref(conn, app).target.project
         reasons = caps_above_default(conn, caller.workspace_id, caps)
-        if reasons:  # the whole change waits for approval, so it never half-applies
-            op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, {"caps": caps}, idem, reasons)
-        else:
-            write_app_caps(conn, caller.workspace_id, app["id"], caps, caller.user_id)
-            op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, {"caps": caps, "push_only": True}, idem) \
-                if app["status"] == "running" else None
+        payload = {"caps": caps} if reasons else {"caps": caps, "push_only": True}
+        op, idem = replay(conn, caller.workspace_id, "set_caps", app["id"], payload, idem)
+        if op is None:  # a new change: write (unless it waits for approval) and push it
+            if reasons:  # the whole change waits for approval, so it never half-applies
+                op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, payload, idem, reasons)
+            else:
+                write_app_caps(conn, caller.workspace_id, app["id"], caps, caller.user_id)
+                op = enqueue(conn, caller, caller.workspace_id, "set_caps", app["id"], project, payload, idem) \
+                    if app["status"] == "running" else None
         return app_caps(conn, caller.workspace_id, app["id"]), op
 
 
@@ -584,13 +613,16 @@ def set_access(caller: Caller, slug: str, add: list[dict[str, Any]], remove: lis
         project = app_ref(conn, app).target.project
         domain = [g["principal"] for g in add if g["principal"].startswith("domain:")]
         direct = [g["principal"] for g in add if not g["principal"].startswith("domain:")]
-        write_grants(conn, caller.workspace_id, app["id"], direct, remove, caller.user_id)
-        op = None
-        if domain:
-            reasons = [("domain_grant", f"grant to a whole domain ({p})") for p in domain]
-            op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, {"add": domain}, idem, reasons)
-        elif (direct or remove) and app["status"] == "running":
-            op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, {"push_only": True}, idem)
+        # The pushed change is part of the request hash, so different changes never share an operation.
+        payload = {"add": domain} if domain else {"push_only": True, "add": sorted(direct), "remove": sorted(remove)}
+        op, idem = replay(conn, caller.workspace_id, "set_access", app["id"], payload, idem)
+        if op is None:  # a new change: write it, then push it
+            write_grants(conn, caller.workspace_id, app["id"], direct, remove, caller.user_id)
+            if domain:
+                reasons = [("domain_grant", f"grant to a whole domain ({p})") for p in domain]
+                op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, payload, idem, reasons)
+            elif (direct or remove) and app["status"] == "running":
+                op = enqueue(conn, caller, caller.workspace_id, "set_access", app["id"], project, payload, idem)
         return _app_view(conn, app)["access"], op
 
 
