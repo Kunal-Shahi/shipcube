@@ -38,6 +38,7 @@ from typing import Any, Callable
 
 import httpx
 
+from .. import git_source
 from ..settings import Settings
 from . import isolation
 from .base import AppRef, Deployed, DeployError, ShouldStop, normalize_caps
@@ -159,7 +160,7 @@ class LocalDeployer:
         return f"{isolation.LOCAL_REGISTRY}/{isolation.ar_repo(self.s, app.workspace_id)}/"
 
     def check_image(self, app: AppRef, image: str) -> None:
-        isolation.check_image(self.s, app.workspace_id, image)
+        isolation.check_image(self.s, app.workspace_id, image, linked=app.target.kind == "linked")
         if image.startswith(f"{isolation.LOCAL_REGISTRY}/"):
             # The digest is a local image id: it must exist and carry a tag in this workspace's namespace.
             image_id = image.rsplit("@", 1)[1]
@@ -204,13 +205,11 @@ class LocalDeployer:
 
     def _fetch_source(self, app: AppRef, staged: dict[str, Any], work: Path) -> Path:
         src = work / "src"
-        src.mkdir()
-        if "git" in staged:
+        if "git" in staged:  # https only, shallow, size and time capped (git_source.py)
             g = staged["git"]
-            self.docker.run(["git", "clone", "--depth", "50", "--", g["url"], str(src)], timeout=300)
-            if g.get("ref"):
-                self.docker.run(["git", "-C", str(src), "checkout", g["ref"]], timeout=60)
+            git_source.clone(g["url"], g.get("ref"), src)
             return src / g["subdir"] if g.get("subdir") else src
+        src.mkdir()
         loc = staged["storageSource"]
         isolation.check_object(self.s, app.workspace_id, loc["bucket"], loc["object"])
         archive = work / "source.tgz"

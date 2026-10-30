@@ -346,3 +346,118 @@ def test_estimate_through_the_local_docker_sandbox(monkeypatch):
     assert m["net_blocked"] >= 1
     assert r.workload_class == "batch_cron" and r.tier == "T2"
     assert r.explained_by == "rules" and r.profile["explainer_fallback_reason"].startswith("not_configured")
+
+
+# --- static reasons (docs/research/profiler-sandbox.md §9) ----------------------------------
+
+def _reason(r) -> str | None:
+    return r.profile["measurements"]["static_reason"]
+
+
+class _Raises:
+    name = "fake"
+
+    def __init__(self, err):
+        self.err = err
+
+    def run(self, *a):
+        raise self.err
+
+
+class _Measured:
+    name = "fake"
+
+    def __init__(self, profile):
+        self.profile = profile
+
+    def run(self, *a):
+        return self.profile
+
+
+
+def _batch_src():
+    return inline(SAMPLES / "nightly_batch")
+
+
+def test_static_reasons_are_reported():
+    from shipcube_profiler import ProfilerError, StaticRunner
+    img = estimate({"kind": "image", "uri": "us-docker.pkg.dev/p/r/a@sha256:1"}, {}, explainer=RuleExplainer())
+    assert _reason(img) == "image_source"
+    for err, reason in ((ProfilerError("policy", "x", reason="requirements_policy"), "requirements_policy"),
+                        (ProfilerError("build", "x", reason="too_large"), "too_large"),
+                        (ProfilerError("logs", "x"), "profiler_error")):
+        r = estimate(_batch_src(), {}, runner=_Raises(err), explainer=RuleExplainer())
+        assert r.profile["measurements"]["mode"] == "static" and _reason(r) == reason
+    rejected = estimate(_batch_src(), {}, runner=_Raises(ProfilerError("run", "x", reason="result_rejected")),
+                        explainer=RuleExplainer())
+    assert rejected.profile["measurements"]["abuse_signals"] == ["result_forged"]
+    # The control plane's own decisions pass straight through.
+    q = estimate(_batch_src(), {}, runner=StaticRunner(reason="quota"), explainer=RuleExplainer())
+    assert _reason(q) == "quota"
+
+
+def test_gpu_apps_are_not_run():
+    src = {"kind": "inline", "files": [{"path": "main.py", "content": "import torch\nprint(torch.cuda.is_available())\n"}]}
+    r = estimate(src, {}, runner=_Raises(AssertionError("must not run")), explainer=RuleExplainer())
+    assert _reason(r) == "gpu"
+
+
+def test_failed_runs_keep_their_abuse_signals():
+    crashed = Profile(mode="measured", runner="fake", kind="script", exit_code=1, net_blocked=80,
+                      abuse_signals=["egress_flood"])
+    r = estimate(_batch_src(), {}, runner=_Measured(crashed), explainer=RuleExplainer())
+    m = r.profile["measurements"]
+    assert m["mode"] == "static" and m["static_reason"] == "app_failed" and m["abuse_signals"] == ["egress_flood"]
+    dash = inline(SAMPLES / "dashboard")
+    silent = Profile(mode="measured", runner="fake", kind="web", requests=RequestStats(sent=120, ok=0))
+    assert _reason(estimate(dash, {}, runner=_Measured(silent), explainer=RuleExplainer())) == "did_not_start"
+
+
+def test_measured_estimates_have_no_reason(batch_rules):
+    assert _reason(batch_rules) is None
+
+
+# --- static estimates aren't described as measured ----------------------------------------
+
+def _muse_reply(reasoning: str, tradeoff: str = "Always on: no cold starts, but you pay while idle all month.") -> str:
+    return json.dumps({"reasoning": reasoning, "alternatives": [{"tier": "T3", "tradeoff": tradeoff}],
+                       "recommended_caps": {}})
+
+
+IMAGE = {"kind": "image", "uri": "us-docker.pkg.dev/cloudrun/container/hello"}
+WRONG = ("Measured 100 ms mean latency with low CPU, and the test run lasted 120 seconds, so this bursty "
+         "dashboard fits a scale-to-zero service well.")
+RIGHT = ("The app wasn't run, so these are typical values for this app shape: about 0.05 vCPU and 150 MiB, "
+         "which fits a scale-to-zero service; nothing was measured.")
+
+
+def test_static_estimate_prompt_says_nothing_ran():
+    client = FakeClient(reply=_muse_reply(RIGHT))
+    r = estimate(IMAGE, {"expected_users": 5}, explainer=FallbackExplainer(MuseExplainer(client=client, model="m")))
+    assert r.explained_by == "m" and r.reasoning == RIGHT                 # negated "measured" is fine
+    user = client.calls[0]["messages"][1]["content"]
+    assert '"typical_values_not_measured"' in user and '"measured":' not in user
+    assert '"static_reason": "image_source"' in user
+    assert "typical values for this app shape" in client.calls[0]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize("reasoning,tradeoff", [
+    (WRONG, None),
+    ("These numbers fit a scale-to-zero service: during the run it observed about 0.05 vCPU and 150 MiB of memory.", None),
+    (RIGHT, "Always on: the load test showed 80 ms latency, but you pay while idle all month."),
+])
+def test_static_estimate_that_claims_measurements_falls_back_to_rules(reasoning, tradeoff):
+    reply = _muse_reply(reasoning, tradeoff) if tradeoff else _muse_reply(reasoning)
+    r = estimate(IMAGE, {"expected_users": 5}, explainer=FallbackExplainer(MuseExplainer(client=FakeClient(reply=reply))))
+    assert r.explained_by == "rules" and "measured" in r.profile["explainer_fallback_reason"]
+    assert "typical values" in r.reasoning and "container images aren't run" in r.reasoning
+    for a in r.alternatives:
+        assert "load test" not in a.tradeoff
+
+
+def test_measured_estimates_may_say_measured(batch_rules):
+    client = FakeClient(reply=_muse_reply(WRONG.replace("dashboard", "job")))
+    r = estimate(inline(SAMPLES / "nightly_batch"), {"schedule": "0 2 * * *"},
+                 explainer=FallbackExplainer(MuseExplainer(client=client, model="m")))
+    assert r.profile["measurements"]["mode"] == "measured" and r.explained_by == "m"
+    assert '"measured":' in client.calls[0]["messages"][1]["content"]

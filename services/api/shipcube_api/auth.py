@@ -150,32 +150,93 @@ def _verify_console_jwt(token: str, project: str, id_token: Any, request: Any) -
         return claims
 
 
-def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
-    user_id = None
-    workspace_id = workspace_hint
+def _emulator_claims(token: str, project: str) -> dict[str, Any]:
+    """DEV_MODE with the Auth emulator (FIREBASE_AUTH_EMULATOR_HOST): its ID tokens and session cookies
+    are unsigned, so only their audience, issuer and expiry are checked. Never outside DEV_MODE."""
+    import base64
+    import json
+    import time
+
+    if not settings.dev_mode:
+        raise ValueError("emulator tokens are accepted only in DEV_MODE")
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError) as e:
+        raise ValueError(f"not an emulator token: {e}") from None
+    issuers = {f"https://securetoken.google.com/{project}", f"https://session.firebase.google.com/{project}"}
+    if claims.get("aud") != project or claims.get("iss") not in issuers or claims.get("exp", 0) < time.time():
+        raise ValueError("emulator token for another project, or expired")
+    return claims
+
+
+def _claim_pending_user(conn: Any, claims: dict[str, Any]) -> dict | None:
+    """A person added by email (admin bootstrap, before their first sign-in) is stored with
+    firebase_uid 'pending:<email>'. Their first console sign-in, with that email verified by
+    Identity Platform, binds the row to their uid. Nothing else is created here."""
+    email = claims.get("email")
+    if not email or claims.get("email_verified") is not True:
+        return None
+    u = conn.execute("update users set firebase_uid = %s, email_verified = true"
+                     " where firebase_uid = 'pending:' || email and lower(email) = lower(%s) and disabled_at is null"
+                     " returning id", (claims["sub"], email)).fetchone()
+    if u:
+        log.info("pending user claimed by first sign-in", extra={"user_id": str(u["id"])})
+    return u
+
+
+@dataclass(frozen=True)
+class ConsoleIdentity:
+    """A verified console sign-in, before any workspace: the person's email and their user row, if any."""
+    email: str
+    user_id: str | None
+    email_verified: bool
+    workspace_id: str | None = None  # DEV_MODE sessions are pinned to one workspace
+
+
+def console_identity(token: str) -> ConsoleIdentity | None:
+    """The human behind a console token, or None. PATs are never console identities. A verified email's
+    first sign-in claims its pending user row (admin bootstrap, or an approved waitlist entry)."""
     if token in _dev_sessions and settings.dev_mode:
         user_id, workspace_id = _dev_sessions[token]
-    elif settings.idp_project and not token.startswith("sc_"):
-        from google.auth.transport.requests import Request
-        from google.oauth2 import id_token
-
-        try:
-            claims = _verify_console_jwt(token, settings.idp_project, id_token, Request())
-        except ValueError as e:
-            log.info("console token rejected", extra={"reason": str(e)[:200]})
-            return None
         with db.tx(role=db.APP) as conn:
-            u = conn.execute("select id from users where firebase_uid = %s and disabled_at is null",
-                             (claims["sub"],)).fetchone()
-        user_id = str(u["id"]) if u else None
-    if user_id is None:
+            u = conn.execute("select email from users where id = %s and disabled_at is null", (user_id,)).fetchone()
+        return ConsoleIdentity(u["email"], user_id, True, workspace_id) if u else None
+    if not settings.idp_project or token.startswith("sc_"):
+        return None
+    from google.auth.transport.requests import Request
+    from google.oauth2 import id_token
+
+    try:
+        if settings.dev_mode and os.environ.get("FIREBASE_AUTH_EMULATOR_HOST"):
+            claims = _emulator_claims(token, settings.idp_project)
+        else:
+            claims = _verify_console_jwt(token, settings.idp_project, id_token, Request())
+    except ValueError as e:
+        log.info("console token rejected", extra={"reason": str(e)[:200]})
         return None
     with db.tx(role=db.APP) as conn:
-        mem = _membership(conn, user_id, workspace_id)
+        u = conn.execute("select id from users where firebase_uid = %s and disabled_at is null",
+                         (claims["sub"],)).fetchone()
+        if u is None:
+            u = _claim_pending_user(conn, claims)
+    return ConsoleIdentity(claims.get("email") or "", str(u["id"]) if u else None, claims.get("email_verified") is True)
+
+
+def console_caller(ident: ConsoleIdentity, workspace_hint: str | None) -> Caller | None:
+    if ident.user_id is None:
+        return None
+    with db.tx(role=db.APP) as conn:
+        mem = _membership(conn, ident.user_id, ident.workspace_id or workspace_hint)
     if mem is None:
         return None
     exp = int((datetime.now(UTC) + timedelta(hours=1)).timestamp())
-    return Caller(None, user_id, str(mem["workspace_id"]), CONSOLE_SCOPES, exp, "console", mem["email"], mem["role"])
+    return Caller(None, ident.user_id, str(mem["workspace_id"]), CONSOLE_SCOPES, exp, "console", mem["email"], mem["role"])
+
+
+def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
+    ident = console_identity(token)
+    return console_caller(ident, workspace_hint) if ident else None
 
 
 def verify(token: str, workspace_hint: str | None = None) -> Caller | None:

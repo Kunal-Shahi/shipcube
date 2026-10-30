@@ -8,7 +8,9 @@ export const TOKEN_ENV = "SHIPCUBE_TOKEN";
 export const SCOPES = [
   { id: "apps:read", label: "See apps, logs and metrics", detail: "list_apps, inspect_app, operation" },
   { id: "apps:deploy", label: "Estimate, deploy and delete apps", detail: "create_upload, estimate_load, deploy_app, delete_app" },
-  { id: "caps:write", label: "Change caps and AI provider", detail: "set_caps, ai_config" },
+  { id: "caps:write", label: "Change caps", detail: "set_caps" },
+  // Off by default: it lets the agent pick which stored key an app's AI calls use (red-team R-1).
+  { id: "secrets:write", label: "Point apps at a saved AI provider key", detail: "ai_config", optIn: true },
   { id: "access:write", label: "Change who can open apps", detail: "set_access" },
   { id: "data:read", label: "Read the data model and query it", detail: "data_list_cubes, data_describe_cube, data_query, data_search_values" },
   { id: "data:migrate", label: "Propose data model changes", detail: "data_propose_migration" },

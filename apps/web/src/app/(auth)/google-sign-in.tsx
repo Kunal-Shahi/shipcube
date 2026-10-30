@@ -1,6 +1,7 @@
 "use client";
 
 import { Loader2 } from "lucide-react";
+import { safeReturnTo } from "@/lib/auth/return-to";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import type { Intent } from "@/lib/auth/types";
@@ -112,7 +113,7 @@ export function GoogleSignIn({
         setError(messageFor(body?.error?.code ?? "", body?.error?.message ?? "") ?? body?.error?.message ?? "Sign-in failed.");
         return;
       }
-      const safe = to && to.startsWith("/") && !to.startsWith("//") ? to : "/apps";
+      const safe = safeReturnTo(to, window.location.origin);
       router.replace(body.next === "onboarding" ? "/onboarding" : safe);
       router.refresh();
     },

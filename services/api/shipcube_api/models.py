@@ -36,9 +36,16 @@ class UploadSource(_Model):
 
 class GitSource(_Model):
     kind: Literal["git"]
-    url: str
-    ref: str | None = None
-    subdir: str | None = None
+    url: str = Field(pattern=r"^https://[^\s]+$", max_length=2048,
+                     description="https:// only; cloned shallow, one branch or tag, no submodules or LFS")
+    ref: str | None = Field(None, pattern=r"^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$", description="Branch or tag")
+    subdir: str | None = Field(None, pattern=r"^[A-Za-z0-9._ -][A-Za-z0-9._/ -]{0,499}$")
+
+    @model_validator(mode="after")
+    def _subdir_inside(self) -> "GitSource":
+        if self.subdir and ".." in self.subdir.split("/"):
+            raise ValueError("subdir must stay inside the repository")
+        return self
 
 
 class ImageSource(_Model):
@@ -148,6 +155,9 @@ class EstimateRequest(_Model):
     app: AppName | None = None
     expected_users: int | None = Field(None, ge=1, description="Rough number of people who will open the app")
     schedule: str | None = Field(None, description="Cron expression if this is a scheduled job")
+    region: str | None = Field(None, description="GCP region to price for, e.g. us-central1")
+    traffic: Literal["office_hours", "always_on"] | None = Field(
+        None, description="office_hours: people opening pages in the working day; always_on: other systems calling an API")
 
 
 class DeployRequest(_Model):
@@ -181,9 +191,9 @@ class ApprovalDecision(_Model):
 
 class AiConfigRequest(_Model):
     provider: Literal["meta", "openai_compatible", "openai", "anthropic"] = "meta"
-    model: str = "muse-spark"
-    key_secret: str | None = Field(None, description="Secret name holding the BYOK API key")
-    base_url: str | None = Field(None, description="For openai_compatible providers")
+    model: str = "muse-spark-1.3"  # the only Muse id Meta serves (and the gateway prices and allows)
+    key_secret: str | None = Field(None, description="Optional: the provider's key saved in the console (ai-provider-<provider>); no other secret is accepted")
+    base_url: str | None = Field(None, description="Console only: must equal the endpoint saved with the openai_compatible key")
 
 
 # --- responses ---------------------------------------------------------------------
@@ -221,6 +231,7 @@ class Me(BaseModel):
     limits: Limits
     token: TokenInfo | None = Field(None, description="The token used for this request")
     deployer_sa: str = Field(description="Grant this service account roles in a GCP project to link it (link-project.sh)")
+    platform_admin: bool = Field(False, description="May review the waitlist (SHIPCUBE_PLATFORM_ADMINS)")
 
 
 class Upload(BaseModel):
@@ -244,7 +255,10 @@ class AccessList(BaseModel):
 
 
 class AccessResult(AccessList):
-    operation: Operation | None = Field(None, description="Set when some changes (domain: grants) await approval")
+    operation: Operation | None = Field(
+        None, description="The change's operation: the domain: grants awaiting approval when there are any, else the push to IAP")
+    applied: Operation | None = Field(
+        None, description="With domain: grants: the separate push of this request's direct grants and removals, which never waits for the approval")
 
 
 class AiConfig(BaseModel):
@@ -476,3 +490,53 @@ class Billing(BaseModel):
     daily: list[DailyCost]
     gcp: GcpLink | None
     source: str
+
+
+# --- waitlist (waitlist.py) ----------------------------------------------------------
+
+
+class WaitlistRequest(_Model):
+    # A plain shape check: the address is only ever compared, and approval needs a verified Google sign-in with it.
+    email: str | None = Field(None, max_length=254, pattern=r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]+$",
+                              description="Required unless signed in (then the session's verified email is used)")
+    name: str = Field(min_length=1, max_length=100)
+    use_case: str = Field(min_length=1, max_length=500)
+    website: str = Field("", max_length=200, description="Honeypot: always empty from the real form")
+
+    @model_validator(mode="after")
+    def _strip(self) -> WaitlistRequest:
+        self.email = self.email.strip().lower() if self.email else None
+        self.name, self.use_case = self.name.strip(), self.use_case.strip()
+        if not self.name or not self.use_case:
+            raise ValueError("name and use_case can't be blank")
+        return self
+
+
+class WaitlistEntry(BaseModel):
+    id: str
+    email: str
+    name: str
+    use_case: str
+    status: Literal["pending", "approved", "rejected"]
+    created_at: str
+    decided_at: str | None
+    decided_by: str | None
+    workspace_id: str | None
+
+
+class WaitlistCount(BaseModel):
+    count: int
+    cap: int
+
+
+class WaitlistList(BaseModel):
+    items: list[WaitlistEntry] = Field(description="Newest first")
+    requests: list[WaitlistEntry] = Field(description="The same list as items")
+    workspaces: WaitlistCount
+
+
+class WaitlistMe(BaseModel):
+    email: str
+    status: Literal["none", "pending", "approved", "rejected"]
+    requested_at: str | None
+    platform_admin: bool

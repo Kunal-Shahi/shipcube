@@ -50,7 +50,7 @@ terraform apply tfplan   # only after the plan and its cost are approved
 What it creates:
 
 - APIs in both projects.
-- Service accounts: `sc-api`, `sc-gateway`, `sc-worker`, `sc-hosted-deployer` (control), `sc-profiler` (apps). Hosted builds run as per-workspace `sc-build-<id>` accounts that the worker provisions (C-1); the shared `sc-builder` was deleted on 2026-10-30. Per-workspace deployers (`ws-<id>-deployer`) and per-app runtime accounts are created by the API at runtime, not here.
+- Service accounts: `sc-api`, `sc-gateway`, `sc-worker`, `sc-hosted-deployer` (control); in apps, `profiler-sandbox` (the profiler job's runtime identity: zero roles, enforced by `tests/profiler_sandbox_check.py`) and `profiler-build` (its Cloud Build identity). Hosted builds run as per-workspace `sc-build-<id>` accounts that the worker provisions (C-1); the shared `sc-builder` was deleted on 2026-10-30. Per-workspace deployers (`ws-<id>-deployer`) and per-app runtime accounts are created by the API at runtime, not here.
 - Cloud SQL Postgres 16, `db-f1-micro`, IAM database auth only, backups and PITR, pgaudit.
 - Audit logging (Data Access logs and a 365-day audit bucket).
 - Secret Manager **containers** for platform secrets, with accessor bindings. Values are added with `gcloud secrets versions add`, never through Terraform (state would hold them in plain text).
@@ -95,6 +95,7 @@ Hosted builds run tenant code, so each workspace builds as its own service accou
 
 - `terraform/modules/build_isolation`: the static pieces. `sc-provisioner` (impersonable only by `sc-worker`), its two custom roles (SA + repo admin in the apps project; managed-folder admin on the uploads bucket), and `storage.buckets.get` (metadata only) on the uploads bucket for all SAs in the apps project, which Cloud Build requires before it accepts a logs folder. Builders hold no `logging.logWriter`: hosted builds log to `ws/<ws_uuid>/build-logs/` (#28).
 - `scripts/provision-workspace-builder.sh <workspace-uuid> [--delete]`: the per-workspace resources (`sc-build-<ws_short>` SA, `ws-<ws_short>` repo, `ws/<ws_uuid>/` and `ws/<ws_uuid>/build-logs/` managed folders, and their bindings). The worker makes the same calls in Python. Idempotent.
+- `tests/profiler_sandbox_check.py`: static check, run in CI by `packages/profiler/tests/test_infra_sandbox.py`. Nothing in `terraform/` may give the profiler network a way out (allow rules, NAT, peering, connectors, PSC, routes), and the `profiler-sandbox` SA may have no role bindings. `terraform/modules/profiler/tests/sandbox.tftest.hcl` checks the module itself with a mocked provider (`terraform -chdir=infra/terraform/modules/profiler test`).
 - `tests/build-isolation.sh`: live test. It provisions two throwaway workspaces and, with real tokens for A's build SA, checks that A reads its own upload but not B's, can't list the bucket, and can push and pull only its own repo (not B's, `shipcube` or `profiler`). It cleans up on exit. Run it as an apps-project Owner.
 
 Rollout: done on 2026-10-30. `build_isolation` is applied, `build-isolation.sh` passes, hosted builds run as `sc-build-<ws_short>` and deploy by digest, and the shared `sc-builder` (with its bucket-wide read, project-wide registry write and hand-made `logging.logWriter`) is deleted.

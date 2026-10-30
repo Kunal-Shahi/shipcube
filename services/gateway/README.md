@@ -85,10 +85,22 @@ spends reasoning tokens inside it (173 of 183 for a one-word reply).
 | `GATEWAY_USAGE_URL` | Optional: POST usage batches here every 10 s. |
 | `META_SECRET_REF` | **Required** (except in `DEV_MODE`): the Secret Manager version of the Meta key. |
 | `META_BASE_URL`, `OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL` | Provider endpoints (defaults: `https://api.meta.ai/v1`, `https://api.openai.com/v1`, `https://api.anthropic.com`). |
-| `GATEWAY_PRICES` | JSON `{"provider/model": [in, out]}` USD per 1M tokens, merged with the built-in Anthropic prices. |
+| `GATEWAY_PRICES` | JSON `{"provider/model": [in, out]}` USD per 1M tokens, merged with the built-in Anthropic prices. **Required for the platform model outside DEV_MODE** (e.g. `{"meta/muse-spark-1.3": [in, out]}`): unpriced models on ShipCube's key are refused (`503 model_not_priced`), so spend caps always bind. |
+| `GATEWAY_META_MODELS` | Comma-separated models apps may request on ShipCube's key besides their configured one (others: `403 model_not_allowed`). |
+| `GATEWAY_DEFAULT_TOKENS_PER_DAY`, `GATEWAY_DEFAULT_REQUESTS_PER_MINUTE` | Per-app caps on ShipCube's key for apps whose registry entry sets none. Default 200000 and 60. |
+| `GATEWAY_WORKSPACE_TOKENS_PER_DAY`, `GATEWAY_WORKSPACE_REQUESTS_PER_MINUTE` | Caps on ShipCube's key across all of a workspace's apps. Default 1000000 and 300. |
+| `GATEWAY_COUNTERS_URL` | The control-plane API (the `shipcube-mcp` service URL). Caps are then kept in its `rate_counters`, shared by every instance and kept across restarts (`/internal/gateway/reserve` and `/settle`, with the gateway's ID token). If it can't be reached, platform-key requests get `503 caps_unavailable`; BYOK requests fall back to this instance's counters, logged. Unset: per-instance counters. |
+| `GATEWAY_MAX_OUTPUT_TOKENS` | Every request's `max_tokens` / `max_completion_tokens` is clamped to this (default 16000), and to what's left of its token caps. Only `n=1` is accepted. |
 | `GATEWAY_UPSTREAM_HEADER_TIMEOUT`, `GATEWAY_REQUEST_TIMEOUT`, `GATEWAY_UPSTREAM_RETRIES` | See "Timeouts and retries". |
 | `GOOGLE_CLOUD_PROJECT` | Project id, for the Cloud Logging trace field. |
 | `DEV_MODE=1` | **Local only.** Enables `env:NAME` secret refs and the mock provider; with `GATEWAY_ALLOW_PRIVATE_UPSTREAM=1`, private BYOK URLs. The process refuses to start without `META_SECRET_REF` unless this is set. |
+
+**On Cloud Run** (`K_SERVICE`, `K_REVISION` or `CLOUD_RUN_JOB` set) the gateway refuses to start, logging one CRITICAL line per problem, if any of these is true (`guard.go`, #29):
+- `DEV_MODE` or `SHIPCUBE_DEV_MODE` is set, or `GATEWAY_ALLOW_PRIVATE_UPSTREAM=1`;
+- `GATEWAY_AUDIENCE` or `GATEWAY_COUNTERS_URL` is unset;
+- `META_SECRET_REF` isn't a `projects/…/secrets/…` reference;
+- `GATEWAY_REGISTRY_FILE` is the example registry;
+- any URL setting is set but isn't public https.
 
 ## Deploy
 
@@ -125,8 +137,11 @@ completions are long by design. Usage per app: Logs Explorer with `jsonPayload.s
 
 - **Caps are per instance** (in memory). With `max-instances 2` an app can briefly use up to twice its
   rate cap. Strict limits need shared counters (Redis or Postgres), which aren't built.
-- **Muse and BYOK prices aren't known to the gateway.** Their `cost_usd` is 0 with `priced=false` until
-  set in `GATEWAY_PRICES`, so spend caps don't bind for them; token caps do.
+- **BYOK prices aren't known to the gateway.** Their `cost_usd` is 0 with `priced=false` until set in
+  `GATEWAY_PRICES`, so spend caps don't bind for them; token caps do. (The platform model must be priced.)
+- **Caps are shared only with `GATEWAY_COUNTERS_URL`.** Each request reserves its prompt estimate plus its
+  output allowance (and their cost) before the provider is called and settles to actual usage after. With
+  the API's counters that holds across instances and restarts; without them each instance counts alone.
 - **Streams without a usage chunk** (Meta sometimes omits it) are metered by a bytes/4 estimate,
   flagged `estimated=true`.
 - **Anthropic:** tool calls aren't translated yet. Requests with `tools` get a 400 instead of being

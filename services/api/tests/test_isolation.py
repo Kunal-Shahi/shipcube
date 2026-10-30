@@ -65,3 +65,21 @@ def test_built_images_are_pinned_in_the_workspace_repo(client, two):
     assert op["status"] == "succeeded", op
     image = op["result"]["image"]
     assert image.startswith(isolation.image_prefix(settings, a["workspace_id"])) and isolation.DIGEST.search(image)
+
+
+def test_git_estimates_are_paused(client, two):
+    a, _ = two
+    r = client.post("/v1/estimates", json={"source": {"kind": "git", "url": "https://github.com/example/app"}}, headers=a["agent"])
+    assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_argument", r.text
+    assert "paused" in r.json()["error"]["message"]
+
+
+def test_hosted_deploys_refuse_public_images_but_estimates_stay_static(client, two):
+    """A-1 (#21): no arbitrary image runs on ShipCube's credit. Estimates never pull an image,
+    so they still accept one and stay static."""
+    a, _ = two
+    for image in ("nginx:1.27", "docker.io/xmrig/xmrig@sha256:" + "b" * 64):
+        r = client.post("/v1/apps/pub-app/deployments", json={"source": {"kind": "image", "uri": image}}, headers=a["agent"])
+        assert r.status_code == 403 and r.json()["error"]["code"] == "permission_denied", r.text
+    r = client.post("/v1/estimates", json={"source": {"kind": "image", "uri": "nginx:1.27"}}, headers=a["agent"])
+    assert r.status_code in (200, 202), r.text

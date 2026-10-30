@@ -17,7 +17,7 @@ import json
 import sys
 import uuid
 
-from . import auth, db
+from . import auth, db, profiler_guard
 from .store import CAP_PERIOD, WORKSPACE_DEFAULTS
 
 
@@ -81,6 +81,9 @@ def main(argv: list[str] | None = None) -> None:
     f = sub.add_parser("fail")
     f.add_argument("id")
     f.add_argument("--reason", required=True)
+    pr = sub.add_parser("profiler", help="profiler sandbox: today's spend, runs in flight, the brake")
+    pr.add_argument("--clear-brake", action="store_true")
+    pr.add_argument("--unsuspend", metavar="WORKSPACE_ID", help="lift a workspace's profiler suspension")
     a = p.parse_args(argv)
 
     if a.cmd == "migrate":  # infra/db/migrate.sh runs this as sc-migrator
@@ -130,6 +133,13 @@ def main(argv: list[str] | None = None) -> None:
                                " locked_until = null, finished_at = now(), updated_at = now() where id = %s and status in"
                                " ('queued','running') returning id", (a.reason, a.id)).fetchone()
         print("failed" if row else "not changed")
+    elif a.cmd == "profiler":
+        with db.worker_tx() as conn:
+            if a.clear_brake:
+                profiler_guard.clear_brake(conn)
+            if a.unsuspend and not profiler_guard.unsuspend(conn, a.unsuspend):
+                print(f"{a.unsuspend} was not suspended", file=sys.stderr)
+            print(json.dumps(profiler_guard.status(conn), indent=2, default=str))
 
 
 if __name__ == "__main__":

@@ -24,7 +24,8 @@ locals {
     "cloudbuild.googleapis.com",
     "secretmanager.googleapis.com",
     "cloudscheduler.googleapis.com",
-    "compute.googleapis.com", # VPC for the profiler sandbox
+    "compute.googleapis.com",           # VPC for the profiler sandbox
+    "servicenetworking.googleapis.com", # private Cloud Build pool peering (profiler offline_builds)
   ]
 }
 

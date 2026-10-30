@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from shipcube_api.deploy import gcp
+from shipcube_api.deploy import gcp, isolation
 from shipcube_api.deploy.base import AppRef, DeployError, Target, normalize_caps
 from shipcube_api.settings import Settings
 
@@ -110,7 +110,7 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
     prov = FakeSession({
         ("POST", ":setIamPolicy"): (200, {}),
         ("POST", "/repositories"): (409, {"error": {"message": "exists"}}),  # a retry: already created
-        ("GET", ":getIamPolicy"): (200, {"bindings": []}),
+        ("GET", ":getIamPolicy"): lambda _: (200, {"bindings": []}),  # a fresh policy per resource
         ("GET", "/iam"): (200, folder_iam),
         ("POST", ":getIamPolicy"): (200, {"etag": "e"}),
     })
@@ -134,29 +134,22 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
     sa_set = next(c for c in calls if c[1].endswith(f"serviceAccounts/{sa}:setIamPolicy"))
     assert sa_set[2]["policy"]["etag"] == "e" and sorted(b["role"] for b in sa_set[2]["policy"]["bindings"]) == [
         "roles/iam.serviceAccountTokenCreator", "roles/iam.serviceAccountUser"]
-    assert len(prov.calls) == 12  # SA, repo + IAM get/set, 2 folders + IAM get/put each, SA IAM get/set
+    assert len(prov.calls) == 18  # SA, repo + IAM get/set, 2 folders + IAM get/put each, SA IAM get/set, 2 mirrors x describe + IAM get/set
     # A hosted build provisions first, as the provisioner, never with the deployer's own identity.
     assert all("managedFolders" not in u and "repositories?" not in u for _, u, _, _ in deployer._sessions.get(None, FakeSession({})).calls)
 
 
-def test_ensure_link_deployer_creates_the_sa_and_lets_only_api_and_worker_use_it(deployer):
-    sa = "ws-3c1d5e2a7b4f-deployer@shipcube-control-ks.iam.gserviceaccount.com"
-    adc = FakeSession({
-        ("POST", ":getIamPolicy"): (200, {"etag": "e", "bindings": [
-            {"role": "roles/iam.serviceAccountTokenCreator", "members": [f"serviceAccount:{deployer.s.worker_sa}"]}]}),
-        ("POST", ":setIamPolicy"): (200, {}),
-        ("POST", "/serviceAccounts"): (409, {"error": {"message": "exists"}}),  # a retry: already created
-    })
+def test_ensure_link_deployer_only_creates_the_sa_in_the_links_project(deployer):
+    sa = isolation.link_deployer_sa(deployer.s, WS)
+    assert sa == f"ws-{WS.replace('-', '')[:12]}-deployer@shipcube-links-ks.iam.gserviceaccount.com"
+    adc = FakeSession({("POST", "/serviceAccounts"): (409, {"error": {"message": "exists"}})})  # a retry
     deployer._sessions[None] = adc
     deployer.ensure_link_deployer(WS, sa)
-    deployer.ensure_link_deployer(WS, sa)  # cached: no second round of calls
+    deployer.ensure_link_deployer(WS, sa)  # cached: no second call
     calls = [(m, u.split("/v1/")[-1], b) for m, u, b, _ in adc.calls]
-    assert calls[0][0:2] == ("POST", "projects/shipcube-control-ks/serviceAccounts")
-    assert calls[0][2]["accountId"] == "ws-3c1d5e2a7b4f-deployer"
-    assert calls[2][1] == f"projects/shipcube-control-ks/serviceAccounts/{sa}:setIamPolicy"
-    assert calls[2][2]["policy"] == {"etag": "e", "bindings": [{"role": "roles/iam.serviceAccountTokenCreator", "members": [
-        f"serviceAccount:{deployer.s.worker_sa}", f"serviceAccount:{deployer.s.api_sa}"]}]}
-    assert len(adc.calls) == 3
+    # One create, nothing else: no getIamPolicy/setIamPolicy, which the API may no longer call (#15).
+    assert [c[0:2] for c in calls] == [("POST", "projects/shipcube-links-ks/serviceAccounts")]
+    assert calls[0][2]["accountId"] == f"ws-{WS.replace('-', '')[:12]}-deployer"
 
 
 @pytest.mark.parametrize("bucket,obj", [
@@ -208,11 +201,64 @@ def test_update_caps_refuses_a_service_still_on_a_shared_repo_tag(deployer):
     assert e.value.code == "permission_denied" and not any(c[0] == "PATCH" for c in sess.calls)
 
 
-def test_public_and_linked_project_images_are_the_users_choice(deployer):
+PIN = "@sha256:" + "a" * 64
+
+
+@pytest.mark.parametrize("image", [
+    "nginx:1.27", "nginx" + PIN, "docker.io/xmrig/xmrig:latest", "ghcr.io/evil/miner" + PIN,
+    "europe-docker.pkg.dev/user-proj/r/app:v1", "europe-docker.pkg.dev/user-proj/r/app" + PIN,
+    "us-docker.pkg.dev/cloudrun/containerx/hello" + PIN,          # a prefix look-alike
+])
+def test_hosted_apps_refuse_public_and_foreign_images(deployer, image):
+    """Red-team A-1 (#21): a hosted app runs on ShipCube's credit, so no arbitrary images."""
+    from shipcube_api.deploy import isolation
+
+    with pytest.raises(DeployError) as e:
+        isolation.check_image(deployer.s, WS, image)
+    assert e.value.code == "permission_denied"
+
+
+def test_hosted_apps_may_run_allowlisted_images_pinned_by_digest(deployer, monkeypatch):
+    from shipcube_api.deploy import isolation
+
+    isolation.check_image(deployer.s, WS, "us-docker.pkg.dev/cloudrun/container/hello" + PIN)
+    with pytest.raises(DeployError) as e:                           # a tag can be moved; a digest can't
+        isolation.check_image(deployer.s, WS, "us-docker.pkg.dev/cloudrun/container/hello")
+    assert e.value.code == "invalid_argument"
+    monkeypatch.setenv("SHIPCUBE_IMAGE_ALLOWLIST", "europe-docker.pkg.dev/samples/demo")
+    isolation.check_image(deployer.s, WS, "europe-docker.pkg.dev/samples/demo/app" + PIN)
+    with pytest.raises(DeployError):                                # the default is replaced, not extended
+        isolation.check_image(deployer.s, WS, "us-docker.pkg.dev/cloudrun/container/hello" + PIN)
+    monkeypatch.setenv("SHIPCUBE_IMAGE_ALLOWLIST", "")
+    with pytest.raises(DeployError):                                # empty: workspace images only
+        isolation.check_image(deployer.s, WS, "us-docker.pkg.dev/cloudrun/container/hello" + PIN)
+
+
+def test_workspace_images_must_be_its_own_and_pinned(deployer):
+    from shipcube_api.deploy import isolation
+
+    own = isolation.image_prefix(deployer.s, WS) + "app-123456"
+    isolation.check_image(deployer.s, WS, own + PIN)
+    for image, code in ((own + ":latest", "invalid_argument"),
+                        (isolation.image_prefix(deployer.s, OTHER_WS) + "app-123456" + PIN, "permission_denied"),
+                        (own.replace("/app-123456", "/../shared/app") + PIN, "invalid_argument"),
+                        (own + PIN + " ", None), (" " + own + PIN, None)):
+        if code is None:
+            isolation.check_image(deployer.s, WS, image)            # surrounding whitespace is trimmed
+            continue
+        with pytest.raises(DeployError) as e:
+            isolation.check_image(deployer.s, WS, image)
+        assert e.value.code == code, image
+
+
+def test_linked_projects_may_run_any_outside_image_but_never_shipcubes(deployer):
+    """Linked apps run in the user's project, on their bill: their choice, as before."""
     from shipcube_api.deploy import isolation
 
     for image in ("nginx:1.27", "us-docker.pkg.dev/cloudrun/container/hello", "europe-docker.pkg.dev/user-proj/r/app:v1"):
-        isolation.check_image(deployer.s, WS, image)
+        isolation.check_image(deployer.s, WS, image, linked=True)
+    with pytest.raises(DeployError):
+        isolation.check_image(deployer.s, WS, isolation.image_prefix(deployer.s, OTHER_WS) + "app" + PIN, linked=True)
 
 
 def test_deploy_is_private_gen2_scale_to_zero_with_iap(deployer):
@@ -221,11 +267,14 @@ def test_deploy_is_private_gen2_scale_to_zero_with_iap(deployer):
                                         "response": {"uri": "https://x.run.app", "latestReadyRevision": "a/b/rev-1"}}),
         ("GET", ":getIamPolicy"): (200, {"bindings": []}),
     })
+    prov = FakeSession({})
     deployer._sessions[None] = sess
+    deployer._sessions[deployer.s.provisioner_sa] = prov
     out = deployer.deploy(APP, f"{REPO}/{APP.service}@{DIGEST}", {"max_instances": 2, "concurrency": 40, "cpu": "1", "memory": "512Mi", "timeout_s": 60}, {})
     assert out.url == "https://x.run.app" and out.revision == "rev-1"
-    sa_create = next(c for c in sess.calls if c[0] == "POST" and c[1].endswith("/serviceAccounts"))
+    sa_create = next(c for c in prov.calls if c[0] == "POST" and c[1].endswith("/serviceAccounts"))  # the provisioner's (#16)
     assert sa_create[2]["accountId"] == APP.runtime_sa.split("@")[0]
+    assert not any(c[1].endswith("/serviceAccounts") for c in sess.calls)
     patch = next(c for c in sess.calls if c[0] == "PATCH")
     svc = patch[2]
     assert svc["iapEnabled"] is True and svc["invokerIamDisabled"] is False
@@ -271,3 +320,155 @@ def test_soft_delete_blocks_ingress_and_access(deployer):
     assert iam[2]["policy"]["bindings"] == []
     patch = next(c for c in sess.calls if c[0] == "PATCH")
     assert patch[2] == {"ingress": "INGRESS_TRAFFIC_INTERNAL_ONLY"} and patch[3] == {"updateMask": "ingress"}
+
+
+def test_image_hosts_are_normalised_before_matching(deployer, monkeypatch):
+    """Red team on #59: `HOST.`, `HOST:443` and upper case are the same registry, so they can't
+    dodge the ShipCube-registry rule (even for linked apps) or miss the allow-list."""
+    from shipcube_api.deploy import isolation
+
+    other = isolation.image_prefix(deployer.s, OTHER_WS) + "victim-123456" + PIN
+    host, _, rest = other.partition("/")
+    for spelling in (f"{host}./{rest}", f"{host}:443/{rest}", f"{host.upper()}/{rest}", f"{host}.:443/{rest}",
+                     f"{host.upper()}.:443/{rest.upper()}"):
+        for linked in (False, True):
+            with pytest.raises(DeployError) as e:
+                isolation.check_image(deployer.s, WS, spelling, linked=linked)
+            assert e.value.code == "permission_denied", (spelling, linked)
+    own = isolation.image_prefix(deployer.s, WS) + "app-123456" + PIN
+    h, _, r = own.partition("/")
+    for spelling in (f"{h}./{r}", f"{h}:443/{r}", f"{h.upper()}/{r}"):
+        isolation.check_image(deployer.s, WS, spelling)
+    for spelling in ("US-DOCKER.PKG.DEV/cloudrun/container/hello", "us-docker.pkg.dev.:443/cloudrun/container/hello",
+                     "us-docker.pkg.dev:443/CloudRun/Container/hello"):
+        isolation.check_image(deployer.s, WS, spelling + PIN)
+    with pytest.raises(DeployError):                     # another port is another registry
+        isolation.check_image(deployer.s, WS, "us-docker.pkg.dev:8443/cloudrun/container/hello" + PIN)
+
+
+def test_docker_hub_aliases_match_one_allowlist_entry(deployer, monkeypatch):
+    from shipcube_api.deploy import isolation
+
+    monkeypatch.setenv("SHIPCUBE_IMAGE_ALLOWLIST", "nginx")
+    for spelling in ("nginx", "docker.io/nginx", "docker.io/library/nginx", "index.docker.io/library/nginx",
+                     "registry-1.docker.io/library/nginx", "Docker.IO./library/nginx", "registry.hub.docker.com/nginx"):
+        isolation.check_image(deployer.s, WS, spelling + PIN)
+    for spelling in ("nginxx", "evil/nginx", "ghcr.io/library/nginx", "docker.io.evil.com/library/nginx"):
+        with pytest.raises(DeployError):
+            isolation.check_image(deployer.s, WS, spelling + PIN)
+    assert isolation.canonical_image("nginx:1.27") == "docker.io/library/nginx:1.27"
+
+
+@pytest.mark.parametrize("image", ["us-docker.pkg.dev\\cloudrun/container/hello", "us-docker.pkg.dev/cloudrun/%2e%2e/x",
+                                   "us-docker.pkg.dev/cloudrun/container/hello?x=1", "user@us-docker.pkg.dev/x/y",
+                                   "us-docker.pkg.dev:abc/x/y", "./x", "", "   "])
+def test_malformed_image_references_are_refused(deployer, image):
+    from shipcube_api.deploy import isolation
+
+    with pytest.raises(DeployError) as e:
+        isolation.check_image(deployer.s, WS, image + (PIN if image.strip() else ""))
+    assert e.value.code == "invalid_argument", image
+
+
+def test_ensure_builder_grants_read_on_the_profiler_mirrors_that_exist(deployer):
+    short = WS.replace("-", "")[:20]
+    member = f"serviceAccount:sc-build-{short}@shipcube-apps-ks.iam.gserviceaccount.com"
+    prov = FakeSession({
+        ("GET", "repositories/dockerhub-remote:getIamPolicy"): lambda _: (200, {"bindings": []}),
+        ("GET", "repositories/dockerhub-remote"): (404, {"error": {"message": "not found"}}),  # offline_builds off
+        ("GET", ":getIamPolicy"): lambda _: (200, {"bindings": []}),
+        ("POST", ":getIamPolicy"): (200, {"etag": "e"}),
+        ("GET", "/iam"): lambda _: (200, {"bindings": []}),
+    })
+    deployer._sessions[deployer.s.provisioner_sa] = prov
+    deployer.ensure_builder(WS)
+    sets = {c[1].split("/repositories/")[-1]: c[2] for c in prov.calls if c[1].endswith(":setIamPolicy") and "/repositories/" in c[1]}
+    assert sets["pypi-remote:setIamPolicy"]["policy"]["bindings"] == [{"role": "roles/artifactregistry.reader", "members": [member]}]
+    assert "dockerhub-remote:setIamPolicy" not in sets  # skipped: the mirror doesn't exist
+
+
+# --- #16: the hosted deployer may act only as each app's own runtime SA ---------------------------
+
+HOSTED_DEPLOYER = "sc-hosted-deployer@shipcube-control-ks.iam.gserviceaccount.com"
+
+
+@pytest.fixture
+def hosted(monkeypatch):
+    monkeypatch.setattr(gcp.google.auth, "default", lambda scopes: (object(), "p"))
+    d = gcp.GcpDeployer(Settings(hosted_deployer_sa=HOSTED_DEPLOYER))
+    d._project_numbers["shipcube-apps-ks"] = "330999971585"
+    d._iap_agents["shipcube-apps-ks"] = "service-330999971585@gcp-sa-iap.iam.gserviceaccount.com"
+    return d
+
+
+def test_hosted_runtime_sa_grants_the_deployer_act_as_on_that_sa_only(hosted):
+    prov = FakeSession({("POST", ":getIamPolicy"): (200, {"etag": "e", "bindings": []})})
+    dep = FakeSession({
+        ("PATCH", "/services/"): (200, {"name": "operations/1", "done": True, "response": {"uri": "https://x.run.app"}}),
+        ("GET", ":getIamPolicy"): (200, {"bindings": []}),
+    })
+    hosted._sessions[hosted.s.provisioner_sa] = prov
+    hosted._sessions[HOSTED_DEPLOYER] = dep
+    hosted.deploy(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {})
+    sa_url = f"projects/shipcube-apps-ks/serviceAccounts/{APP.runtime_sa}"
+    calls = [(m, u.split("/v1/")[-1], b) for m, u, b, _ in prov.calls]
+    assert calls[0][0:2] == ("POST", "projects/shipcube-apps-ks/serviceAccounts")
+    set_policy = next(c for c in calls if c[1] == f"{sa_url}:setIamPolicy")
+    assert set_policy[2]["policy"] == {"etag": "e", "bindings": [
+        {"role": "roles/iam.serviceAccountUser", "members": [f"serviceAccount:{HOSTED_DEPLOYER}"]}]}
+    # The deployer itself never creates SAs or edits their IAM.
+    assert not any("/serviceAccounts" in u for _, u, _, _ in dep.calls)
+
+
+def test_hosted_runtime_sa_binding_is_idempotent(hosted):
+    prov = FakeSession({("POST", ":getIamPolicy"): (200, {"etag": "e", "bindings": [
+        {"role": "roles/iam.serviceAccountUser", "members": [f"serviceAccount:{HOSTED_DEPLOYER}"]}]})})
+    hosted._sessions[hosted.s.provisioner_sa] = prov
+    assert hosted._ensure_runtime_sa(FakeSession({}), APP) == APP.runtime_sa
+    assert not any(u.endswith(":setIamPolicy") for _, u, _, _ in prov.calls)
+
+
+def test_purge_deletes_the_hosted_runtime_sa_as_the_provisioner(hosted):
+    prov = FakeSession({})
+    dep = FakeSession({("DELETE", "/services/"): (200, {"name": "operations/1", "done": True}),
+                       ("DELETE", "/packages/"): (200, {"name": "operations/2", "done": True})})
+    hosted._sessions[hosted.s.provisioner_sa] = prov
+    hosted._sessions[HOSTED_DEPLOYER] = dep
+    hosted.purge(APP)
+    assert ("DELETE", f"https://iam.googleapis.com/v1/projects/shipcube-apps-ks/serviceAccounts/{APP.runtime_sa}") in [
+        (m, u) for m, u, _, _ in prov.calls]
+    assert not any("/serviceAccounts/" in u for _, u, _, _ in dep.calls)
+
+
+def test_retry_act_as_waits_for_a_new_binding_only(monkeypatch):
+    monkeypatch.setattr(gcp.time, "sleep", lambda s: None)
+    tries = []
+
+    def flaky():
+        tries.append(1)
+        if len(tries) < 3:
+            raise DeployError("permission_denied", "Permission 'iam.serviceaccounts.actAs' denied on service account app-x")
+        return "ok"
+
+    assert gcp.GcpDeployer._retry_act_as(flaky) == "ok" and len(tries) == 3
+
+    def other():
+        tries.append(1)
+        raise DeployError("permission_denied", "Permission 'run.services.update' denied")
+
+    tries.clear()
+    with pytest.raises(DeployError):
+        gcp.GcpDeployer._retry_act_as(other)
+    assert len(tries) == 1
+
+
+def test_public_services_finds_all_users_bindings(hosted):
+    base = "/projects/shipcube-apps-ks/locations/asia-south1/services"
+    adc = FakeSession({
+        ("GET", "a:getIamPolicy"): (200, {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}),
+        ("GET", "b:getIamPolicy"): (200, {"bindings": [{"role": "roles/run.invoker", "members": ["serviceAccount:iap@x"]}]}),
+        ("GET", base): (200, {"services": [{"name": f"projects/shipcube-apps-ks/locations/asia-south1/services/a"},
+                                           {"name": f"projects/shipcube-apps-ks/locations/asia-south1/services/b"}]}),
+    })
+    hosted._sessions[None] = adc
+    assert hosted.public_services(["asia-south1"]) == (["projects/shipcube-apps-ks/locations/asia-south1/services/a"], 2)
