@@ -38,13 +38,19 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
   - The sampler thread reads the app's `/proc` entries with `setfsuid`/`setfsgid` set to the app's uid, so the agent needs no `CAP_SYS_PTRACE`.
   - Signals the app aims at the agent count as `tamper_attempts`, which raises the abuse signal `agent_tamper`.
   - `docker run --init` keeps the agent off PID 1, so its protection comes from the uid split, not from PID 1's immunity to signals.
-- **No symlinks.** Every symlink in a git checkout or upload is deleted before anything reads the tree.
+- **No symlinks.** Git checkouts contain none (see above); in uploads every symlink is deleted before anything reads the tree.
 - **Static fallbacks:** `estimate()` reports `profile.measurements.static_reason`, one of `STATIC_REASONS`. The control plane forces one with `StaticRunner(reason="quota" | "budget" | "suspended" | "busy" | "disabled")`.
 - **Abuse signals:** `profile.measurements.abuse_signals`, computed host-side by `abuse_signals(profile)`, for the control plane's strikes.
 - **Git sources:**
   - `https://` only. `file://`, ssh, `git://` and `ext::` are refused; `materialize(..., allow_file_urls=True)` exists for tests.
   - Clones are shallow: `--depth 1 --single-branch --no-tags`.
-  - Caps: files over 50 MiB aren't fetched (`--filter=blob:limit` plus `GIT_NO_LAZY_FETCH`), a watchdog aborts past 256 MiB or 120 s, and a partial clone is removed.
+  - Three steps:
+    1. clone `--no-checkout`;
+    2. sum the blob sizes from `git ls-tree -r -l` and refuse past 256 MiB or 20,000 files *before* anything is written;
+    3. check out with `core.symlinks=false`, so links become small plain files holding their target path. Any link left over is refused.
+  - Files over 50 MiB aren't fetched (`--filter=blob:limit` plus `GIT_NO_LAZY_FETCH`).
+  - One 120 s deadline covers all three steps, a size watchdog stays as a backstop, and a partial clone is removed.
+  - `subdir` must resolve inside the checkout without passing through a link.
   - No submodules or LFS, and the worker's system and global git config is ignored.
 - **Uploads:** checked for unpacked size (1 GiB) and entry count (20,000) before extraction.
 

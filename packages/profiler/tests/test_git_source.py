@@ -64,7 +64,7 @@ def test_clone_is_shallow_single_branch_without_tags(tmp_path):
 def test_clone_over_the_size_cap_is_aborted_and_removed(tmp_path, monkeypatch):
     repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n", "data.bin": os.urandom(3 * 2**20)})
     monkeypatch.setattr(sources, "GIT_MAX_BYTES", 2**20)
-    with pytest.raises(SourceError, match="over"):
+    with pytest.raises(SourceError, match="limit is 1 MiB"):
         clone(repo, tmp_path / "out")
     assert not (tmp_path / "out" / "repo").exists()
 
@@ -114,7 +114,8 @@ def test_clone_command_flags(tmp_path, monkeypatch):
     class Fake:
         def __init__(self, cmd, env, **kw):
             seen["cmd"], seen["env"] = cmd, env
-            self.returncode, self.pid, self.stderr = 1, 0, None
+            import io
+            self.returncode, self.pid, self.stderr, self.stdout = 1, 0, None, io.BytesIO(b"")
 
         def poll(self):
             return 1
@@ -123,7 +124,8 @@ def test_clone_command_flags(tmp_path, monkeypatch):
     with pytest.raises(SourceError):
         materialize({"kind": "git", "url": "https://example.com/x.git", "ref": "main"}, tmp_path / "o")
     cmd, env = seen["cmd"], seen["env"]
-    for flag in ("--depth", "--single-branch", "--no-tags", "--no-recurse-submodules", "protocol.allow=never",
+    for flag in ("--no-checkout", "core.symlinks=false", "--depth", "--single-branch", "--no-tags",
+                 "--no-recurse-submodules", "protocol.allow=never",
                  "protocol.https.allow=always", "submodule.recurse=false", "filter.lfs.smudge="):
         assert flag in cmd, flag
     assert any(a.startswith("--filter=blob:limit=") for a in cmd)
@@ -135,20 +137,71 @@ def test_clone_command_flags(tmp_path, monkeypatch):
     assert "META_API_KEY" not in env and "GOOGLE_APPLICATION_CREDENTIALS" not in env
 
 
-def test_symlinks_are_removed_before_anything_reads_the_tree(tmp_path):
-    repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n", "lib/real.py": b"x = 1\n"})
-    (repo / "passwd").symlink_to("/etc/passwd")
+def test_symlinks_are_checked_out_as_plain_files(tmp_path):
+    """core.symlinks=false: a link becomes a small file holding its target path, so
+    nothing that reads the tree can be led outside it."""
+    repo = make_repo(tmp_path / "r", {"lib/real.py": b"x = 1\n"})
+    (repo / "main.py").symlink_to("/etc/passwd")
     (repo / "up").symlink_to("../../..")
-    (repo / "inside.py").symlink_to("main.py")
     (repo / "libdir").symlink_to("lib")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "links")
     root = clone(repo, tmp_path / "out")
-    assert (root / "main.py").is_file() and (root / "lib" / "real.py").is_file()
-    for name in ("passwd", "up", "inside.py", "libdir"):
-        assert not (root / name).exists() and not (root / name).is_symlink(), name
-    with pytest.raises(SourceError):   # a subdir that was a link is gone too
+    for name, target in (("main.py", "/etc/passwd"), ("up", "../../.."), ("libdir", "lib")):
+        assert not (root / name).is_symlink() and (root / name).read_text() == target, name
+    assert (root / "lib" / "real.py").is_file()
+    with pytest.raises(SourceError):                 # a subdir that was a link isn't a directory
         clone(repo, tmp_path / "out2", subdir="libdir")
+    with pytest.raises(SourceError):
+        clone(repo, tmp_path / "out3", subdir="up")
+
+
+def test_any_link_left_after_checkout_is_refused(tmp_path):
+    (tmp_path / "a").write_text("x")
+    (tmp_path / "b").symlink_to("a")
+    with pytest.raises(SourceError, match="symlink"):
+        sources._reject_symlinks(tmp_path)
+
+
+def test_subdir_must_resolve_inside_without_links(tmp_path):
+    root = tmp_path / "checkout"
+    (root / "svc").mkdir(parents=True)
+    (root / "out").symlink_to("/")
+    (root / "inner").symlink_to("svc")
+    assert sources._inside(root, "svc") == root / "svc"
+    for bad in ("out", "out/etc", "inner", "../x", "/etc", "svc/../../x"):
+        with pytest.raises(SourceError):
+            sources._inside(root, bad)
+
+
+def test_exact_size_check_catches_repeated_blobs_before_checkout(tmp_path, monkeypatch):
+    """Ten copies of one zero-filled 1 MiB blob: .git stays tiny, the checkout is 10 MiB.
+    The tree listing refuses it before anything is written to the work tree."""
+    zeros = b"\0" * 2**20
+    repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n"})
+    for i in range(10):
+        (repo / f"z{i}.bin").write_bytes(zeros)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "zeros")
+    monkeypatch.setattr(sources, "GIT_MAX_BYTES", 5 * 2**20)
+    seen = []
+    real = sources._run_git
+    monkeypatch.setattr(sources, "_run_git", lambda step, *a: seen.append(step) or real(step, *a))
+    with pytest.raises(SourceError, match="checkout would be 10 MiB"):
+        clone(repo, tmp_path / "out")
+    assert seen == ["clone", "ls-tree"]              # never reached the checkout
+    assert not (tmp_path / "out" / "repo").exists()
+
+
+def test_clone_does_not_check_out_before_the_size_check(tmp_path, monkeypatch):
+    repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n"})
+    seen = []
+    real = sources._run_git
+    monkeypatch.setattr(sources, "_run_git", lambda step, args, *a: seen.append((step, list(args))) or real(step, args, *a))
+    clone(repo, tmp_path / "out")
+    assert [st for st, _ in seen] == ["clone", "ls-tree", "checkout"]
+    assert "--no-checkout" in seen[0][1] and "core.symlinks=false" in seen[0][1]
+    assert all("core.symlinks=false" in args for _, args in seen)
 
 
 def test_upload_symlinks_are_removed(tmp_path):

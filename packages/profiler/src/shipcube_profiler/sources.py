@@ -14,6 +14,7 @@ import shutil
 import signal
 import subprocess
 import tarfile
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
@@ -52,41 +53,38 @@ def _tree_bytes(path: Path) -> tuple[int, int]:
     return total, files
 
 
-def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) -> Path:
-    """A shallow, size- and time-capped clone of one branch.
+def _git_env(home: Path, allow_file: bool) -> dict:
+    return {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(home),
+            "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_LFS_SKIP_SMUDGE": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_ASKPASS": "/bin/false",
+            # Takes precedence over protocol.* config, so redirects and submodule URLs are held too.
+            "GIT_ALLOW_PROTOCOL": "https:file" if allow_file else "https"}
 
-    - `--depth 1 --single-branch --no-tags`: one commit, no history or tags.
-    - `--filter=blob:limit`: blobs over GIT_MAX_BLOB_BYTES aren't sent, and with
-      GIT_NO_LAZY_FETCH the checkout can't fetch them later, so the clone fails instead.
-      Servers that ignore filters are still held by the size watchdog.
-    - A watchdog kills git once the clone passes GIT_MAX_BYTES or GIT_CLONE_TIMEOUT_S.
-    - No submodules, no LFS (smudge skipped, filters unset), no system or user git
-      config (no insteadOf rewrites or credential helpers), https only (plus file in tests).
-    """
+
+def _git_config(allow_file: bool) -> list[str]:
+    """`-c` options for every git command on an untrusted repo."""
     protocols = ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always"]
     if allow_file:
         protocols += ["-c", "protocol.file.allow=always"]
-    cmd = ["git", *protocols,
-           "-c", "submodule.recurse=false", "-c", "core.hooksPath=/dev/null",
-           "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=", "-c", "filter.lfs.required=false",
-           "clone", "--quiet", "--depth", "1", "--single-branch", "--no-tags", "--no-recurse-submodules",
-           f"--filter=blob:limit={GIT_MAX_BLOB_BYTES}"]
-    if ref:
-        cmd += ["--branch", ref]
-    cmd += ["--", url, str(target)]
-    env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "HOME": str(target.parent),
-           "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
-           "GIT_LFS_SKIP_SMUDGE": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_ASKPASS": "/bin/false",
-           # Takes precedence over protocol.* config, so redirects and submodule URLs are held too.
-           "GIT_ALLOW_PROTOCOL": "https:file" if allow_file else "https"}
-    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    return [*protocols, "-c", "core.symlinks=false", "-c", "submodule.recurse=false",
+            "-c", "core.hooksPath=/dev/null", "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=",
+            "-c", "filter.lfs.required=false"]
+
+
+def _run_git(step: str, args: list[str], env: dict, deadline: float, watch: Path | None) -> tuple[int, str, str]:
+    """Run git under the deadline; while it runs, kill it once `watch` passes
+    GIT_MAX_BYTES (a backstop: the exact check is the tree listing). Returns
+    (returncode, stdout, why-it-was-killed)."""
+    proc = subprocess.Popen(["git", *args], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             start_new_session=True)
-    end = time.monotonic() + GIT_CLONE_TIMEOUT_S
-    why = None
+    out: list[bytes] = []
+    reader = threading.Thread(target=lambda: out.append(proc.stdout.read()), daemon=True)
+    reader.start()
+    why = ""
     while proc.poll() is None:
-        if time.monotonic() > end:
+        if time.monotonic() > deadline:
             why = f"git clone took longer than {GIT_CLONE_TIMEOUT_S:.0f}s"
-        elif target.exists() and _tree_bytes(target)[0] > GIT_MAX_BYTES:
+        elif watch is not None and watch.exists() and _tree_bytes(watch)[0] > GIT_MAX_BYTES:
             why = f"git clone is over {GIT_MAX_BYTES // 2**20} MiB"
         if why:
             try:
@@ -95,23 +93,99 @@ def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) ->
                 pass
             proc.wait()
             break
-        time.sleep(0.1)
+        time.sleep(0.05)
+    reader.join(timeout=5)
     err = proc.stderr.read().decode(errors="replace")[-300:] if proc.stderr else ""
-    if why is None and proc.returncode != 0:
-        why = f"git clone failed: {err.strip()!r}"
-        if "lazy fetch" in err or "unable to read" in err or "missing" in err:
+    if not why and proc.returncode != 0:
+        why = f"git {step} failed: {err.strip()!r}"
+        if "lazy fetch" in err or "unable to read" in err or "missing" in err or "not available" in err:
             why += f" (a file is over the {GIT_MAX_BLOB_BYTES // 2**20} MiB per-file limit)"
-    if why is None:
-        size, files = _tree_bytes(target)
-        if size > GIT_MAX_BYTES:
+    return proc.returncode, (out[0] if out else b"").decode(errors="replace"), why
+
+
+def _checkout_size(listing: str) -> tuple[int, int]:
+    """Total bytes and file count a checkout would write, from `git ls-tree -r -l -z`."""
+    total = files = 0
+    for entry in filter(None, listing.split("\0")):
+        meta = entry.split("\t", 1)[0].split()
+        if len(meta) == 4 and meta[1] == "blob":
+            if not meta[3].isdigit():   # the blob wasn't sent: over the per-file limit
+                raise SourceError(f"a file is over the {GIT_MAX_BLOB_BYTES // 2**20} MiB per-file limit")
+            total += int(meta[3])
+            files += 1
+    return total, files
+
+
+def _reject_symlinks(root: Path) -> None:
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in [*dirnames, *filenames]:
+            if os.path.islink(os.path.join(dirpath, name)):
+                raise SourceError(f"the checkout contains a symlink ({name}); symlinks aren't allowed")
+
+
+def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) -> Path:
+    """A shallow, size- and time-capped clone of one branch, in three steps:
+
+    1. `clone --no-checkout --depth 1 --single-branch --no-tags --no-recurse-submodules
+       --filter=blob:limit`: one commit's objects, nothing written to the work tree.
+       Blobs over GIT_MAX_BLOB_BYTES aren't sent, and with GIT_NO_LAZY_FETCH nothing can
+       fetch them later, so such a repo fails.
+    2. `ls-tree -r -l`: the exact size and file count the checkout would write. Over
+       GIT_MAX_BYTES or UNPACKED_MAX_FILES is refused before writing anything (a polling
+       watchdog alone can overshoot by GBs on one zero-filled blob repeated many times).
+    3. Checkout with `core.symlinks=false`, so links become small plain files holding
+       their target path; any link left afterwards is refused.
+
+    Every step shares one GIT_CLONE_TIMEOUT_S deadline and a size watchdog as a backstop.
+    No submodules, no LFS, no hooks, no system or user git config, https only (plus
+    file:// in tests).
+    """
+    deadline = time.monotonic() + GIT_CLONE_TIMEOUT_S
+    env = _git_env(target.parent, allow_file)
+    cfg = _git_config(allow_file)
+    clone = [*cfg, "clone", "--quiet", "--no-checkout", "--depth", "1", "--single-branch", "--no-tags",
+             "--no-recurse-submodules", f"--filter=blob:limit={GIT_MAX_BLOB_BYTES}"]
+    if ref:
+        clone += ["--branch", ref]
+    clone += ["--", url, str(target)]
+    try:
+        code, _, why = _run_git("clone", clone, env, deadline, target)
+        if not why:
+            code, listing, why = _run_git("ls-tree", [*cfg, "-C", str(target), "ls-tree", "-r", "-l", "-z", "HEAD"],
+                                          env, deadline, None)
+            if not why:
+                size, files = _checkout_size(listing)
+                if size > GIT_MAX_BYTES:
+                    why = f"the checkout would be {size / 2**20:.0f} MiB; the limit is {GIT_MAX_BYTES // 2**20} MiB"
+                elif files > UNPACKED_MAX_FILES:
+                    why = f"the checkout has {files} files; the limit is {UNPACKED_MAX_FILES}"
+        if not why:
+            code, _, why = _run_git("checkout", [*cfg, "-C", str(target), "reset", "--hard", "--quiet", "HEAD"],
+                                    env, deadline, target)
+        if not why and _tree_bytes(target)[0] > GIT_MAX_BYTES:
             why = f"git clone is over {GIT_MAX_BYTES // 2**20} MiB"
-        elif files > UNPACKED_MAX_FILES:
-            why = f"git clone has {files} files; the limit is {UNPACKED_MAX_FILES}"
+        if not why:
+            _reject_symlinks(target)
+    except SourceError:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
     if why:
         shutil.rmtree(target, ignore_errors=True)
         raise SourceError(why)
-    _strip_symlinks(target)
     return target
+
+
+def _inside(root: Path, rel: str) -> Path:
+    """root/rel, refusing anything that leaves root or passes through a symlink."""
+    path = root
+    for part in _safe_rel(rel).parts:
+        path = path / part
+        if path.is_symlink():
+            raise SourceError(f"subdir {rel!r} goes through a symlink")
+    real_root, real = root.resolve(), path.resolve()
+    if real != real_root and real_root not in real.parents:
+        raise SourceError(f"subdir {rel!r} is outside the checkout")
+    return path
 
 
 def _strip_symlinks(root: Path) -> int:
@@ -161,8 +235,8 @@ def materialize(source: dict, dest: Path, *, fetch_upload: UploadFetcher | None 
             raise SourceError("git sources must be https:// URLs")
         root = _clone(url, source.get("ref"), dest / "repo", allow_file=allow_file_urls)
         if source.get("subdir"):
-            root = root / _safe_rel(source["subdir"])
-            if not root.is_dir() or root.is_symlink():
+            root = _inside(root, source["subdir"])
+            if not root.is_dir():
                 raise SourceError(f"subdir {source['subdir']!r} not found in repo")
         return root
     if kind == "upload":
