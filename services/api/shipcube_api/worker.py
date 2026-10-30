@@ -39,7 +39,7 @@ from psycopg.types.json import Jsonb
 from . import db, obs, profiler_guard, profiler_janitor
 from .deploy import isolation
 from .deploy.base import AppRef, Deployer, DeployError
-from .estimator import Estimator, make_estimator
+from .estimator import Estimator, make_estimator, measurements
 from .settings import settings
 from .store import STEPS, app_ref, current_deployment, enqueue, grants, write_app_caps, write_grants
 
@@ -257,9 +257,13 @@ class Worker:
                         state.update(profiler_guard.start_run(conn, op))
 
             def place() -> dict[str, Any]:
-                return self.estimator.estimate(inp["source"], {k: inp.get(k) for k in HINTS},
-                                               workspace_id=str(op["workspace_id"]), op_id=str(op["id"]),
-                                               static_reason=state.get("static_reason"))
+                res = self.estimator.estimate(inp["source"], {k: inp.get(k) for k in HINTS},
+                                              workspace_id=str(op["workspace_id"]), op_id=str(op["id"]),
+                                              static_reason=state.get("static_reason"))
+                if signals := measurements(res).get("abuse_signals"):
+                    with db.worker_tx() as conn:
+                        profiler_guard.record_abuse(conn, op, list(signals))
+                return res
 
             return {"profile": profile, "place": place}
 

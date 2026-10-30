@@ -18,17 +18,23 @@ GIT = {"kind": "git", "url": "https://github.com/example/app"}
 
 
 class RecordingEstimator:
-    def __init__(self):
+    """Answers like shipcube_placement: profile.measurements carries mode, static_reason and abuse_signals."""
+
+    def __init__(self, signals=()):
         self.calls = []
         self.hints = []
+        self.signals = list(signals)
 
     def estimate(self, source, hints, *, workspace_id, op_id, static_reason=None):
         self.calls.append(static_reason)
         self.hints.append(hints)
-        profile = {"measurements": {"mode": "static" if static_reason else "measured"}}
-        if static_reason:
-            profile["static_reason"] = static_reason
-        return {"estimate_id": f"est_{op_id[:8]}", "tier": "T1", "profile": profile}
+        m = {"mode": "static" if static_reason else "measured", "static_reason": static_reason,
+             "abuse_signals": [] if static_reason else self.signals}
+        return {"estimate_id": f"est_{op_id[:8]}", "tier": "T1", "profile": {"measurements": m}}
+
+
+def _reason(op_id):
+    return _op(op_id)["result"]["profile"]["measurements"]["static_reason"]
 
 
 def _clear():
@@ -37,6 +43,8 @@ def _clear():
                      " where status in ('queued', 'running')")
         conn.execute("delete from profiler_spend")
         conn.execute("delete from profiler_flags")
+        conn.execute("delete from profiler_strikes")
+        conn.execute("delete from profiler_suspensions")
 
 
 @pytest.fixture(autouse=True)
@@ -133,7 +141,7 @@ def test_over_the_daily_quota_estimates_run_static(client, monkeypatch):
     est = RecordingEstimator()
     _drain(_worker(estimator=est))
     assert sorted(est.calls, key=str) == [None, "quota"]
-    assert _op(second)["result"]["profile"]["static_reason"] == "quota"
+    assert _reason(second) == "quota"
 
 
 def test_image_sources_and_the_off_switch_are_static(client, monkeypatch):
@@ -199,7 +207,7 @@ def test_an_estimate_that_waited_too_long_for_a_slot_runs_static(client):
     w.housekeeping()
     assert _op(op)["input"]["static_reason"] == "busy"
     _drain(w)
-    assert _op(op)["result"]["profile"]["static_reason"] == "busy"
+    assert _reason(op) == "busy"
     assert w.estimator.calls == ["busy"]
 
 
@@ -234,7 +242,7 @@ def test_over_the_global_cap_estimates_run_static_with_reason_budget(client):
     _drain(_worker(estimator=est))
     assert est.calls == ["budget"]
     assert _op(op)["input"]["profiled"] is False
-    assert _op(op)["result"]["profile"] == {"measurements": {"mode": "static"}, "static_reason": "budget"}
+    assert _op(op)["result"]["profile"]["measurements"] == {"mode": "static", "static_reason": "budget", "abuse_signals": []}
     assert _spend(ws["workspace_id"]) == (0.0, 0)  # a static estimate costs nothing
 
 
@@ -304,7 +312,7 @@ def test_too_many_executions_set_the_brake_and_estimates_run_static(client):
     op = _queued(client, new_workspace())
     _drain(w)
     assert w.estimator.calls == ["disabled"]
-    assert _op(op)["result"]["profile"]["static_reason"] == "disabled"
+    assert _reason(op) == "disabled"
 
     with db.worker_tx() as conn:
         profiler_guard.clear_brake(conn)
@@ -334,3 +342,67 @@ def test_every_estimate_hint_reaches_the_estimator(client):
     _drain(_worker(estimator=est))
     assert est.hints == [{"expected_users": 40, "schedule": None, "region": "asia-south1", "traffic": "always_on"}]
     assert client.post("/v1/estimates", json={"source": GIT, "traffic": "sometimes"}, headers=ws["agent"]).status_code == 400
+
+
+# --- strikes and suspensions ------------------------------------------------------------------------
+
+
+def _profile_once(client, ws, est):
+    op = _queued(client, ws)
+    _drain(_worker(estimator=est))
+    return op
+
+
+def _suspension(ws):
+    with db.worker_tx() as conn:
+        return conn.execute("select * from profiler_suspensions where workspace_id = %s", (ws["workspace_id"],)).fetchone()
+
+
+def test_three_strikes_in_a_day_suspend_profiling_for_a_day(client):
+    ws = new_workspace()
+    flood = RecordingEstimator(signals=["egress_flood"])
+    _profile_once(client, ws, flood)
+    _profile_once(client, ws, RecordingEstimator(signals=["fork_bomb", "disk_flood"]))
+    s = _suspension(ws)
+    assert s is not None and s["until"] is not None and "3 strikes" in s["reason"]
+
+    est = RecordingEstimator()
+    op = _profile_once(client, ws, est)
+    assert est.calls == ["suspended"] and _reason(op) == "suspended"
+    _profile_once(client, new_workspace(), est)  # other workspaces still profile
+    assert est.calls == ["suspended", None]
+
+    with db.worker_tx() as conn:  # a day later it lifts by itself
+        conn.execute("update profiler_suspensions set until = now() - interval '1 second' where workspace_id = %s",
+                     (ws["workspace_id"],))
+    _profile_once(client, ws, est)
+    assert est.calls[-1] is None
+
+
+def test_two_strikes_are_not_a_suspension_and_a_retry_adds_none(client):
+    ws = new_workspace()
+    op = _profile_once(client, ws, RecordingEstimator(signals=["cpu_pinned", "cpu_pinned"]))
+    with db.worker_tx() as conn:
+        profiler_guard.record_abuse(conn, _op(op), ["cpu_pinned"])  # the same run again: no new strike
+        n = conn.execute("select count(*) as n from profiler_strikes where workspace_id = %s", (ws["workspace_id"],)).fetchone()["n"]
+    assert n == 1
+    _profile_once(client, ws, RecordingEstimator(signals=["result_forged"]))
+    assert _suspension(ws) is None
+
+
+def test_a_mining_pool_signal_suspends_until_a_person_clears_it(client):
+    ws = new_workspace()
+    _profile_once(client, ws, RecordingEstimator(signals=["mining_pool"]))
+    s = _suspension(ws)
+    assert s["until"] is None and s["reason"].startswith("mining_pool")
+    # Later strikes never turn it into a timed suspension.
+    for _ in range(3):
+        with db.worker_tx() as conn:
+            op = conn.execute("select * from operations where workspace_id = %s limit 1", (ws["workspace_id"],)).fetchone()
+            conn.execute("delete from profiler_strikes where workspace_id = %s", (ws["workspace_id"],))
+            profiler_guard.record_abuse(conn, op, ["egress_flood", "fork_bomb", "disk_flood"])
+    assert _suspension(ws)["until"] is None
+    with db.worker_tx() as conn:
+        assert [x["workspace_id"] for x in profiler_guard.status(conn)["suspended"]] == [ws["workspace_id"]]
+        assert profiler_guard.unsuspend(conn, ws["workspace_id"])
+        assert not profiler_guard.suspended(conn, ws["workspace_id"])

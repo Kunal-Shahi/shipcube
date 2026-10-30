@@ -40,7 +40,8 @@ class PlacementEstimator:
 
         if static_reason:
             # The profiler guard said no (quota, budget, suspended, busy, disabled, image_source): never run
-            # the code. StaticRunner(reason=...) records it as profile.static_reason (shipcube_profiler.STATIC_REASONS).
+            # the code. StaticRunner(reason=...) records it as profile.measurements.static_reason
+            # (shipcube_profiler.STATIC_REASONS).
             try:
                 runner = StaticRunner(reason=static_reason)
             except TypeError:  # a shipcube_profiler from before the reason codes; with_static_reason adds it below
@@ -88,17 +89,24 @@ class DevEstimator:
             "profile": {"peak_rss_mb": 210, "cpu_seconds": 3.4, "wall_seconds": 5.1, "queries": 12, "io_mb": 18},
         }
         if static_reason:
-            classified["profile"] = {**classified["profile"], "measurements": {"mode": "static"}}
+            classified["profile"] = {**classified["profile"], "measurements": {"mode": "static", "abuse_signals": []}}
         return with_static_reason({**classified, **explain(classified).model_dump(mode="json"), "dev_mode": True}, static_reason)
 
 
+def measurements(result: dict[str, Any] | None) -> dict[str, Any]:
+    """`profile.measurements` of an estimate result: mode, static_reason, abuse_signals (load-estimator's contract)."""
+    return ((result or {}).get("profile") or {}).get("measurements") or {}
+
+
 def with_static_reason(result: dict[str, Any], reason: str | None) -> dict[str, Any]:
-    """Say why an estimate wasn't profiled, machine-readably: `profile.static_reason`
-    (docs/research/profiler-sandbox.md §9). The estimator may already have set its own reason."""
+    """Say why an estimate wasn't profiled, machine-readably: `profile.measurements.static_reason`
+    (docs/research/profiler-sandbox.md §9). Recent shipcube_profiler builds set it through
+    StaticRunner(reason=...); this fills it in for older ones and never overwrites it."""
     if reason:
-        profile = dict(result.get("profile") or {})
-        profile.setdefault("static_reason", reason)
-        result = {**result, "profile": profile}
+        m = {"mode": "static", **measurements(result)}
+        if not m.get("static_reason"):
+            m["static_reason"] = reason
+        result = {**result, "profile": {**(result.get("profile") or {}), "measurements": m}}
     return result
 
 

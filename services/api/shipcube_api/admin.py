@@ -83,6 +83,7 @@ def main(argv: list[str] | None = None) -> None:
     f.add_argument("--reason", required=True)
     pr = sub.add_parser("profiler", help="profiler sandbox: today's spend, runs in flight, the brake")
     pr.add_argument("--clear-brake", action="store_true")
+    pr.add_argument("--unsuspend", metavar="WORKSPACE_ID", help="lift a workspace's profiler suspension")
     a = p.parse_args(argv)
 
     if a.cmd == "migrate":  # infra/db/migrate.sh runs this as sc-migrator
@@ -136,6 +137,8 @@ def main(argv: list[str] | None = None) -> None:
         with db.worker_tx() as conn:
             if a.clear_brake:
                 profiler_guard.clear_brake(conn)
+            if a.unsuspend and not profiler_guard.unsuspend(conn, a.unsuspend):
+                print(f"{a.unsuspend} was not suspended", file=sys.stderr)
             print(json.dumps(profiler_guard.status(conn), indent=2, default=str))
 
 

@@ -12,7 +12,10 @@ profiled or answered statically, and says why with a `static_reason` (§9):
 - Run start (worker): the spend ledger. Each profiled run adds its worst-case cost to today's
   `profiler_spend` row; once today's total reaches $5 globally, or $1 for the workspace, new runs
   are static (reason=budget). `SHIPCUBE_PROFILER_ENABLED=0` or the janitor's brake makes them
-  static too (reason=disabled).
+  static too (reason=disabled), and so does a suspension (reason=suspended).
+- After the run (worker): every abuse signal the profiler reports is a strike. 3 strikes in 24 hours
+  suspend the workspace's profiling for 24 hours; a mining_pool signal suspends it until a person
+  clears it (§8).
 
 The decision is stored in the operation's input (`profiled`, `static_reason`), outside the
 idempotency hash, so the claim query can count profiled runs and the result can say why it's static.
@@ -155,6 +158,8 @@ def start_run(conn, op: dict[str, Any]) -> dict[str, Any]:
         decision = static(inp.get("static_reason") or "disabled")
     elif not enabled() or brake_on(conn):
         decision = static("disabled")
+    elif suspended(conn, op["workspace_id"]):
+        decision = static("suspended")
     else:
         decision = _charge(conn, op["workspace_id"], Limits.from_env())
     conn.execute("update operations set input = input || %s where id = %s", (Jsonb(decision), op["id"]))
@@ -176,6 +181,54 @@ def _charge(conn, workspace_id: Any, lim: Limits) -> dict[str, Any]:
         " on conflict (day, workspace_id) do update set runs = profiler_spend.runs + 1,"
         " usd = profiler_spend.usd + excluded.usd, updated_at = now()", (workspace_id, lim.run_cost_usd))
     return dict(PROFILED)
+
+
+# --- strikes and suspensions (worker, after a profiled run) -----------------------------------------------
+
+STRIKES_TO_SUSPEND = 3
+STRIKE_WINDOW_H = 24
+SUSPEND_H = 24
+HUMAN_ONLY = {"mining_pool"}  # suspended until a person clears it
+
+
+def record_abuse(conn, op: dict[str, Any], signals: list[str]) -> str | None:
+    """Record each abuse signal of a run as a strike, and suspend the workspace when the policy says
+    so. Idempotent per (operation, signal), so a retried step doesn't add strikes. Returns the
+    suspension's reason if this run caused one."""
+    if not signals:
+        return None
+    ws = op["workspace_id"]
+    for s in sorted(set(signals)):
+        conn.execute("insert into profiler_strikes (workspace_id, operation_id, signal) values (%s, %s, %s)"
+                     " on conflict (operation_id, signal) do nothing", (ws, op["id"], s))
+    log.error("profiler abuse signals; strike recorded", extra={"workspace_id": str(ws), "signals": sorted(set(signals))})
+    if human := sorted(HUMAN_ONLY & set(signals)):
+        reason = f"{human[0]} in operation {op['id']}"
+        conn.execute("insert into profiler_suspensions (workspace_id, until, reason) values (%s, null, %s)"
+                     " on conflict (workspace_id) do update set until = null, reason = excluded.reason, set_at = now()",
+                     (ws, reason))
+    else:
+        n = conn.execute("select count(*) as n from profiler_strikes where workspace_id = %s"
+                         " and created_at > now() - make_interval(hours => %s)", (ws, STRIKE_WINDOW_H)).fetchone()["n"]
+        if n < STRIKES_TO_SUSPEND:
+            return None
+        reason = f"{n} strikes in {STRIKE_WINDOW_H} h"
+        # Never shortens a longer suspension, or lifts one that waits for a person.
+        conn.execute("insert into profiler_suspensions (workspace_id, until, reason) values (%s, now() + make_interval(hours => %s), %s)"
+                     " on conflict (workspace_id) do update set until = excluded.until, reason = excluded.reason, set_at = now()"
+                     " where profiler_suspensions.until is not null and profiler_suspensions.until < excluded.until",
+                     (ws, SUSPEND_H, reason))
+    log.error("profiler suspended for a workspace; its estimates run static", extra={"workspace_id": str(ws), "reason": reason})
+    return reason
+
+
+def suspended(conn, workspace_id: Any) -> bool:
+    return conn.execute("select 1 from profiler_suspensions where workspace_id = %s and (until is null or until > now())",
+                        (workspace_id,)).fetchone() is not None
+
+
+def unsuspend(conn, workspace_id: str) -> bool:
+    return conn.execute("delete from profiler_suspensions where workspace_id = %s returning 1", (workspace_id,)).fetchone() is not None
 
 
 # --- the brake ---------------------------------------------------------------------------------------
@@ -202,8 +255,12 @@ def status(conn) -> dict[str, Any]:
     running = conn.execute("select count(*) as n from operations where kind = 'estimate' and status = 'running'"
                            " and (input->>'profiled')::boolean").fetchone()["n"]
     brake = conn.execute("select until, reason from profiler_flags where name = 'brake' and until > now()").fetchone()
+    held = conn.execute("select workspace_id, until, reason from profiler_suspensions where until is null or until > now()"
+                        " order by set_at desc").fetchall()
     return {"configured": configured(), "enabled": enabled(), "limits": Limits.from_env().__dict__,
             "running": running, "brake": brake and {"until": brake["until"].isoformat(), "reason": brake["reason"]},
+            "suspended": [{"workspace_id": str(r["workspace_id"]), "until": r["until"] and r["until"].isoformat(),
+                           "reason": r["reason"]} for r in held],
             "today_usd": float(sum(r["usd"] for r in spend)),
             "today_by_workspace": [{"workspace_id": str(r["workspace_id"]), "runs": r["runs"], "usd": float(r["usd"])}
                                    for r in spend]}
