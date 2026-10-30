@@ -78,14 +78,16 @@ export const identityPlatformAuth: AuthProvider = {
     }
     const days = config().sessionDays;
     const cookie = await admin().createSessionCookie(idToken, { expiresIn: days * 86_400_000 });
-    await setSessionCookie(cookie, new Date(Date.now() + days * 86_400_000));
+    const onboarded = intent === "sign-in" || (await isOnboarded());
+    await setSessionCookie(cookie, new Date(Date.now() + days * 86_400_000), onboarded);
     log("INFO", "session created", { uid: claims.uid });
     if (intent === "sign-in") await markOnboarded();
-    return { next: intent === "sign-up" && !(await isOnboarded()) ? "onboarding" : "console" };
+    return { next: onboarded ? "console" : "onboarding" };
   },
 
   async completeOnboarding() {
-    await markOnboarded();
+    const v = await verified();
+    await markOnboarded(v ? new Date(v.claims.exp * 1000) : undefined);
   },
 
   async signOut() {
