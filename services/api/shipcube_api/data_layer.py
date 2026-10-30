@@ -106,9 +106,10 @@ def check_catalog(*, migrate_if_dev: bool) -> None:
     except ImportError:
         return
     try:
-        probe = Db(db.dsn(), shared=True, create_schema=False)
-        pending = probe.pending_schema_migrations()
-        probe.close()
+        # On the API's own pool: in production it signs in with Cloud SQL IAM (db.IamAuthConnection),
+        # which a bare connection from db.dsn() can't do. The probe only reads the catalog's ledger.
+        with db.pool().connection() as conn:
+            pending = Db.wrap(conn, str(uuid.UUID(int=0))).pending_schema_migrations()
     except ModelError:  # no catalog schema yet
         pending = ["all"]
     if not pending:
