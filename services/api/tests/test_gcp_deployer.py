@@ -82,9 +82,24 @@ def test_build_runs_as_the_workspace_builder_and_pins_the_digest(deployer):
     assert body["serviceAccount"] == (f"projects/shipcube-apps-ks/serviceAccounts/sc-build-{WS.replace('-', '')[:20]}"
                                       "@shipcube-apps-ks.iam.gserviceaccount.com")
     assert body["source"] == {"storageSource": {"bucket": "shipcube-uploads-ks", "object": obj}}
-    assert body["options"]["logging"] == "CLOUD_LOGGING_ONLY"
+    # No logWriter for hosted builders (#28): logs go to the workspace's own folder in GCS.
+    assert body["options"]["logging"] == "GCS_ONLY" and body["logsBucket"] == f"gs://shipcube-uploads-ks/ws/{WS}/build-logs"
     tag = next(c for c in sess.calls if "/tags/" in c[1])
     assert f"/repositories/ws-{WS.replace('-', '')[:20]}/packages/{APP.service}/tags/op-1" in tag[1]
+
+
+def test_linked_builds_log_to_cloud_logging_in_the_users_project(deployer):
+    sess = FakeSession({
+        ("POST", "/builds"): (200, {"metadata": {"build": {"id": "b2"}}}),
+        ("GET", "/builds/b2"): (200, {"status": "SUCCESS"}),
+        ("GET", "/tags/op-2"): (200, {"version": f"projects/p/locations/l/repositories/r/packages/x/versions/{DIGEST}"}),
+    })
+    linked = AppRef("tracker", WS, Target("l1", "linked", "user-proj", deployer_sa="ws-d@c.iam.gserviceaccount.com",
+                                          builder_sa="shipcube-builder@user-proj.iam.gserviceaccount.com"), "asia-south1")
+    deployer._sessions["ws-d@c.iam.gserviceaccount.com"] = sess
+    deployer.build(linked, {"gitSource": {"url": "https://github.com/x/y"}}, "op_2", lambda: False, lambda _: None)
+    body = sess.calls[0][2]
+    assert body["options"] == {"logging": "CLOUD_LOGGING_ONLY"} and "logsBucket" not in body  # link-project.sh grants logWriter there
 
 
 def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer):
@@ -109,13 +124,17 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
     assert repo_set[2]["policy"]["bindings"] == [{"role": "roles/artifactregistry.writer", "members": [f"serviceAccount:{sa}"]}]
     mf = next(c for c in calls if c[0] == "POST" and c[1].endswith("/managedFolders"))
     assert mf[2] == {"name": f"ws/{WS}/"}
-    put = next(c for c in calls if c[0] == "PUT")
-    assert put[1].endswith(f"managedFolders/ws%2F{WS}%2F/iam")
-    assert {"role": "roles/storage.objectViewer", "members": [f"serviceAccount:{sa}"]} in put[2]["bindings"]
+    puts = [c for c in calls if c[0] == "PUT"]
+    assert puts[0][1].endswith(f"managedFolders/ws%2F{WS}%2F/iam")
+    assert {"role": "roles/storage.objectViewer", "members": [f"serviceAccount:{sa}"]} in puts[0][2]["bindings"]
+    # Its build-logs folder: the only place it can write, so builds need no logging.logWriter (#28).
+    assert [c[2] for c in calls if c[0] == "POST" and c[1].endswith("/managedFolders")][1] == {"name": f"ws/{WS}/build-logs/"}
+    assert puts[1][1].endswith(f"managedFolders/ws%2F{WS}%2Fbuild-logs%2F/iam")
+    assert {"role": "roles/storage.objectUser", "members": [f"serviceAccount:{sa}"]} in puts[1][2]["bindings"]
     sa_set = next(c for c in calls if c[1].endswith(f"serviceAccounts/{sa}:setIamPolicy"))
     assert sa_set[2]["policy"]["etag"] == "e" and sorted(b["role"] for b in sa_set[2]["policy"]["bindings"]) == [
         "roles/iam.serviceAccountTokenCreator", "roles/iam.serviceAccountUser"]
-    assert len(prov.calls) == 9  # SA, repo + its IAM get/set, folder + its IAM get/put, SA IAM get/set
+    assert len(prov.calls) == 12  # SA, repo + IAM get/set, 2 folders + IAM get/put each, SA IAM get/set
     # A hosted build provisions first, as the provisioner, never with the deployer's own identity.
     assert all("managedFolders" not in u and "repositories?" not in u for _, u, _, _ in deployer._sessions.get(None, FakeSession({})).calls)
 

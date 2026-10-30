@@ -53,6 +53,12 @@ def upload_prefix(s: Settings, workspace_id: str) -> str:
     return _fill(s.upload_prefix_template, s, workspace_id)
 
 
+def build_logs_folder(s: Settings, workspace_id: str) -> str:
+    """Where the workspace's hosted builds write their logs (GCS_ONLY): a managed folder inside its
+    uploads folder that only its builder can write. Builds never get logging.logWriter (red-team #28)."""
+    return f"{upload_prefix(s, workspace_id)}build-logs/"
+
+
 def upload_object(s: Settings, workspace_id: str, upload_id: str) -> str:
     if not isinstance(upload_id, str) or not UPLOAD_ID.match(upload_id):
         raise DeployError("invalid_argument", "upload_id must be the id create_upload returned (upl_<hex>)")

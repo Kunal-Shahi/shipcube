@@ -27,10 +27,9 @@ module "profiler" {
 module "build_isolation" {
   source = "./modules/build_isolation"
 
-  control_project_id  = var.control_project_id
-  apps_project_id     = google_project.apps.project_id
-  apps_project_number = google_project.apps.number
-  uploads_bucket      = google_storage_bucket.uploads.name
-  worker_member       = google_service_account.worker.member
-  depends_on          = [google_project_service.apps]
+  control_project_id = var.control_project_id
+  apps_project_id    = google_project.apps.project_id
+  uploads_bucket     = google_storage_bucket.uploads.name
+  worker_member      = google_service_account.worker.member
+  depends_on         = [google_project_service.apps]
 }
