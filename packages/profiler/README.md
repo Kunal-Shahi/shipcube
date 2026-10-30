@@ -44,6 +44,7 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
 - **Abuse signals:** `profile.measurements.abuse_signals`, computed host-side by `abuse_signals(profile)`, for the control plane's strikes.
 - **Git sources:**
   - `https://` only. `file://`, ssh, `git://` and `ext::` are refused; `materialize(..., allow_file_urls=True)` exists for tests.
+  - The host must be public. It's resolved once, every address must be public (no private, loopback, link-local/metadata, CGNAT or reserved ranges), and git then connects to that checked address (`http.curloptResolve`) with redirects off, so DNS rebinding or a redirect can't reach an internal host.
   - Clones are shallow: `--depth 1 --single-branch --no-tags`.
   - Three steps:
     1. clone `--no-checkout`;
@@ -55,6 +56,16 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
   - No submodules or LFS, and the worker's system and global git config is ignored.
 - **Uploads:** checked for unpacked size (1 GiB) and entry count (20,000) before extraction.
 
+## Phase 2 build isolation (#22)
+
+- **Offline build.** Cloud Build runs `fetch-wheels`, then `docker build --network=none`, then `size-check`.
+  - The fetch step is the only one with any network. It downloads wheels only, and pip checks each file against the sha256 the index publishes.
+  - The image then installs only those files (`--no-index`).
+- **Build identity.** A build service account is required; Cloud Build's default SA is never used. Per run, the caller can point the build at the workspace's own builder SA (`sc-build-<ws>`), its uploads folder (`source_prefix`), its repo (`repository`) and its logs folder (`build_logs`). `CloudRunJobRunner(build_service_account=..., bucket=..., source_prefix=..., repository=..., build_logs=...)`.
+- **No internet (`offline_builds` in `infra/terraform/modules/profiler/build.tf`, off by default):**
+  - wheels come from an Artifact Registry PyPI mirror (`SHIPCUBE_PROFILER_PIP_INDEX`) and the base image from a Docker Hub mirror (`SHIPCUBE_PROFILER_BASE_IMAGE`);
+  - builds run on a private pool with no external IP (`SHIPCUBE_PROFILER_WORKER_POOL`).
+
 ## Configure
 
 | Variable | Purpose |
@@ -63,7 +74,9 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
 | `SHIPCUBE_PROFILER_DOCKER`, `_CPUS`, `_MEMORY_MB`, `_PIDS`, `_TIMEOUT_S`, `_TMPFS_MB`, `_DISK_MB`, `_BUILD_TIMEOUT_S` | Local sandbox limits; the defaults match the Cloud Run job |
 | `SHIPCUBE_DEV_MODE` | `1` for in-process runs only |
 | `SHIPCUBE_PROFILER_PROJECT`, `_REGION`, `_BUCKET`, `_REPOSITORY`, `_NETWORK`, `_SUBNET`, `_SERVICE_ACCOUNT` | Required in production |
-| `SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT` | Optional build identity |
+| `SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT` | **Required** build identity (never Cloud Build's default SA) |
+| `SHIPCUBE_PROFILER_SOURCE_PREFIX`, `_BUILD_LOGS` | Per-workspace source folder and `gs://` logs folder (phase 2) |
+| `SHIPCUBE_PROFILER_PIP_INDEX`, `_BASE_IMAGE`, `_WORKER_POOL` | AR mirrors and the private pool (phase 2; Terraform outputs) |
 
 ## Deploy
 

@@ -124,7 +124,7 @@ def test_billing_sums_usage(client, ws):
 def test_linking_a_gcp_project(client, ws):
     t = client.get("/v1/gcp-targets", headers=ws["agent"]).json()
     ws12 = uuid.UUID(ws["workspace_id"]).hex[:12]
-    assert t == {"deployer_sa": f"ws-{ws12}-deployer@shipcube-control-ks.iam.gserviceaccount.com", "targets": []}
+    assert t == {"deployer_sa": f"ws-{ws12}-deployer@shipcube-links-ks.iam.gserviceaccount.com", "targets": []}
     assert client.get("/v1/me", headers=ws["agent"]).json()["deployer_sa"] == t["deployer_sa"]
     assert client.post("/v1/gcp-targets", json={"project_id": "my-proj-123"}, headers=ws["agent"]).status_code == 403
     assert client.post("/v1/gcp-targets", json={"project_id": "Bad_Project"}, headers=ws["human"]).status_code == 400

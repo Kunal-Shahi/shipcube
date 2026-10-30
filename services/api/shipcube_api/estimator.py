@@ -11,6 +11,7 @@ exists only in DEV_MODE.
 from __future__ import annotations
 
 import logging
+import dataclasses
 import os
 import shutil
 import tempfile
@@ -19,6 +20,7 @@ from typing import Any, Protocol
 
 from .deploy.base import Deployer, DeployError
 from . import upload_guard
+from .deploy import isolation
 from .settings import settings
 
 log = logging.getLogger(__name__)
@@ -54,10 +56,13 @@ class PlacementEstimator:
             from shipcube_profiler import runner_from_env
 
             runner = runner_from_env()
-        else:
-            # The sandbox (security §4: no-egress VPC, roleless SA) runs only once infra has created it.
+        elif settings.profiler_job:
+            # The sandbox (security §4: no-egress VPC, roleless SA). Its image builds run as the
+            # workspace's own builder where the profiler supports it (#69).
             runner = CloudRunJobRunner(project=settings.apps_project, region=settings.region,
-                                       service_account=settings.profiler_job) if settings.profiler_job else StaticRunner()
+                                       service_account=settings.profiler_job, **self.workspace_build(workspace_id))
+        else:
+            runner = StaticRunner()
         def fetch_upload(upload_id: str) -> Path:
             tarball = self.d.download_upload(workspace_id, upload_id, tmp / f"{upload_id}.tgz")
             upload_guard.check_tarball(tarball)  # before tarfile sees it: bounded memory and CPU
@@ -75,6 +80,25 @@ class PlacementEstimator:
         out = res.model_dump(mode="json") if hasattr(res, "model_dump") else dict(res.__dict__)
         out.setdefault("estimate_id", f"est_{op_id.replace('-', '')[:12]}")
         return out
+
+
+    def workspace_build(self, workspace_id: str) -> dict[str, str]:
+        """CloudRunJobRunner overrides that build a workspace's profiled image as that workspace's own
+        C-1 builder (sc-build-<ws>): its source in the workspace's uploads folder, the image in its
+        repo, build logs in its logs folder (#22 phase 2, #69). Empty when the installed
+        shipcube_profiler predates those fields: the shared profiler-build SA is used, as before."""
+        from shipcube_profiler import GcpProfilerConfig
+
+        if "source_prefix" not in {f.name for f in dataclasses.fields(GcpProfilerConfig)}:
+            return {}
+        ensure = getattr(self.d, "ensure_builder", None)
+        if ensure is not None:
+            ensure(workspace_id)  # the builder SA, repo, folders and mirror grants exist before the build
+        s, bucket = settings, settings.upload_bucket
+        return {"build_service_account": isolation.builder_sa(s, workspace_id), "bucket": bucket,
+                "source_prefix": f"{isolation.upload_prefix(s, workspace_id)}profiler/",
+                "repository": isolation.ar_repo(s, workspace_id),
+                "build_logs": f"gs://{bucket}/{isolation.build_logs_folder(s, workspace_id)}".rstrip("/")}
 
 
 class UnavailableEstimator:
