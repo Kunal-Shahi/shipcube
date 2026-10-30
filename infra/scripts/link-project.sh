@@ -5,7 +5,7 @@
 # it grants ShipCube's per-workspace deployer service account a fixed set of roles,
 # and you can read every grant below before running it.
 #
-#   ./link-project.sh <your-project-id> <ws-xxxx-deployer@shipcube-control.iam.gserviceaccount.com> [region]
+#   ./link-project.sh <your-project-id> <ws-xxxx-deployer@shipcube-links.iam.gserviceaccount.com> [region]
 set -euo pipefail
 
 PROJECT="${1:?project id}"

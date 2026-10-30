@@ -46,19 +46,9 @@ resource "google_project_iam_member" "sql_instance_user" {
   member  = each.value
 }
 
-# The API creates per-workspace deployer service accounts and per-secret IAM
-# bindings in the control project.
-resource "google_project_iam_member" "api_sa_admin" {
-  project = var.control_project_id
-  role    = "roles/iam.serviceAccountAdmin"
-  member  = google_service_account.api.member
-}
-
-resource "google_project_iam_member" "api_secret_admin" {
-  project = var.control_project_id
-  role    = "roles/secretmanager.admin"
-  member  = google_service_account.api.member
-}
+# The API holds no IAM or Secret Manager admin role in the control project (#15): link deployers
+# are created in their own project (links.tf), and workspace secrets are reachable by name prefix
+# only (secrets.tf).
 
 # The API impersonates deployer accounts to act on hosted and linked projects.
 resource "google_service_account_iam_member" "api_impersonates_hosted_deployer" {

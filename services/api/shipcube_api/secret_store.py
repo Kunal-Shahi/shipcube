@@ -2,7 +2,8 @@
 version, last 4 characters, SHA-256 fingerprint); values are written here and never read back by
 the API.
 
-- GcpSecretStore: Secret Manager in the control project (sc-api has secretmanager.admin there).
+- GcpSecretStore: Secret Manager in the control project. sc-api may create secrets, and add, read
+  and destroy versions of ws-* secrets only (infra/terraform/secrets.tf), so every id starts ws-.
 - LocalSecretStore (DEV_MODE): a JSON file of {secret id: value}, the format security's Secret
   Manager emulator (infra/local/secretmanager.py) serves, so the local gateway can read the key.
 """
