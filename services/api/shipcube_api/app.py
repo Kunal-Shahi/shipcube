@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import auth, data_layer, db, obs, store, workspace
+from . import auth, data_layer, db, obs, profiler_guard, store, workspace
 from .auth import Caller
 from .deploy.base import DeployError
 from .models import (
@@ -120,6 +120,12 @@ async def _not_found(_: Request, exc: store.NotFound) -> JSONResponse:
 @app.exception_handler(store.LimitExceeded)
 async def _limit(_: Request, exc: store.LimitExceeded) -> JSONResponse:
     return _err(429, "resource_exhausted", str(exc))
+
+
+@app.exception_handler(profiler_guard.RateLimited)
+async def _rate_limited(_: Request, exc: profiler_guard.RateLimited) -> JSONResponse:
+    return JSONResponse({"error": {"code": "rate_limited", "message": str(exc), "retry_after": exc.retry_after_s}},
+                        status_code=429, headers={"Retry-After": str(exc.retry_after_s)})
 
 
 @app.exception_handler(TelemetryUnavailable)
