@@ -82,17 +82,26 @@ SANDBOX_UID = 10001
 APPDEPS_UID = 10002
 REQUIREMENTS_FILE = "shipcube-requirements.txt"
 APP_INSTALL = f"--index-url {PYPI_INDEX} -r /opt/{REQUIREMENTS_FILE}"
+AGENT_INSTALL = f"--index-url {PYPI_INDEX}"
+BASE_IMAGE = "python:3.12-slim"
+# Offline builds (Cloud Build, phase 2): a fetch step downloads the wheels into the build
+# context first, and `docker build --network=none` installs only from them.
+OFFLINE_AGENT_INSTALL = "--no-index --find-links /opt/agent-wheels"
+OFFLINE_APP_INSTALL = f"--no-index --find-links /opt/wheels -r /opt/{REQUIREMENTS_FILE}"
+OFFLINE_COPY = "COPY agent-wheels/ /opt/agent-wheels/\nCOPY wheels/ /opt/wheels/\n"
 
 
-def render_dockerfile(app_install: str = APP_INSTALL, extra: str = "") -> str:
+def render_dockerfile(app_install: str = APP_INSTALL, extra: str = "", *, base_image: str = BASE_IMAGE,
+                      agent_install: str = AGENT_INSTALL, prelude: str = "") -> str:
     """The sandbox Dockerfile. `app_install` and `extra` exist for tests that install a
-    local wheel through the same layer as production; production uses the defaults."""
+    local wheel through the same layer as production; `offline_dockerfile()` is the
+    no-network variant Cloud Build uses."""
     return f"""\
-FROM python:3.12-slim
+FROM {base_image}
 ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 \\
     PIP_ONLY_BINARY=:all: HOME=/tmp TMPDIR=/tmp PYTHONPATH=/opt/shipcube SHIPCUBE_APP_DEPS=/opt/appdeps \\
     SHIPCUBE_APP_UID={SANDBOX_UID}
-RUN pip install --only-binary=:all: --index-url {PYPI_INDEX} --target /opt/shipcube "psutil>=6.0,<8" \\
+{prelude}RUN pip install --only-binary=:all: {agent_install} --target /opt/shipcube "psutil>=6.0,<8" \\
  && useradd --uid {SANDBOX_UID} --no-create-home --shell /usr/sbin/nologin sandbox \\
  && useradd --uid {APPDEPS_UID} --no-create-home --shell /usr/sbin/nologin appdeps \\
  && find / -xdev -perm /6000 -type f -exec chmod a-s {{}} + \\
@@ -102,12 +111,34 @@ COPY {REQUIREMENTS_FILE} /opt/{REQUIREMENTS_FILE}
 {extra}USER {APPDEPS_UID}:{APPDEPS_UID}
 RUN pip install --only-binary=:all: --target /opt/appdeps {app_install}
 USER root
-RUN chown -R root:root /opt/appdeps && chmod -R a-w /opt/appdeps
+RUN rm -rf /opt/wheels /opt/agent-wheels && chown -R root:root /opt/appdeps && chmod -R a-w /opt/appdeps
 COPY app/ /app/
 COPY shipcube/ /opt/shipcube/
 RUN chmod -R a-w /app /opt/shipcube
 WORKDIR /
 ENTRYPOINT ["python", "-S", "-P", "-m", "shipcube_profiler.agent", "/app"]
+"""
+
+
+def offline_dockerfile(base_image: str = BASE_IMAGE) -> str:
+    return render_dockerfile(OFFLINE_APP_INSTALL, base_image=base_image, agent_install=OFFLINE_AGENT_INSTALL,
+                             prelude=OFFLINE_COPY)
+
+
+# The fetch step (Cloud Build): wheels only, from `index` (pypi.org, or the Artifact
+# Registry PyPI remote, authenticated as the build's own identity). pip checks each
+# file against the sha256 the index publishes. Nothing from a wheel runs here.
+FETCH_SCRIPT = r"""set -euo pipefail
+mkdir -p wheels agent-wheels
+INDEX="{index}"
+case "$INDEX" in
+  *-python.pkg.dev/*)
+    TOKEN=$(python3 -S -c 'import json, urllib.request as u; r = u.Request("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token", headers={{"Metadata-Flavor": "Google"}}); print(json.load(u.urlopen(r, timeout=10))["access_token"])')
+    INDEX="https://oauth2accesstoken:$TOKEN@${{INDEX#https://}}" ;;
+esac
+export PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
+pip download --quiet --only-binary=:all: --index-url "$INDEX" -d agent-wheels "psutil>=6.0,<8"
+pip download --quiet --only-binary=:all: --index-url "$INDEX" -d wheels -r {requirements}
 """
 
 
@@ -123,9 +154,15 @@ class GcpProfilerConfig:
     network: str
     subnet: str
     service_account: str             # job runtime SA: no roles, no secrets
-    build_service_account: str | None = None
+    build_service_account: str | None = None   # required: never Cloud Build's default SA
     job_timeout_s: int = 600
     build_timeout_s: int = BUILD_TIMEOUT_S
+    # Phase 2 (#22). Defaults keep phase 1's behaviour apart from the offline docker build.
+    source_prefix: str = "profiler-src/"       # the workspace's own uploads folder, per run
+    build_logs: str | None = None              # gs://... (GCS_ONLY); unset = Cloud Logging
+    pip_index: str = PYPI_INDEX                # or the AR PyPI remote (no internet needed)
+    base_image: str = BASE_IMAGE               # or its AR Docker Hub mirror, pinned by digest
+    worker_pool: str | None = None             # private pool without internet
 
     @classmethod
     def from_env(cls, env: dict | None = None) -> "GcpProfilerConfig":
@@ -133,12 +170,22 @@ class GcpProfilerConfig:
         need = {"project": "SHIPCUBE_PROFILER_PROJECT", "region": "SHIPCUBE_PROFILER_REGION",
                 "bucket": "SHIPCUBE_PROFILER_BUCKET", "repository": "SHIPCUBE_PROFILER_REPOSITORY",
                 "network": "SHIPCUBE_PROFILER_NETWORK", "subnet": "SHIPCUBE_PROFILER_SUBNET",
-                "service_account": "SHIPCUBE_PROFILER_SERVICE_ACCOUNT"}
+                "service_account": "SHIPCUBE_PROFILER_SERVICE_ACCOUNT",
+                "build_service_account": "SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT"}
         missing = [v for v in need.values() if not e.get(v)]
         if missing:
             raise ProfilerError("config", f"missing environment variables: {', '.join(missing)}")
-        return cls(**{k: e[v] for k, v in need.items()},
-                   build_service_account=e.get("SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT") or None)
+        d = cls.__dataclass_fields__
+        optional = {"source_prefix": "SHIPCUBE_PROFILER_SOURCE_PREFIX", "build_logs": "SHIPCUBE_PROFILER_BUILD_LOGS",
+                    "pip_index": "SHIPCUBE_PROFILER_PIP_INDEX", "base_image": "SHIPCUBE_PROFILER_BASE_IMAGE",
+                    "worker_pool": "SHIPCUBE_PROFILER_WORKER_POOL"}
+        cfg = cls(**{k: e[v] for k, v in need.items()},
+                  **{k: e.get(v) or d[k].default for k, v in optional.items()})
+        if not cfg.source_prefix.endswith("/") or ".." in cfg.source_prefix.split("/"):
+            raise ProfilerError("config", "SHIPCUBE_PROFILER_SOURCE_PREFIX must be a folder path ending in /")
+        if not cfg.pip_index.startswith("https://"):
+            raise ProfilerError("config", "SHIPCUBE_PROFILER_PIP_INDEX must be an https:// index URL")
+        return cfg
 
 
 def _package(app_dir: Path, compress: bool = True, *, dockerfile: str = DOCKERFILE,
@@ -217,12 +264,19 @@ class CloudRunJobRunner:
         return f"{c.region}-docker.pkg.dev/{c.project}/{c.repository}/prof-{run_id}:latest"
 
     def build_spec(self, object_name: str, image: str) -> dict:
+        """Cloud Build: fetch wheels (the only step with any network), then build with
+        --network=none, then refuse an oversized image before it's pushed."""
         c = self.config
+        if not c.build_service_account:
+            raise ProfilerError("config", "a build service account is required (never Cloud Build's default SA)")
+        fetch = FETCH_SCRIPT.format(index=c.pip_index, requirements=REQUIREMENTS_FILE).replace("$", "$$")
         spec = {
             "source": {"storageSource": {"bucket": c.bucket, "object": object_name}},
             "steps": [
-                {"id": "build", "name": "gcr.io/cloud-builders/docker", "args": ["build", "-t", image, "."]},
-                # Refuse oversized images before they're pushed ($$ escapes Cloud Build substitution).
+                {"id": "fetch-wheels", "name": c.base_image, "entrypoint": "bash", "args": ["-c", fetch]},
+                {"id": "build", "name": "gcr.io/cloud-builders/docker",
+                 "args": ["build", "--network=none", "-t", image, "."]},
+                # $$ escapes Cloud Build substitution.
                 {"id": "size-check", "name": "gcr.io/cloud-builders/docker", "entrypoint": "bash", "args": [
                     "-c", f"s=$$(docker image inspect -f '{{{{.Size}}}}' {image}) && echo \"image size $$s\" "
                           f"&& test \"$$s\" -le {MAX_IMAGE_BYTES} || {{ echo \"image too large\" >&2; exit 3; }}"]},
@@ -231,9 +285,14 @@ class CloudRunJobRunner:
             "timeout": f"{c.build_timeout_s}s",
             "options": {"logging": "CLOUD_LOGGING_ONLY"},
             "tags": ["shipcube-profiler"],
+            "serviceAccount": f"projects/{c.project}/serviceAccounts/{c.build_service_account}",
         }
-        if c.build_service_account:
-            spec["serviceAccount"] = (f"projects/{c.project}/serviceAccounts/{c.build_service_account}")
+        if c.build_logs:
+            # Per-workspace builders hold no logging.logWriter: logs go to their own folder.
+            spec["options"] = {"logging": "GCS_ONLY"}
+            spec["logsBucket"] = c.build_logs.rstrip("/")
+        if c.worker_pool:
+            spec["options"]["pool"] = {"name": c.worker_pool}
         return spec
 
     def job_spec(self, image: str, run_id: str, hints: Hints | None = None, nonce: str = "") -> dict:
@@ -271,7 +330,7 @@ class CloudRunJobRunner:
     # --- steps --------------------------------------------------------------------------
 
     def _upload(self, run_id: str, body: bytes) -> str:
-        name = f"profiler-src/{run_id}.tar.gz"
+        name = f"{self.config.source_prefix}{run_id}.tar.gz"
         self.client.post(STORAGE_UPLOAD.format(bucket=self.config.bucket), data=body,
                          params={"uploadType": "media", "name": name, "ifGenerationMatch": "0"},
                          headers={"Content-Type": "application/gzip"}, idempotent=True)
@@ -382,7 +441,11 @@ class CloudRunJobRunner:
         run_id = re.sub(r"[^a-z0-9-]", "-", run_id.lower())[:40].strip("-")
         job_id = f"prof-{run_id}"[:49]
         nonce = secrets.token_hex(16)
-        package = _package(app_dir)   # policy errors surface before anything is created
+        if not self.config.build_service_account:
+            raise ProfilerError("config", "a build service account is required (never Cloud Build's default SA)")
+        # Policy errors surface before anything is created.
+        package = _package(app_dir, dockerfile=offline_dockerfile(self.config.base_image),
+                           extra_files={"wheels/.keep": b"", "agent-wheels/.keep": b""})
         object_name = None
         stage = "upload"
         try:

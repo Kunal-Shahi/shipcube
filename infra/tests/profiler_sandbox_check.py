@@ -30,6 +30,13 @@ EGRESS_TYPES = ("google_compute_router", "google_compute_router_nat", "google_co
                 "google_service_networking_connection", "google_compute_service_attachment",
                 "google_network_connectivity_spoke", "google_compute_network_attachment")
 
+# The private build pool's VPC (modules/profiler/build.tf): peered with Google's service
+# network for the pool, and nothing else; no router, NAT, routes or firewall allow rules.
+BUILD_NETWORK_REFS = ("google_compute_network.build",)
+ALLOWED_BUILD_NETWORK_USERS = {("google_compute_global_address", "build_peering"),
+                               ("google_service_networking_connection", "build"),
+                               ("google_cloudbuild_worker_pool", "profiler")}
+
 _BLOCK = re.compile(r'^\s*resource\s+"([^"]+)"\s+"([^"]+)"\s*\{', re.M)
 
 
@@ -74,6 +81,11 @@ def check(root: Path) -> list[str]:
             problems.append(f"{where} references the sandbox network; only its subnet and deny-all firewall may")
         if t in EGRESS_TYPES and refs_network:
             problems.append(f"{where} would give the sandbox network a way out")
+        if any(r in body for r in BUILD_NETWORK_REFS) and (t, n) not in ALLOWED_BUILD_NETWORK_USERS:
+            problems.append(f"{where} references the profiler build network; only its pool and peering may")
+        if (t, n) == ("google_cloudbuild_worker_pool", "profiler") and not re.search(
+                r"no_external_ip\s*=\s*true", body):
+            problems.append(f"{where} must set no_external_ip = true")
         if (t, n) == ("google_compute_firewall", "deny_egress"):
             if re.search(r"(?m)^\s*allow\s*\{", body):
                 problems.append(f"{where} has an allow block")
