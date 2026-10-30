@@ -57,6 +57,11 @@ class Settings:
     console_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000").rstrip("/"))
     # The AI gateway's URL, injected into every deployed app as SHIPCUBE_AI_GATEWAY. Unset: not injected.
     ai_gateway_url: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_AI_GATEWAY_URL") or None)
+    # The AI gateway's identity and the audience its ID tokens carry for this API (/internal/gateway/*,
+    # shared caps). Unset audience: the internal routes refuse every caller.
+    gateway_sa: str = field(default_factory=lambda: os.environ.get(
+        "SHIPCUBE_GATEWAY_SA", "sc-gateway@shipcube-control-ks.iam.gserviceaccount.com"))
+    internal_audience: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_INTERNAL_AUDIENCE") or None)
     # SHIPCUBE_BACKEND=local (deploy/local.py, local_iap.py): Docker + pack + fake-gcs-server.
     local_state_dir: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_STATE", ".shipcube-local"))
     local_gcs_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_GCS_URL", "http://localhost:4443"))

@@ -21,6 +21,9 @@ type Gateway struct {
 	Registry Registry
 	Secrets  SecretSource
 	Limiter  *Limiter
+	// Shared, when set, keeps the caps in the control-plane API so every instance shares them (#20).
+	// If it can't be reached, platform-key requests fail with 503; BYOK requests use Limiter, logged.
+	Shared *SharedLimiter
 	Usage    UsageSink
 	Upstream *http.Client
 	Prices   map[string][2]float64
@@ -165,7 +168,11 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 		ev.Estimated = c.estimated
 		ev.CostUSD, ev.Priced = cost(g.Prices, kind, model, c.inTok, c.outTok)
 		ev.LatencyMS = time.Since(start).Milliseconds()
-		g.Limiter.Settle(reservation, c.inTok+c.outTok, ev.CostUSD)
+		if reservation != nil && reservation.remote != nil {
+			g.Shared.Settle(reservation, c.inTok+c.outTok, ev.CostUSD)
+		} else {
+			g.Limiter.Settle(reservation, c.inTok+c.outTok, ev.CostUSD)
+		}
 		g.Usage.Record(ev)
 	}()
 
@@ -176,7 +183,30 @@ func (g *Gateway) chat(w http.ResponseWriter, r *http.Request) {
 	if p, ok := g.Prices[kind+"/"+model]; ok {
 		rate = &p
 	}
-	grantedOut, res, capErr := g.Limiter.Admit(cfg, platform, int64(len(raw))/3+1, wantOut, rate)
+	inEstimate := int64(len(raw))/3 + 1
+	var grantedOut int64
+	var res *Reservation
+	var capErr *CapError
+	shared := false
+	if g.Shared != nil {
+		var err error
+		grantedOut, res, capErr, err = g.Shared.Admit(r.Context(), cfg, platform, inEstimate, wantOut, rate)
+		switch {
+		case err == nil:
+			shared = true
+		case platform:
+			// Never fall back to per-instance counters on ShipCube's own key.
+			log.Error("shared caps unreachable; refusing a platform-key request", "error", err.Error())
+			c.status = http.StatusServiceUnavailable
+			openAIError(w, c.status, "api_error", "caps_unavailable", "usage limits can't be checked right now; try again shortly")
+			return
+		default:
+			log.Warn("shared caps unreachable; this instance's counters apply to this BYOK request", "error", err.Error())
+		}
+	}
+	if !shared {
+		grantedOut, res, capErr = g.Limiter.Admit(cfg, platform, inEstimate, wantOut, rate)
+	}
 	reservation = res
 	if capErr != nil {
 		c.status, ev.CapHit = http.StatusTooManyRequests, capErr.Cap

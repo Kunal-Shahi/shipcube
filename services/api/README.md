@@ -105,6 +105,7 @@ Isolation locally is enforced by the deployer (the same `isolation.py` checks: o
 | `SHIPCUBE_PROFILER_DAILY_USD`, `_WORKSPACE_DAILY_USD`, `_RUN_COST_USD` | `5`, `1`, `0.11` | Spend ledger: caps per UTC day, and the worst-case cost charged per profiled run (lower it to `0.05` once profiler builds stop at 300 s) |
 | `SHIPCUBE_ESTIMATE_STATIC_IN_FLIGHT`, `SHIPCUBE_ESTIMATE_UNPACK_MAX_MIB`, `SHIPCUBE_ESTIMATE_SOURCE_SLOTS` | `3`, `256`, `2` | Static estimates in flight per workspace (then 429), the decompressed-size budget for uploads, and sources on disk at once per worker process |
 | `SHIPCUBE_WORKER_LANES` | `deploy,estimate*3` | Worker threads per process (`run_lanes`): one deploy lane, three estimate lanes. `all` claims everything (one thread) |
+| `SHIPCUBE_INTERNAL_AUDIENCE`, `SHIPCUBE_GATEWAY_SA` | unset, `sc-gateway@shipcube-control-ks…` | The AI gateway's shared caps (`/internal/gateway/reserve`, `/settle`, `gateway_counters.py`): only an ID token for that service account with this audience (the API's own URL) is accepted. Unset audience: the routes refuse every caller. |
 | `SHIPCUBE_EMBEDDED_WORKER` | `1` in DEV_MODE, else `0` | Run a worker thread in the API process. Not possible in production: the API's login (`shipcube_app`) is confined to the caller's workspace by RLS, and the worker needs `shipcube_worker`. |
 | `SHIPCUBE_LOG_LEVEL` | `INFO` | |
 

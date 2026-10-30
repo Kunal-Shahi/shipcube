@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -59,6 +60,7 @@ type Reservation struct {
 	usd      float64
 	day      string
 	month    string
+	remote   json.RawMessage // set by SharedLimiter: the API's reservation, sent back to settle
 }
 
 // Rate is a model's price in USD per million tokens, [input, output]; nil when it has none.
