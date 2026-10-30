@@ -70,6 +70,7 @@ class Profile:
     net_blocked: int = 0
     remote_hosts: list[str] = field(default_factory=list)
     remote_ports: list[int] = field(default_factory=list)
+    tamper_attempts: int = 0         # signals the app aimed at the agent (all refused by the kernel)
     processes_max: int = 1
     samples: int = 0
     exit_code: int | None = None

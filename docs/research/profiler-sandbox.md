@@ -141,7 +141,8 @@ Design:
 5. **The agent's interpreter stays pristine.** Added after the red team's review of #57. Wheels-only stops code running at build time, but a wheel from PyPI could still ship a `.pth` file, overwrite stdlib files through `.data`, or shadow psutil, and so take over the agent at run time. So:
    - the app's deps install as an unprivileged user with `--target /opt/appdeps`, on the app's `PYTHONPATH` only;
    - the agent runs `python -S -P` with `WORKDIR /` from a read-only `/opt/shipcube` that bundles psutil.
-6. **The Dockerfile stays generated.** User files are copied to `/app` and never interpreted as a Dockerfile; this is already true. A user `Dockerfile` in the upload is ignored.
+6. **The agent and the app run as different users.** Added after the red team's review of #57. The agent is root in the container and starts the app as uid 10001, which keeps no capabilities, so the app can't stop, kill, ptrace or read the agent. Signals the app aims at the agent are counted and raise `agent_tamper`.
+7. **The Dockerfile stays generated.** User files are copied to `/app` and never interpreted as a Dockerfile; this is already true. A user `Dockerfile` in the upload is ignored.
 
 ## 5. Hard caps per run
 

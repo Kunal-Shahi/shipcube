@@ -10,7 +10,9 @@ job (gcp_runner.py) so a local estimate exercises the same code path:
 - **Same isolation, enforced by Docker:**
   - `--network none` (no interfaces but loopback, no DNS)
   - `--read-only` root with a size-capped, nosuid, nodev `/tmp` tmpfs
-  - `--user 10001:10001`, `--cap-drop ALL`, `--security-opt no-new-privileges`
+  - the agent as root with `--cap-drop ALL` plus SETUID, SETGID, CHOWN and KILL, used only to start
+    and stop
+    the app as uid 10001 (no capabilities left); `--security-opt no-new-privileges`
   - `--cpus`, `--memory` (swap disabled), `--pids-limit`, and a wall-clock timeout that kills the container
   - no environment from the host except the hints
 - **Same measurements.** The agent (`python -m shipcube_profiler.agent`) runs the app
@@ -95,11 +97,18 @@ def run_args(cfg: DockerSandboxConfig, image: str, name: str, hints: Hints, nonc
     agent_timeout = max(10, cfg.timeout_s - 30)
     agent_memory = int(cfg.memory_mb * 0.9)
     return [
-        cfg.docker, "run", "--rm", "--name", name, "--label", LABEL,
+        # --init: a tiny init is PID 1, so the agent doesn't get PID 1's immunity to
+        # signals; its protection from the app must come from the uid split (and the
+        # tests prove that). It also reaps the app's orphans.
+        cfg.docker, "run", "--rm", "--init", "--name", name, "--label", LABEL,
         "--network", "none",
         "--read-only", "--tmpfs", f"/tmp:rw,nosuid,nodev,size={cfg.tmpfs_mb}m",
-        "--user", f"{SANDBOX_UID}:{SANDBOX_UID}",
-        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        # The agent is root in the container with only SETUID/SETGID (to start the app as
+        # SANDBOX_UID), CHOWN (to hand it its work dir) and KILL (to stop it); the app
+        # keeps no capabilities.
+        "--user", "0:0", "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID",
+        "--cap-add", "CHOWN", "--cap-add", "KILL",
+        "--security-opt", "no-new-privileges",
         "--cpus", cfg.cpus, "--memory", f"{cfg.memory_mb}m", "--memory-swap", f"{cfg.memory_mb}m",
         "--pids-limit", str(cfg.pids), "--ulimit", "nofile=1024:1024",
         "--env", f"SHIPCUBE_HINTS={json.dumps(h)}",

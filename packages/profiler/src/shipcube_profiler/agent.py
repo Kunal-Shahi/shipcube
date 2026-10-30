@@ -57,7 +57,8 @@ def main() -> None:
     limits = Limits(timeout_s=float(os.environ.get("SHIPCUBE_AGENT_TIMEOUT_S", "540")),
                     memory_mb=int(os.environ.get("SHIPCUBE_AGENT_MEMORY_MB", "1800")),
                     max_nproc=_env_int("SHIPCUBE_AGENT_NPROC") or 256,
-                    max_disk_mb=_env_int("SHIPCUBE_AGENT_DISK_MB") or 512)
+                    max_disk_mb=_env_int("SHIPCUBE_AGENT_DISK_MB") or 512,
+                    app_uid=_env_int("SHIPCUBE_APP_UID"))
     profile = LocalRunner(limits).run(app_dir, summary, hints)
     profile.runner = os.environ.get("SHIPCUBE_RUNNER_NAME", "gcp")
     # One line, prefixed, so the control plane can find it in the execution's logs.

@@ -73,7 +73,9 @@ BUILD_TERMINAL = {"SUCCESS", "FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED"
 # - The agent runs as `python -S -P` (no site, so no .pth or sitecustomize; no cwd on
 #   sys.path) from /opt/shipcube, which bundles its own psutil. WORKDIR is /, so the
 #   upload in /app is never importable by the agent; the app's subprocess runs in /app.
-# The app runs as another unprivileged user (SANDBOX_UID) with a read-only /app; only
+# The agent runs as root (inside the container) and starts the app as SANDBOX_UID,
+# which then holds no capabilities: it can't signal, ptrace or read the agent, which is
+# also non-dumpable. RLIMIT_NPROC counts only the app's uid. /app is read-only; only
 # /tmp is writable.
 SANDBOX_UID = 10001
 APPDEPS_UID = 10002
@@ -87,7 +89,8 @@ def render_dockerfile(app_install: str = APP_INSTALL, extra: str = "") -> str:
     return f"""\
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 \\
-    PIP_ONLY_BINARY=:all: HOME=/tmp TMPDIR=/tmp PYTHONPATH=/opt/shipcube SHIPCUBE_APP_DEPS=/opt/appdeps
+    PIP_ONLY_BINARY=:all: HOME=/tmp TMPDIR=/tmp PYTHONPATH=/opt/shipcube SHIPCUBE_APP_DEPS=/opt/appdeps \\
+    SHIPCUBE_APP_UID={SANDBOX_UID}
 RUN pip install --only-binary=:all: --index-url {PYPI_INDEX} --target /opt/shipcube "psutil>=6.0,<8" \\
  && useradd --uid {SANDBOX_UID} --no-create-home --shell /usr/sbin/nologin sandbox \\
  && useradd --uid {APPDEPS_UID} --no-create-home --shell /usr/sbin/nologin appdeps \\
@@ -101,7 +104,6 @@ RUN chown -R root:root /opt/appdeps && chmod -R a-w /opt/appdeps
 COPY app/ /app/
 COPY shipcube/ /opt/shipcube/
 RUN chmod -R a-w /app /opt/shipcube
-USER {SANDBOX_UID}:{SANDBOX_UID}
 WORKDIR /
 ENTRYPOINT ["python", "-S", "-P", "-m", "shipcube_profiler.agent", "/app"]
 """

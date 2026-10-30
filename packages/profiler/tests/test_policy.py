@@ -2,6 +2,7 @@
 (docs/research/profiler-sandbox.md §4-9). No Docker or GCP needed."""
 
 import io
+import os
 import sys
 import tarfile
 from pathlib import Path
@@ -184,7 +185,8 @@ def test_disk_watchdog_kills_a_writer(tmp_path):
     assert p.killed_reason and p.killed_reason.startswith("disk")
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="RLIMIT_NPROC is per-uid; checked on Linux")
+@pytest.mark.skipif(not sys.platform.startswith("linux") or os.geteuid() == 0,
+                    reason="RLIMIT_NPROC is per-uid and doesn't bind root; checked on Linux as non-root")
 def test_nproc_limit_refuses_a_fork_bomb_on_linux(tmp_path):
     root, s = _script(tmp_path, "import os, time\npids = []\nfor _ in range(10_000):\n"
                                 "    pid = os.fork()\n    if pid == 0:\n        time.sleep(5); os._exit(0)\n"

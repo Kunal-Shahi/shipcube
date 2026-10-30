@@ -133,3 +133,35 @@ def test_clone_command_flags(tmp_path, monkeypatch):
     assert env["GIT_CONFIG_NOSYSTEM"] == "1" and env["GIT_CONFIG_GLOBAL"] == os.devnull
     assert env["GIT_ALLOW_PROTOCOL"] == "https"
     assert "META_API_KEY" not in env and "GOOGLE_APPLICATION_CREDENTIALS" not in env
+
+
+def test_symlinks_are_removed_before_anything_reads_the_tree(tmp_path):
+    repo = make_repo(tmp_path / "r", {"main.py": b"print(1)\n", "lib/real.py": b"x = 1\n"})
+    (repo / "passwd").symlink_to("/etc/passwd")
+    (repo / "up").symlink_to("../../..")
+    (repo / "inside.py").symlink_to("main.py")
+    (repo / "libdir").symlink_to("lib")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "links")
+    root = clone(repo, tmp_path / "out")
+    assert (root / "main.py").is_file() and (root / "lib" / "real.py").is_file()
+    for name in ("passwd", "up", "inside.py", "libdir"):
+        assert not (root / name).exists() and not (root / name).is_symlink(), name
+    with pytest.raises(SourceError):   # a subdir that was a link is gone too
+        clone(repo, tmp_path / "out2", subdir="libdir")
+
+
+def test_upload_symlinks_are_removed(tmp_path):
+    import io
+    import tarfile
+    tgz = tmp_path / "u.tgz"
+    with tarfile.open(tgz, "w:gz") as tar:
+        data = b"print(1)\n"
+        ti = tarfile.TarInfo("main.py")
+        ti.size = len(data)
+        tar.addfile(ti, io.BytesIO(data))
+        link = tarfile.TarInfo("alias.py")
+        link.type, link.linkname = tarfile.SYMTYPE, "main.py"
+        tar.addfile(link)
+    root = materialize({"kind": "upload", "upload_id": "u"}, tmp_path / "out", fetch_upload=lambda _: tgz)
+    assert (root / "main.py").is_file() and not (root / "alias.py").is_symlink()

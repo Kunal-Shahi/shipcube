@@ -29,6 +29,8 @@ def abuse_signals(p: Profile) -> list[str]:
         out.append("fork_bomb")
     if "disk" in reason:
         out.append("disk_flood")
+    if p.tamper_attempts:
+        out.append("agent_tamper")
     if p.kind != "web" and p.active_s > 60 and p.cpu_mean_cores >= 0.95 and p.io_write_mb <= 1:
         out.append("cpu_pinned")
     return out

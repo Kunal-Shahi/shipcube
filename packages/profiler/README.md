@@ -34,6 +34,11 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
   - The agent runs as `python -S -P` from a read-only `/opt/shipcube` with its own psutil, with `WORKDIR /`, so the upload is never on its `sys.path`.
   - The app gets `PYTHONNOUSERSITE=1`.
   - Tested with an upload that shadows the agent's modules and with a local malicious wheel (`.pth`, a `.data` stdlib overwrite, a psutil shadow). Against the previous image design both attacks got into the agent; now both runs are genuine.
+- **Agent and app are separate users.** The agent is root inside the container. Locally it keeps only the SETUID, SETGID, CHOWN and KILL capabilities; Cloud Run uses its default container capabilities. It starts the app as uid 10001, which keeps no capabilities, so the app can't signal, ptrace or read the agent.
+  - The sampler thread reads the app's `/proc` entries with `setfsuid`/`setfsgid` set to the app's uid, so the agent needs no `CAP_SYS_PTRACE`.
+  - Signals the app aims at the agent count as `tamper_attempts`, which raises the abuse signal `agent_tamper`.
+  - `docker run --init` keeps the agent off PID 1, so its protection comes from the uid split, not from PID 1's immunity to signals.
+- **No symlinks.** Every symlink in a git checkout or upload is deleted before anything reads the tree.
 - **Static fallbacks:** `estimate()` reports `profile.measurements.static_reason`, one of `STATIC_REASONS`. The control plane forces one with `StaticRunner(reason="quota" | "budget" | "suspended" | "busy" | "disabled")`.
 - **Abuse signals:** `profile.measurements.abuse_signals`, computed host-side by `abuse_signals(profile)`, for the control plane's strikes.
 - **Git sources:**

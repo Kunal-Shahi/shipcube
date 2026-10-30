@@ -58,6 +58,9 @@ class Limits:
     # sense for an in-process run on a developer's machine.
     max_nproc: int | None = None
     max_disk_mb: int | None = None
+    # Inside the sandbox the agent is root and runs the app as this uid (no capabilities
+    # left after setuid): the app can't signal, ptrace or read the agent.
+    app_uid: int | None = None
     stderr_tail_bytes: int = 64 * 1024
 
 
@@ -147,6 +150,8 @@ class _Sampler(threading.Thread):
         return out
 
     def run(self):
+        if self.limits.app_uid is not None:
+            _set_thread_fsuid(self.limits.app_uid)
         while not self._halt.is_set():
             tree = self._tree()
             if not tree:
@@ -184,6 +189,20 @@ class _Sampler(threading.Thread):
 
     def stop(self):
         self._halt.set()
+
+
+def _set_thread_fsuid(uid: int) -> None:
+    """Linux: this thread reads /proc as `uid` (and gid). A root agent with no CAP_SYS_PTRACE can't
+    read another uid's /proc/<pid>/io, but the app's own uid can (it's dumpable), and
+    setfsuid is per-thread, so only the sampler changes. Needs CAP_SETUID, which the
+    agent has to start the app anyway."""
+    if sys.platform.startswith("linux"):
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.setfsgid(uid)   # the kernel matches gid as well as uid (app gid == uid here)
+            libc.setfsuid(uid)
+        except (OSError, AttributeError):
+            pass
 
 
 class _DiskWatch:
@@ -267,9 +286,11 @@ def _nproc_refused(returncode: int | None, stderr: str, limits: Limits) -> str |
 
 
 def _killpg(pid: int, sig=signal.SIGKILL):
+    # PermissionError isn't swallowed: an agent that can't stop the app must fail loudly
+    # (e.g. a root agent without CAP_KILL), not leave it running unwatched.
     try:
         os.killpg(pid, sig)
-    except (ProcessLookupError, PermissionError):
+    except ProcessLookupError:
         pass
 
 
@@ -384,11 +405,23 @@ class LocalRunner:
         port = _free_port() if summary.kind == "web" else None
         stats_file = work / "netstats"
         env = _sandbox_env(app_dir, work, stats_file, hints, port)
+        env["SHIPCUBE_GUARD_PIDS"] = ",".join(sorted({str(os.getpid()), "1"}))
         cmd = _command(self.python, app_dir, summary, port)
+        as_user = {}
+        if self.limits.app_uid is not None:
+            uid = self.limits.app_uid
+            if os.geteuid() != 0 or uid == 0:
+                raise RuntimeError("app_uid needs a root agent and a non-root app uid")
+            # The app's HOME/TMPDIR, where it also writes its netstats. 0755 so the agent
+            # (root, but without CAP_DAC_OVERRIDE) can still list and read it.
+            os.chmod(work, 0o755)
+            os.chown(work, uid, uid)
+            as_user = dict(user=uid, group=uid, extra_groups=[])
         ru0 = resource.getrusage(resource.RUSAGE_CHILDREN)
         t0 = time.monotonic()
+        # Popen sets the uid before preexec_fn runs, so the rlimits apply to the app's uid.
         proc = subprocess.Popen(cmd, cwd=app_dir, env=env, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.PIPE, preexec_fn=_preexec(self.limits))
+                                stderr=subprocess.PIPE, preexec_fn=_preexec(self.limits), **as_user)
         tail = _Tail(proc.stderr, self.limits.stderr_tail_bytes)
         tail.start()
         writable = [work, Path(tempfile.gettempdir()), Path("/tmp"), Path("/var/tmp"), Path("/dev/shm")]
@@ -478,6 +511,7 @@ class LocalRunner:
             prof.net_calls += s["connect_attempts"]
             prof.net_blocked += s["blocked"]
             prof.net_bytes += s["bytes_sent"] + s["bytes_recv"]
+            prof.tamper_attempts += s.get("tamper_attempts", 0)
             prof.remote_hosts = sorted(set(prof.remote_hosts) | set(s["remote_hosts"]))[:20]
             prof.remote_ports = sorted(set(prof.remote_ports) | set(s.get("remote_ports", [])))[:20]
         if prof.net_blocked:

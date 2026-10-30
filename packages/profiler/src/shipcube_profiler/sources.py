@@ -110,7 +110,22 @@ def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) ->
     if why:
         shutil.rmtree(target, ignore_errors=True)
         raise SourceError(why)
+    _strip_symlinks(target)
     return target
+
+
+def _strip_symlinks(root: Path) -> int:
+    """Delete every symlink under root, before anything reads the tree. A checkout or
+    upload could otherwise point detection, packaging or the profiler at files outside
+    it (/etc/passwd, the worker's credentials). Returns how many were removed."""
+    removed = 0
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in [*dirnames, *filenames]:
+            p = os.path.join(dirpath, name)
+            if os.path.islink(p):
+                os.unlink(p)
+                removed += 1
+    return removed
 
 
 def _safe_rel(path: str) -> PurePosixPath:
@@ -147,7 +162,7 @@ def materialize(source: dict, dest: Path, *, fetch_upload: UploadFetcher | None 
         root = _clone(url, source.get("ref"), dest / "repo", allow_file=allow_file_urls)
         if source.get("subdir"):
             root = root / _safe_rel(source["subdir"])
-            if not root.is_dir():
+            if not root.is_dir() or root.is_symlink():
                 raise SourceError(f"subdir {source['subdir']!r} not found in repo")
         return root
     if kind == "upload":
@@ -163,6 +178,7 @@ def materialize(source: dict, dest: Path, *, fetch_upload: UploadFetcher | None 
             if sum(m.size for m in members if m.isfile()) > UNPACKED_MAX_BYTES:
                 raise SourceError(f"upload unpacks to more than {UNPACKED_MAX_BYTES // 2**20} MiB")
             tar.extractall(dest, members=members, filter="data")  # rejects absolute paths, links out of dest
+        _strip_symlinks(dest)   # and no links inside it either, same as git
         return dest
     if kind == "image":
         raise NotRunnable("container images are profiled on GCP only; using static hints")

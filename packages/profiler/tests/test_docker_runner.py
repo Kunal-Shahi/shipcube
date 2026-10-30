@@ -35,7 +35,8 @@ def test_run_args_carry_the_isolation_flags():
     cfg = DockerSandboxConfig(cpus="1", memory_mb=2048, pids=256, timeout_s=600, tmpfs_mb=512)
     a = run_args(cfg, "img:tag", "prof-x", Hints(expected_users=5, sample_input="/host/secret"))
     s = " ".join(a)
-    for flag in ("--network none", "--read-only", "--user 10001:10001", "--cap-drop ALL",
+    for flag in ("--init", "--network none", "--read-only", "--user 0:0", "--cap-drop ALL", "--cap-add SETUID",
+                 "--cap-add SETGID", "--cap-add CHOWN", "--cap-add KILL",
                  "--security-opt no-new-privileges", "--cpus 1", "--memory 2048m", "--memory-swap 2048m",
                  "--pids-limit 256", "--tmpfs /tmp:rw,nosuid,nodev,size=512m"):
         assert flag in s, flag
@@ -358,3 +359,48 @@ def test_malicious_wheel_cannot_touch_the_agent(tmp_path):
     assert "/usr/local/lib/python3.12/json/__init__.py" in listing   # stdlib untouched
     p = r.run(root, s, Hints(), image=image)
     assert _genuine(p), p                                          # the app ran with its wheel; the agent was untouched
+
+
+TAMPER = r'''
+import ctypes, os, signal, sys
+agent = os.getppid()
+got_in = []
+for pid in (agent, 1):
+    for sig in (signal.SIGSTOP, signal.SIGKILL):
+        try:
+            os.kill(pid, sig)
+            got_in.append(f"signal {sig} to {pid}")
+        except PermissionError:
+            pass
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.kill(agent, signal.SIGKILL) == 0:                     # bypasses the Python hook
+    got_in.append("libc kill")
+if libc.ptrace(16, agent, None, None) == 0:                  # PTRACE_ATTACH
+    got_in.append("ptrace")
+for path in (f"/proc/{agent}/environ", f"/proc/{agent}/mem", f"/proc/{agent}/fd/1"):
+    try:
+        open(path, "rb").read(1)
+        got_in.append("read " + path)
+    except OSError:
+        pass
+print(got_in, file=sys.stderr)
+sys.exit(9 if got_in else 0)
+'''
+
+
+@needs_docker
+def test_app_cannot_stop_kill_trace_or_read_the_agent(tmp_path):
+    root, s = _app(tmp_path, TAMPER)
+    p = DockerRunner().run(root, s, Hints())
+    assert p.mode == "measured" and p.exit_code == 0, p.notes   # every attempt refused; the agent reported
+    assert p.tamper_attempts >= 4 and "agent_tamper" in p.abuse_signals
+
+
+@needs_docker
+def test_agent_is_root_and_app_has_its_own_uid(tmp_path):
+    root, s = _app(tmp_path, "import os, sys\n"
+                             "a = os.getppid()\n"
+                             "st = open(f'/proc/{a}/status').read()\n"
+                             "uid = int([l for l in st.splitlines() if l.startswith('Uid:')][0].split()[1])\n"
+                             "sys.exit(0 if os.getuid() == 10001 and uid == 0 else 6)\n")
+    assert DockerRunner().run(root, s, Hints()).exit_code == 0
