@@ -169,7 +169,7 @@ class GcpDeployer:
     def stage_source(self, app: AppRef, source: dict[str, Any], op_id: str) -> dict[str, Any]:
         kind = source["kind"]
         if kind == "image":
-            isolation.check_image(self.s, app.workspace_id, source["uri"])
+            isolation.check_image(self.s, app.workspace_id, source["uri"], linked=app.target.kind == "linked")
             return {"image": source["uri"]}
         if kind == "git":
             return {"gitSource": {k: v for k, v in {"url": source["url"], "revision": source.get("ref") or "HEAD",
@@ -423,7 +423,7 @@ class GcpDeployer:
         }
 
     def deploy(self, app: AppRef, image: str, caps: dict[str, Any], env: dict[str, str]) -> Deployed:
-        isolation.check_image(self.s, app.workspace_id, image)
+        isolation.check_image(self.s, app.workspace_id, image, linked=app.target.kind == "linked")
         sess = self._for(app)
         sa = self._ensure_runtime_sa(sess, app)
         body = self._service_body(app, image, caps, env, sa)
@@ -473,7 +473,7 @@ class GcpDeployer:
         t = svc["template"]
         # The PATCH makes a new revision from the stored image reference, so it must still be this
         # workspace's pinned image (apps deployed before per-workspace repos need a redeploy).
-        isolation.check_image(self.s, app.workspace_id, t["containers"][0]["image"])
+        isolation.check_image(self.s, app.workspace_id, t["containers"][0]["image"], linked=app.target.kind == "linked")
         t["scaling"] = {**t.get("scaling", {}), "minInstanceCount": 0, "maxInstanceCount": int(c.get("max_instances", 2))}
         t["maxInstanceRequestConcurrency"] = int(c.get("concurrency", 80))
         t["timeout"] = f"{int(c.get('timeout_s', 60))}s"

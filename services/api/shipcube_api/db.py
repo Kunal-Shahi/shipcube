@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -52,17 +53,24 @@ class IamAuthConnection(psycopg.Connection):
     pool recycles connections hourly (max_lifetime), so expiry never interrupts a session."""
 
     _creds: Any = None
+    # The pool opens connections on several threads at once; without the lock one could read the
+    # shared credentials mid-refresh and connect with no password ("fe_sendauth: no password supplied").
+    _lock = threading.Lock()
 
     @classmethod
     def connect(cls, conninfo: str = "", **kwargs: Any) -> IamAuthConnection:  # type: ignore[override]
         import google.auth
         import google.auth.transport.requests
 
-        if cls._creds is None:
-            cls._creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/sqlservice.login"])
-        if not cls._creds.valid:
-            cls._creds.refresh(google.auth.transport.requests.Request())
-        kwargs["password"] = cls._creds.token
+        with cls._lock:
+            if cls._creds is None:
+                cls._creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/sqlservice.login"])
+            if not cls._creds.valid:
+                cls._creds.refresh(google.auth.transport.requests.Request())
+            token = cls._creds.token
+        if not token:
+            raise psycopg.OperationalError("no OAuth token for Cloud SQL IAM authentication")
+        kwargs["password"] = token
         return super().connect(conninfo, **kwargs)  # type: ignore[return-value]
 
 

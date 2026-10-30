@@ -5,12 +5,37 @@ service's own service account), state in Postgres (SHIPCUBE_DATABASE_URL)."""
 
 from __future__ import annotations
 
+import logging
 import os
+import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
+
+log = logging.getLogger("shipcube.settings")
+
+# Set by Cloud Run on every service and job. Their presence means production: dev mode and local
+# adapters are refused at startup (#29).
+CLOUD_RUN_VARS = ("K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB")
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal"}
+_warned_alias = False
+
+
+def on_cloud_run(env: Mapping[str, str] = os.environ) -> bool:
+    return any(env.get(k) for k in CLOUD_RUN_VARS)
 
 
 def _dev_mode() -> bool:
-    return os.environ.get("SHIPCUBE_DEV_MODE", "") == "1"
+    """SHIPCUBE_DEV_MODE=1. DEV_MODE=1 (the gateway's and console's name) still counts, with a warning."""
+    global _warned_alias
+    if os.environ.get("SHIPCUBE_DEV_MODE", "") == "1":
+        return True
+    if os.environ.get("DEV_MODE", "") == "1":
+        if not _warned_alias:
+            log.warning("DEV_MODE=1 is deprecated here; use SHIPCUBE_DEV_MODE=1")
+            _warned_alias = True
+        return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -112,4 +137,54 @@ class Settings:
     builder_image: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_BUILDER", "gcr.io/buildpacks/builder:latest"))
 
 
+def _is_local_url(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    return host in LOCAL_HOSTS or host.endswith(".localhost") or host.endswith(".local")
+
+
+def production_problems(s: Settings, env: Mapping[str, str] = os.environ) -> list[str]:
+    """Why this process must not run on Cloud Run; empty when it may (#29). Every local adapter is
+    behind dev mode or an explicit local setting, so this lists both, plus local URLs and secrets."""
+    out = []
+    if s.dev_mode:
+        out.append("dev mode is on (SHIPCUBE_DEV_MODE=1 or DEV_MODE=1)")
+    if s.backend != "gcp":
+        out.append(f"SHIPCUBE_BACKEND={s.backend}; production deploys only through gcp")
+    if s.secret_store != "gcp":
+        out.append(f"SHIPCUBE_SECRET_STORE={s.secret_store}; production keys live only in Secret Manager")
+    for name, bad in (("SHIPCUBE_EMBEDDED_WORKER", "1"), ("SHIPCUBE_ESTIMATOR", "dev"), ("SHIPCUBE_ENV", "local")):
+        if env.get(name) == bad:
+            out.append(f"{name}={bad} is for local development only")
+    # Profiler: empty (no profiling) or gcp (the sandboxed Cloud Run job); `local` runs tenant code
+    # in-process. Monitor: unset resolves to gcp in shipcube_monitor; local/mock read Docker or fake data.
+    profiler = (env.get("SHIPCUBE_PROFILER") or "").strip().lower()
+    if profiler not in ("", "gcp"):
+        out.append(f"SHIPCUBE_PROFILER={profiler}; production profiles only in the gcp sandbox")
+    monitor = (env.get("SHIPCUBE_MONITOR") or "gcp").strip().lower()
+    if monitor != "gcp":
+        out.append(f"SHIPCUBE_MONITOR={monitor}; production reads only Cloud Monitoring")
+    if (env.get("SHIPCUBE_TOKEN_PEPPER") or "").startswith("sclocal_"):
+        out.append("SHIPCUBE_TOKEN_PEPPER is a local value (infra/local/localsecrets.py)")
+    # Approval links, the MCP OAuth issuer and the gateway URL handed to apps must be real.
+    urls = {"SHIPCUBE_CONSOLE_URL": env.get("SHIPCUBE_CONSOLE_URL"), "SHIPCUBE_AI_GATEWAY_URL": env.get("SHIPCUBE_AI_GATEWAY_URL")}
+    if env.get("K_SERVICE") and not urls["SHIPCUBE_CONSOLE_URL"]:
+        out.append("SHIPCUBE_CONSOLE_URL is unset (the default is the local console)")
+    for name, url in urls.items():
+        if url and (_is_local_url(url) or urlsplit(url).scheme != "https"):
+            out.append(f"{name}={url} is not a public https URL")
+    return out
+
+
+def refuse_unsafe_production(s: Settings, env: Mapping[str, str] = os.environ) -> None:
+    """On Cloud Run, exit at startup if anything local is switched on. Elsewhere, do nothing."""
+    if not on_cloud_run(env):
+        return
+    problems = production_problems(s, env)
+    if problems:
+        for p in problems:
+            log.critical("refusing to start on Cloud Run: %s", p)
+        sys.exit("refusing to start on Cloud Run: " + "; ".join(problems))
+
+
 settings = Settings()
+refuse_unsafe_production(settings)

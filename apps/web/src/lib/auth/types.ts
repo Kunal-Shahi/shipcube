@@ -33,7 +33,8 @@ export interface AuthProvider {
   apiCredential(): Promise<string | null>;
 }
 
-export const SESSION_COOKIE = "sc_session";
+// Firebase Hosting (shipcube.web.app) forwards only the cookie named `__session` to Cloud Run.
+export const SESSION_COOKIE = "__session";
 export const ONBOARDED_COOKIE = "sc_onboarded";
 
 export class AuthError extends Error {

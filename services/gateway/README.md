@@ -95,6 +95,13 @@ spends reasoning tokens inside it (173 of 183 for a one-word reply).
 | `GOOGLE_CLOUD_PROJECT` | Project id, for the Cloud Logging trace field. |
 | `DEV_MODE=1` | **Local only.** Enables `env:NAME` secret refs and the mock provider; with `GATEWAY_ALLOW_PRIVATE_UPSTREAM=1`, private BYOK URLs. The process refuses to start without `META_SECRET_REF` unless this is set. |
 
+**On Cloud Run** (`K_SERVICE`, `K_REVISION` or `CLOUD_RUN_JOB` set) the gateway refuses to start, logging one CRITICAL line per problem, if any of these is true (`guard.go`, #29):
+- `DEV_MODE` or `SHIPCUBE_DEV_MODE` is set, or `GATEWAY_ALLOW_PRIVATE_UPSTREAM=1`;
+- `GATEWAY_AUDIENCE` or `GATEWAY_COUNTERS_URL` is unset;
+- `META_SECRET_REF` isn't a `projects/…/secrets/…` reference;
+- `GATEWAY_REGISTRY_FILE` is the example registry;
+- any URL setting is set but isn't public https.
+
 ## Deploy
 
 Until the API serves `/internal/gateway/resolve`, the registry is the `gateway-registry` secret, mounted
