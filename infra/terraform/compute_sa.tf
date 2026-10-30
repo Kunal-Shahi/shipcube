@@ -21,3 +21,11 @@ resource "google_project_iam_member_remove" "apps_compute_editor" {
   role    = "roles/editor"
   member  = "serviceAccount:${google_project.apps.number}-compute@developer.gserviceaccount.com"
 }
+
+# The App Engine default SA also gets Editor when that API is enabled. There is no App Engine app in
+# the control project and nothing runs as it, so it keeps no role (H-2 residual, red-team pentest).
+resource "google_project_iam_member_remove" "control_appspot_editor" {
+  project = var.control_project_id
+  role    = "roles/editor"
+  member  = "serviceAccount:${var.control_project_id}@appspot.gserviceaccount.com"
+}
