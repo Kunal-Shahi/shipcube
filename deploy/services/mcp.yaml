@@ -44,6 +44,11 @@ spec:
             # The gateway's ID token must carry this audience for /internal/gateway/* (#20); unset, those routes refuse everyone.
             - {name: SHIPCUBE_INTERNAL_AUDIENCE, value: "${MCP_URL}"}
             - {name: SHIPCUBE_DATA_WORKSPACE, value: "${DATA_WORKSPACE}"}
+            # Waitlist review (waitlist.py): verified emails allowed to approve sign-ups; empty refuses everyone.
+            - {name: SHIPCUBE_PLATFORM_ADMINS, value: "${PLATFORM_ADMINS}"}
+            - {name: SHIPCUBE_MAX_WORKSPACES, value: "${MAX_WORKSPACES}"}
+            # Per-IP waitlist limits key on the address Google's front end appends to X-Forwarded-For.
+            - {name: SHIPCUBE_TRUST_FORWARDED_FOR, value: "1"}
             # Warehouse credentials live in this project's Secret Manager (ws-<id>-… secrets); unset, every warehouse with a password is refused.
             - {name: SHIPCUBE_DATA_SECRET_PROJECT, value: "${PROJECT}"}
             - {name: SHIPCUBE_DATA_ALLOWED_DB_HOSTS, value: "${DATA_ALLOWED_DB_HOSTS}"}

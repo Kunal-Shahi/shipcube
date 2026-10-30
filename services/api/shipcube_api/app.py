@@ -21,14 +21,14 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Res
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from . import auth, data_layer, db, gateway_counters, obs, profiler_guard, store, workspace
+from . import auth, data_layer, db, gateway_counters, obs, profiler_guard, store, waitlist, workspace
 from .auth import Caller
 from .deploy.base import DeployError
 from .models import (
     AccessChange, AccessResult, AiConfigRequest, AiConfigResult, App, AppList, AppName, ApprovalDecision, Billing, Caps,
     CapsResult, DeployRequest, EstimateRequest, GcpLink, GcpTargets, LinkRequest, Logs, Me, Metrics, Operation,
     OperationList, OpStatus, Provider, ProviderId, ProviderKeyRequest, ProviderList, RollbackRequest, TokenCreate,
-    TokenCreated, TokenList, Upload, UploadRequest,
+    TokenCreated, TokenList, Upload, UploadRequest, WaitlistEntry, WaitlistList, WaitlistRequest,
 )
 from .secret_store import SecretStoreError
 from .settings import settings
@@ -83,6 +83,26 @@ async def request_context(request: Request, call_next):
     if request.url.path not in ("/healthz", "/health"):
         log.info("request", extra={"request_id": rid, "method": request.method, "path": request.url.path,
                                    "status": response.status_code, "ms": round((time.monotonic() - t0) * 1000)})
+    return response
+
+
+@app.middleware("http")
+async def waitlist_cors(request: Request, call_next):
+    """The landing page posts the waitlist form from the browser (so the per-IP limit sees the visitor,
+    not the console server). CORS for that one route, from the console's origin only, no credentials."""
+    if request.url.path != "/v1/waitlist":
+        return await call_next(request)
+    allowed = request.headers.get("origin") == settings.console_url
+    if request.method == "OPTIONS":
+        if not allowed:
+            return Response(status_code=403)
+        return Response(status_code=204, headers={
+            "Access-Control-Allow-Origin": settings.console_url, "Access-Control-Allow-Methods": "POST",
+            "Access-Control-Allow-Headers": "Content-Type", "Access-Control-Max-Age": "600", "Vary": "Origin"})
+    response = await call_next(request)
+    if allowed:
+        response.headers["Access-Control-Allow-Origin"] = settings.console_url
+        response.headers["Vary"] = "Origin"
     return response
 
 
@@ -235,9 +255,95 @@ def revoke_token(token_id: uuid.UUID, c: Annotated[Caller, Depends(console_user)
 
 
 @app.get("/v1/me", response_model=Me)
-def me(c: Annotated[Caller, Depends(caller)]):
-    # No scope needed: any valid token may see who it belongs to and what it can do.
-    return store.me(c)
+def me(authorization: Annotated[str | None, Header()] = None,
+       x_shipcube_workspace: Annotated[str | None, Header()] = None):
+    # No scope needed: any valid token may see who it belongs to and what it can do. A console sign-in
+    # with no workspace yet learns whether it's on the waitlist (403 waitlisted) or not (403 no_access).
+    token = _bearer(authorization)
+    if token.startswith("sc_pat_"):
+        return store.me(caller(authorization, x_shipcube_workspace))
+    ident = auth.console_identity(token)
+    if ident is None:
+        raise ApiError(401, "unauthenticated", "invalid, expired or revoked token")
+    admin = waitlist.is_admin(ident.email, ident.email_verified)
+    c = auth.console_caller(ident, x_shipcube_workspace)
+    if c is not None:
+        return {**store.me(c), "platform_admin": admin}
+    state = waitlist.state_for(ident.email) if ident.email_verified else "no_access"
+    message = ("You're on the waitlist; we'll email you when your workspace is ready" if state == "waitlisted"
+               else "This account has no ShipCube workspace; join the waitlist to request one")
+    return JSONResponse({"error": {"code": state, "message": message, "platform_admin": admin}}, status_code=403)
+
+
+# --- waitlist: public sign-up, reviewed by platform admins ------------------------------------
+
+
+def _bearer(authorization: str | None) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise ApiError(401, "unauthenticated", "missing bearer token")
+    return authorization.removeprefix("Bearer ").strip()
+
+
+def _client_ip(request: Request) -> str:
+    if settings.trust_forwarded_for:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff.strip():
+            return xff.split(",")[-1].strip()  # appended by Google's front end; earlier entries are the client's
+    return request.client.host if request.client else "unknown"
+
+
+def platform_admin(authorization: Annotated[str | None, Header()] = None) -> auth.ConsoleIdentity:
+    """A console session whose verified email is in SHIPCUBE_PLATFORM_ADMINS. Never a PAT, never a workspace role."""
+    token = _bearer(authorization)
+    if token.startswith("sc_pat_"):
+        raise ApiError(403, "permission_denied", "the waitlist is reviewed in the console, not with an API token")
+    ident = auth.console_identity(token)
+    if ident is None:
+        raise ApiError(401, "unauthenticated", "invalid, expired or revoked token")
+    if not waitlist.is_admin(ident.email, ident.email_verified):
+        raise ApiError(403, "permission_denied", "only ShipCube platform admins can review the waitlist")
+    return ident
+
+
+@app.exception_handler(waitlist.RateLimited)
+async def _waitlist_rate_limited(_: Request, exc: waitlist.RateLimited) -> JSONResponse:
+    return JSONResponse({"error": {"code": "rate_limited", "message": str(exc), "retry_after": exc.retry_after_s}},
+                        status_code=429, headers={"Retry-After": str(exc.retry_after_s)})
+
+
+@app.exception_handler(waitlist.Conflict)
+async def _waitlist_conflict(_: Request, exc: waitlist.Conflict) -> JSONResponse:
+    return _err(409, exc.code, str(exc))
+
+
+@app.post("/v1/waitlist", status_code=202)
+def join_waitlist(body: WaitlistRequest, request: Request) -> dict:
+    # Always 202 for a well-formed request: new, already listed, already decided or a bot (honeypot).
+    waitlist.sign_up(body.email, body.name, body.use_case, body.website, _client_ip(request))
+    return {"status": "received"}
+
+
+@app.get("/v1/admin/waitlist", response_model=WaitlistList)
+def list_waitlist(_: Annotated[auth.ConsoleIdentity, Depends(platform_admin)],
+                  status: Literal["pending", "approved", "rejected", "all"] = "pending",
+                  limit: Annotated[int, Query(ge=1, le=500)] = 100):
+    return waitlist.list_entries(status, limit)
+
+
+@app.post("/v1/admin/waitlist/{entry_id}:approve", response_model=WaitlistEntry)
+def approve_waitlist(entry_id: uuid.UUID, a: Annotated[auth.ConsoleIdentity, Depends(platform_admin)]):
+    try:
+        return waitlist.approve(str(entry_id), a.email, a.user_id)
+    except LookupError as e:
+        raise ApiError(404, "not_found", str(e)) from None
+
+
+@app.post("/v1/admin/waitlist/{entry_id}:reject", response_model=WaitlistEntry)
+def reject_waitlist(entry_id: uuid.UUID, a: Annotated[auth.ConsoleIdentity, Depends(platform_admin)]):
+    try:
+        return waitlist.reject(str(entry_id), a.email, a.user_id)
+    except LookupError as e:
+        raise ApiError(404, "not_found", str(e)) from None
 
 
 @app.post("/v1/uploads", response_model=Upload, status_code=201)

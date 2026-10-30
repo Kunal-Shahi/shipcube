@@ -67,6 +67,16 @@ if want mcp; then
     echo "warning: DATA_WORKSPACE is unset, so the data_* tools are not mounted (11 of 16 MCP tools)" >&2
   fi
   export DATA_WORKSPACE="${DATA_WORKSPACE:-}"
+  # Platform admins review the waitlist. Unset, a person deploying from their own gcloud account is the
+  # admin; the GitHub workflow passes the SHIPCUBE_PLATFORM_ADMINS repository variable.
+  if [ -z "${PLATFORM_ADMINS:-}" ]; then
+    account="$(gcloud config get-value account 2>/dev/null || true)"
+    case "$account" in
+      ""|*.gserviceaccount.com) echo "warning: PLATFORM_ADMINS is unset, so nobody can review the waitlist" >&2 ;;
+      *) PLATFORM_ADMINS="$account" ;;
+    esac
+  fi
+  export PLATFORM_ADMINS="${PLATFORM_ADMINS:-}" MAX_WORKSPACES
   CLOUDSQL_INSTANCES="$SQL_INSTANCE${DATA_SQL_INSTANCES:+,$DATA_SQL_INSTANCES}"
   DATA_ALLOWED_DB_HOSTS="$(echo "$DATA_SQL_INSTANCES" | tr ',' '\n' | sed '/^$/d; s|^|/cloudsql/|' | paste -sd, -)"
   export CLOUDSQL_INSTANCES DATA_ALLOWED_DB_HOSTS

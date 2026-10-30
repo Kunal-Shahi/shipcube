@@ -14,6 +14,8 @@ SQL_INSTANCE="$PROJECT:$REGION:shipcube-pg"
 # connection names), e.g. the demo warehouse. Each is mounted on shipcube-mcp and allow-listed
 # as /cloudsql/<name>; empty means only public warehouse hosts.
 : "${DATA_SQL_INSTANCES:=}"
+# Workspaces in total; waitlist approvals stop here (SHIPCUBE_MAX_WORKSPACES).
+: "${MAX_WORKSPACES:=50}"
 BUILD_BUCKET="$PROJECT-platform-builds"
 # Cloud Run URLs are deterministic: https://<service>-<project number>.<region>.run.app
 run_url() { echo "https://$1-$PROJECT_NUMBER.$REGION.run.app"; }

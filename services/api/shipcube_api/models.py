@@ -231,6 +231,7 @@ class Me(BaseModel):
     limits: Limits
     token: TokenInfo | None = Field(None, description="The token used for this request")
     deployer_sa: str = Field(description="Grant this service account roles in a GCP project to link it (link-project.sh)")
+    platform_admin: bool = Field(False, description="May review the waitlist (SHIPCUBE_PLATFORM_ADMINS)")
 
 
 class Upload(BaseModel):
@@ -489,3 +490,43 @@ class Billing(BaseModel):
     daily: list[DailyCost]
     gcp: GcpLink | None
     source: str
+
+
+# --- waitlist (waitlist.py) ----------------------------------------------------------
+
+
+class WaitlistRequest(_Model):
+    # A plain shape check: the address is only ever compared, and approval needs a verified Google sign-in with it.
+    email: str = Field(max_length=254, pattern=r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]+$")
+    name: str = Field(min_length=1, max_length=100)
+    use_case: str = Field(min_length=1, max_length=500)
+    website: str = Field("", max_length=200, description="Honeypot: always empty from the real form")
+
+    @model_validator(mode="after")
+    def _strip(self) -> WaitlistRequest:
+        self.email, self.name, self.use_case = self.email.strip().lower(), self.name.strip(), self.use_case.strip()
+        if not self.name or not self.use_case:
+            raise ValueError("name and use_case can't be blank")
+        return self
+
+
+class WaitlistEntry(BaseModel):
+    id: str
+    email: str
+    name: str
+    use_case: str
+    status: Literal["pending", "approved", "rejected"]
+    created_at: str
+    decided_at: str | None
+    decided_by: str | None
+    workspace_id: str | None
+
+
+class WaitlistCount(BaseModel):
+    count: int
+    cap: int
+
+
+class WaitlistList(BaseModel):
+    items: list[WaitlistEntry]
+    workspaces: WaitlistCount

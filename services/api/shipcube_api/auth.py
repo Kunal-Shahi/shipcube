@@ -165,34 +165,55 @@ def _claim_pending_user(conn: Any, claims: dict[str, Any]) -> dict | None:
     return u
 
 
-def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
-    user_id = None
-    workspace_id = workspace_hint
+@dataclass(frozen=True)
+class ConsoleIdentity:
+    """A verified console sign-in, before any workspace: the person's email and their user row, if any."""
+    email: str
+    user_id: str | None
+    email_verified: bool
+    workspace_id: str | None = None  # DEV_MODE sessions are pinned to one workspace
+
+
+def console_identity(token: str) -> ConsoleIdentity | None:
+    """The human behind a console token, or None. PATs are never console identities. A verified email's
+    first sign-in claims its pending user row (admin bootstrap, or an approved waitlist entry)."""
     if token in _dev_sessions and settings.dev_mode:
         user_id, workspace_id = _dev_sessions[token]
-    elif settings.idp_project and not token.startswith("sc_"):
-        from google.auth.transport.requests import Request
-        from google.oauth2 import id_token
-
-        try:
-            claims = _verify_console_jwt(token, settings.idp_project, id_token, Request())
-        except ValueError as e:
-            log.info("console token rejected", extra={"reason": str(e)[:200]})
-            return None
         with db.tx(role=db.APP) as conn:
-            u = conn.execute("select id from users where firebase_uid = %s and disabled_at is null",
-                             (claims["sub"],)).fetchone()
-            if u is None:
-                u = _claim_pending_user(conn, claims)
-        user_id = str(u["id"]) if u else None
-    if user_id is None:
+            u = conn.execute("select email from users where id = %s and disabled_at is null", (user_id,)).fetchone()
+        return ConsoleIdentity(u["email"], user_id, True, workspace_id) if u else None
+    if not settings.idp_project or token.startswith("sc_"):
+        return None
+    from google.auth.transport.requests import Request
+    from google.oauth2 import id_token
+
+    try:
+        claims = _verify_console_jwt(token, settings.idp_project, id_token, Request())
+    except ValueError as e:
+        log.info("console token rejected", extra={"reason": str(e)[:200]})
         return None
     with db.tx(role=db.APP) as conn:
-        mem = _membership(conn, user_id, workspace_id)
+        u = conn.execute("select id from users where firebase_uid = %s and disabled_at is null",
+                         (claims["sub"],)).fetchone()
+        if u is None:
+            u = _claim_pending_user(conn, claims)
+    return ConsoleIdentity(claims.get("email") or "", str(u["id"]) if u else None, claims.get("email_verified") is True)
+
+
+def console_caller(ident: ConsoleIdentity, workspace_hint: str | None) -> Caller | None:
+    if ident.user_id is None:
+        return None
+    with db.tx(role=db.APP) as conn:
+        mem = _membership(conn, ident.user_id, ident.workspace_id or workspace_hint)
     if mem is None:
         return None
     exp = int((datetime.now(UTC) + timedelta(hours=1)).timestamp())
-    return Caller(None, user_id, str(mem["workspace_id"]), CONSOLE_SCOPES, exp, "console", mem["email"], mem["role"])
+    return Caller(None, ident.user_id, str(mem["workspace_id"]), CONSOLE_SCOPES, exp, "console", mem["email"], mem["role"])
+
+
+def verify_console(token: str, workspace_hint: str | None) -> Caller | None:
+    ident = console_identity(token)
+    return console_caller(ident, workspace_hint) if ident else None
 
 
 def verify(token: str, workspace_hint: str | None = None) -> Caller | None:

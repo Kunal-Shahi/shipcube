@@ -62,6 +62,16 @@ class Settings:
     gateway_sa: str = field(default_factory=lambda: os.environ.get(
         "SHIPCUBE_GATEWAY_SA", "sc-gateway@shipcube-control-ks.iam.gserviceaccount.com"))
     internal_audience: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_INTERNAL_AUDIENCE") or None)
+    # Public waitlist (waitlist.py). Platform admins review it: a comma-separated allowlist of verified
+    # Google emails, never a workspace role. Approvals stop at max_workspaces workspaces in total.
+    platform_admins: frozenset[str] = field(default_factory=lambda: frozenset(
+        e.strip().lower() for e in os.environ.get("SHIPCUBE_PLATFORM_ADMINS", "").split(",") if e.strip()))
+    max_workspaces: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_MAX_WORKSPACES", "50")))
+    waitlist_per_ip_per_hour: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_WAITLIST_PER_IP_PER_HOUR", "5")))
+    waitlist_per_hour: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_WAITLIST_PER_HOUR", "200")))
+    # On Cloud Run, Google's front end appends the client's address to X-Forwarded-For; the last entry
+    # is the only one a client can't forge. Off (local), the socket's peer address is used.
+    trust_forwarded_for: bool = field(default_factory=lambda: os.environ.get("SHIPCUBE_TRUST_FORWARDED_FOR") == "1")
     # SHIPCUBE_BACKEND=local (deploy/local.py, local_iap.py): Docker + pack + fake-gcs-server.
     local_state_dir: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_STATE", ".shipcube-local"))
     local_gcs_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LOCAL_GCS_URL", "http://localhost:4443"))
