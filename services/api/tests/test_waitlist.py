@@ -111,7 +111,7 @@ def test_cors_only_for_the_console_origin(client, idp):
     assert client.options("/v1/waitlist", headers={"Origin": "https://evil.example"}).status_code == 403
     r = client.post("/v1/waitlist", json={"email": "bad"}, headers={"Origin": origin})
     assert r.status_code == 400 and r.headers["Access-Control-Allow-Origin"] == origin
-    assert "Access-Control-Allow-Origin" not in client.get("/v1/me", headers={"Origin": origin}).headers
+    assert "Access-Control-Allow-Origin" not in client.get("/v1/waitlist/me", headers={"Origin": origin}).headers
 
 
 def test_admin_routes_refuse_non_admins_and_pats(client, idp):
@@ -123,28 +123,39 @@ def test_admin_routes_refuse_non_admins_and_pats(client, idp):
     admin_ws = new_workspace(ADMIN.replace("admin-", "admin2-"))
     assert client.get("/v1/admin/waitlist", headers=admin_ws["agent"]).status_code == 403
     assert client.get("/v1/admin/waitlist").status_code == 401
-    entry = waitlist.list_entries("all", 1)["items"]
+    entry = waitlist.list_entries("all", 1)["requests"]
     if entry:
-        assert client.post(f"/v1/admin/waitlist/{entry[0]['id']}:approve", headers=member["human"]).status_code == 403
+        assert client.post(f"/v1/admin/waitlist/{entry[0]['id']}/approve", headers=member["human"]).status_code == 403
 
 
 def test_approve_then_first_sign_in_claims_the_workspace(client, idp):
     addr = email()
     sub = f"uid-{uuid.uuid4().hex[:8]}"
-    me = client.get("/v1/me", headers=idp(addr, sub))
-    assert me.status_code == 403 and me.json()["error"]["code"] == "no_access"
-    assert join(client, addr).status_code == 202
-    me = client.get("/v1/me", headers=idp(addr, sub))
-    assert me.status_code == 403 and me.json()["error"]["code"] == "waitlisted"
+    assert client.get("/v1/me", headers=idp(addr, sub)).status_code == 401  # signed in, no workspace
+    mine = client.get("/v1/waitlist/me", headers=idp(addr, sub)).json()
+    assert mine == {"email": addr, "status": "none", "requested_at": None, "platform_admin": False}
+    # Signed in, one click: the session's verified email is used, whatever the body says.
+    r = client.post("/v1/waitlist", json={"email": "someone-else@example.com", "name": "Ada", "use_case": "dashboards"},
+                    headers=idp(addr, sub))
+    assert r.status_code == 202
+    mine = client.get("/v1/waitlist/me", headers=idp(addr, sub)).json()
+    assert mine["status"] == "pending" and mine["requested_at"] and row("someone-else@example.com") is None
 
     admin = idp(ADMIN)
-    items = client.get("/v1/admin/waitlist", headers=admin).json()["items"]
-    entry = next(i for i in items if i["email"] == addr)
-    r = client.post(f"/v1/admin/waitlist/{entry['id']}:approve", headers=admin)
+    assert client.get("/v1/waitlist/me", headers=admin).json()["platform_admin"] is True
+    reqs = client.get("/v1/admin/waitlist", headers=admin).json()["requests"]
+    entry = next(i for i in reqs if i["email"] == addr)
+    r = client.post(f"/v1/admin/waitlist/{entry['id']}/approve", headers=admin)
     assert r.status_code == 200, r.text
     approved = r.json()
     assert approved["status"] == "approved" and approved["decided_by"] == ADMIN and approved["workspace_id"]
-    assert client.post(f"/v1/admin/waitlist/{entry['id']}:approve", headers=admin).json()["error"]["code"] == "conflict"
+    # A repeated click returns the same result and creates nothing more; the other decision conflicts.
+    again = client.post(f"/v1/admin/waitlist/{entry['id']}:approve", headers=admin)
+    assert again.status_code == 200 and again.json() == approved
+    assert client.post(f"/v1/admin/waitlist/{entry['id']}/reject", headers=admin).json()["error"]["code"] == "conflict"
+    with db.worker_tx() as conn:
+        assert conn.execute("select count(*) as n from memberships m join users u on u.id = m.user_id where u.email = %s",
+                            (addr,)).fetchone()["n"] == 1
 
     # The requester's verified sign-in now lands in their workspace, as its owner, with the default limits.
     me = client.get("/v1/me", headers=idp(addr, sub))
@@ -152,18 +163,51 @@ def test_approve_then_first_sign_in_claims_the_workspace(client, idp):
     body = me.json()
     assert body["workspace"]["id"] == approved["workspace_id"] and body["role"] == "owner"
     assert body["limits"] == {"max_apps": 3, "monthly_spend_usd": 5.0} and body["platform_admin"] is False
+    assert client.get("/v1/waitlist/me", headers=idp(addr, sub)).json()["status"] == "approved"
     with db.worker_tx() as conn:
-        audit = conn.execute("select * from audit_log where target_type = 'waitlist' and target_id = %s", (entry["id"],)).fetchone()
-    assert audit["action"] == "waitlist.approve" and audit["detail"]["admin"] == ADMIN
+        audit = conn.execute("select * from audit_log where target_type = 'waitlist' and target_id = %s", (entry["id"],)).fetchall()
+    assert len(audit) == 1 and audit[0]["action"] == "waitlist.approve" and audit[0]["detail"]["admin"] == ADMIN
+
+
+def test_waitlist_me_needs_a_verified_console_session(client, idp):
+    assert client.get("/v1/waitlist/me").status_code == 401
+    assert client.get("/v1/waitlist/me", headers=idp(email(), verified=False)).status_code == 401
+    assert client.get("/v1/waitlist/me", headers=new_workspace()["agent"]).status_code == 401
+    # Signed-in sign-up likewise: no verified email, no entry.
+    r = client.post("/v1/waitlist", json={"name": "a", "use_case": "b"}, headers=idp(email(), verified=False))
+    assert r.status_code == 401
+    assert client.post("/v1/waitlist", json={"name": "a", "use_case": "b"}).status_code == 400  # anonymous needs an email
+
+
+def test_dev_mode_accepts_auth_emulator_tokens(client, monkeypatch):
+    import base64
+    import json
+    import time
+
+    monkeypatch.setattr(auth, "settings", dataclasses.replace(auth.settings, idp_project=P))
+    monkeypatch.setenv("FIREBASE_AUTH_EMULATOR_HOST", "localhost:9099")
+
+    def tok(**claims):
+        enc = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()  # noqa: E731
+        return enc({"alg": "none"}) + "." + enc(claims) + "."
+
+    addr = email()
+    good = {"aud": P, "iss": f"https://securetoken.google.com/{P}", "exp": time.time() + 600, "sub": "emu-1",
+            "email": addr, "email_verified": True}
+    r = client.get("/v1/waitlist/me", headers={"Authorization": f"Bearer {tok(**good)}"})
+    assert r.status_code == 200 and r.json()["email"] == addr
+    for bad in ({"aud": "other"}, {"exp": time.time() - 1}, {"iss": "https://evil"}):
+        assert client.get("/v1/waitlist/me", headers={"Authorization": f"Bearer {tok(**{**good, **bad})}"}).status_code == 401
+    monkeypatch.setattr(auth, "settings", dataclasses.replace(auth.settings, dev_mode=False))
+    assert client.get("/v1/waitlist/me", headers={"Authorization": f"Bearer {tok(**good)}"}).status_code == 401
 
 
 def test_another_account_with_the_email_unverified_claims_nothing(client, idp):
     addr = email()
     join(client, addr)
-    entry = next(i for i in waitlist.list_entries("pending", 500)["items"] if i["email"] == addr)
+    entry = next(i for i in waitlist.list_entries("pending", 500)["requests"] if i["email"] == addr)
     assert client.post(f"/v1/admin/waitlist/{entry['id']}:approve", headers=idp(ADMIN)).status_code == 200
-    r = client.get("/v1/me", headers=idp(addr, verified=False))
-    assert r.status_code == 403 and r.json()["error"]["code"] == "no_access"
+    assert client.get("/v1/me", headers=idp(addr, verified=False)).status_code == 401
     with db.worker_tx() as conn:
         assert conn.execute("select firebase_uid from users where email = %s", (addr,)).fetchone()["firebase_uid"] == f"pending:{addr}"
 
@@ -171,12 +215,13 @@ def test_another_account_with_the_email_unverified_claims_nothing(client, idp):
 def test_reject(client, idp):
     addr = email()
     join(client, addr)
-    entry = next(i for i in waitlist.list_entries("pending", 500)["items"] if i["email"] == addr)
-    r = client.post(f"/v1/admin/waitlist/{entry['id']}:reject", headers=idp(ADMIN))
+    entry = next(i for i in waitlist.list_entries("pending", 500)["requests"] if i["email"] == addr)
+    r = client.post(f"/v1/admin/waitlist/{entry['id']}/reject", headers=idp(ADMIN))
     assert r.status_code == 200 and r.json()["status"] == "rejected" and r.json()["workspace_id"] is None
-    assert client.get("/v1/me", headers=idp(addr)).json()["error"]["code"] == "no_access"
-    assert client.post(f"/v1/admin/waitlist/{entry['id']}:approve", headers=idp(ADMIN)).status_code == 409
-    assert client.post(f"/v1/admin/waitlist/{uuid.uuid4()}:reject", headers=idp(ADMIN)).status_code == 404
+    assert client.get("/v1/waitlist/me", headers=idp(addr)).json()["status"] == "rejected"
+    assert client.post(f"/v1/admin/waitlist/{entry['id']}/reject", headers=idp(ADMIN)).status_code == 200  # repeated
+    assert client.post(f"/v1/admin/waitlist/{entry['id']}/approve", headers=idp(ADMIN)).status_code == 409
+    assert client.post(f"/v1/admin/waitlist/{uuid.uuid4()}/reject", headers=idp(ADMIN)).status_code == 404
 
 
 def test_workspace_cap(client, idp, monkeypatch):
@@ -188,8 +233,8 @@ def test_workspace_cap(client, idp, monkeypatch):
     join(client, addr)
     lst = client.get("/v1/admin/waitlist", headers=idp(ADMIN)).json()
     assert lst["workspaces"] == {"count": n, "cap": n}
-    entry = next(i for i in lst["items"] if i["email"] == addr)
-    r = client.post(f"/v1/admin/waitlist/{entry['id']}:approve", headers=idp(ADMIN))
+    entry = next(i for i in lst["requests"] if i["email"] == addr)
+    r = client.post(f"/v1/admin/waitlist/{entry['id']}/approve", headers=idp(ADMIN))
     assert r.status_code == 409 and r.json()["error"]["code"] == "workspace_cap_reached"
     assert row(addr)["status"] == "pending"
     with db.worker_tx() as conn:

@@ -28,7 +28,7 @@ from .models import (
     AccessChange, AccessResult, AiConfigRequest, AiConfigResult, App, AppList, AppName, ApprovalDecision, Billing, Caps,
     CapsResult, DeployRequest, EstimateRequest, GcpLink, GcpTargets, LinkRequest, Logs, Me, Metrics, Operation,
     OperationList, OpStatus, Provider, ProviderId, ProviderKeyRequest, ProviderList, RollbackRequest, TokenCreate,
-    TokenCreated, TokenList, Upload, UploadRequest, WaitlistEntry, WaitlistList, WaitlistRequest,
+    TokenCreated, TokenList, Upload, UploadRequest, WaitlistEntry, WaitlistList, WaitlistMe, WaitlistRequest,
 )
 from .secret_store import SecretStoreError
 from .settings import settings
@@ -258,21 +258,15 @@ def revoke_token(token_id: uuid.UUID, c: Annotated[Caller, Depends(console_user)
 def me(authorization: Annotated[str | None, Header()] = None,
        x_shipcube_workspace: Annotated[str | None, Header()] = None):
     # No scope needed: any valid token may see who it belongs to and what it can do. A console sign-in
-    # with no workspace yet learns whether it's on the waitlist (403 waitlisted) or not (403 no_access).
+    # with no workspace gets 401 here and asks GET /v1/waitlist/me where its request stands.
     token = _bearer(authorization)
     if token.startswith("sc_pat_"):
         return store.me(caller(authorization, x_shipcube_workspace))
     ident = auth.console_identity(token)
-    if ident is None:
+    c = auth.console_caller(ident, x_shipcube_workspace) if ident else None
+    if c is None:
         raise ApiError(401, "unauthenticated", "invalid, expired or revoked token")
-    admin = waitlist.is_admin(ident.email, ident.email_verified)
-    c = auth.console_caller(ident, x_shipcube_workspace)
-    if c is not None:
-        return {**store.me(c), "platform_admin": admin}
-    state = waitlist.state_for(ident.email) if ident.email_verified else "no_access"
-    message = ("You're on the waitlist; we'll email you when your workspace is ready" if state == "waitlisted"
-               else "This account has no ShipCube workspace; join the waitlist to request one")
-    return JSONResponse({"error": {"code": state, "message": message, "platform_admin": admin}}, status_code=403)
+    return {**store.me(c), "platform_admin": waitlist.is_admin(ident.email, ident.email_verified)}
 
 
 # --- waitlist: public sign-up, reviewed by platform admins ------------------------------------
@@ -316,11 +310,34 @@ async def _waitlist_conflict(_: Request, exc: waitlist.Conflict) -> JSONResponse
     return _err(409, exc.code, str(exc))
 
 
+def _verified_console(authorization: str | None) -> auth.ConsoleIdentity:
+    token = _bearer(authorization)
+    ident = None if token.startswith("sc_pat_") else auth.console_identity(token)
+    if ident is None or not ident.email_verified or not ident.email:
+        raise ApiError(401, "unauthenticated", "sign in to the console with a verified email")
+    return ident
+
+
 @app.post("/v1/waitlist", status_code=202)
-def join_waitlist(body: WaitlistRequest, request: Request) -> dict:
+def join_waitlist(body: WaitlistRequest, request: Request,
+                  authorization: Annotated[str | None, Header()] = None) -> dict:
     # Always 202 for a well-formed request: new, already listed, already decided or a bot (honeypot).
-    waitlist.sign_up(body.email, body.name, body.use_case, body.website, _client_ip(request))
+    # Signed in (the console's one-click request), the email is the session's verified one, not the body's.
+    if authorization:
+        ident = _verified_console(authorization)
+        waitlist.sign_up(ident.email, body.name, body.use_case, body.website, None)
+    elif body.email:
+        waitlist.sign_up(body.email, body.name, body.use_case, body.website, _client_ip(request))
+    else:
+        raise ApiError(400, "invalid_argument", "email: required")
     return {"status": "received"}
+
+
+@app.get("/v1/waitlist/me", response_model=WaitlistMe)
+def my_waitlist(authorization: Annotated[str | None, Header()] = None):
+    """Where a signed-in person's own request stands; needs no workspace."""
+    ident = _verified_console(authorization)
+    return {**waitlist.mine(ident.email), "platform_admin": waitlist.is_admin(ident.email, ident.email_verified)}
 
 
 @app.get("/v1/admin/waitlist", response_model=WaitlistList)
@@ -330,7 +347,9 @@ def list_waitlist(_: Annotated[auth.ConsoleIdentity, Depends(platform_admin)],
     return waitlist.list_entries(status, limit)
 
 
-@app.post("/v1/admin/waitlist/{entry_id}:approve", response_model=WaitlistEntry)
+# Both spellings: /{id}/approve (the console) and /{id}:approve (the API's other actions' style).
+@app.post("/v1/admin/waitlist/{entry_id}/approve", response_model=WaitlistEntry)
+@app.post("/v1/admin/waitlist/{entry_id}:approve", response_model=WaitlistEntry, include_in_schema=False)
 def approve_waitlist(entry_id: uuid.UUID, a: Annotated[auth.ConsoleIdentity, Depends(platform_admin)]):
     try:
         return waitlist.approve(str(entry_id), a.email, a.user_id)
@@ -338,7 +357,8 @@ def approve_waitlist(entry_id: uuid.UUID, a: Annotated[auth.ConsoleIdentity, Dep
         raise ApiError(404, "not_found", str(e)) from None
 
 
-@app.post("/v1/admin/waitlist/{entry_id}:reject", response_model=WaitlistEntry)
+@app.post("/v1/admin/waitlist/{entry_id}/reject", response_model=WaitlistEntry)
+@app.post("/v1/admin/waitlist/{entry_id}:reject", response_model=WaitlistEntry, include_in_schema=False)
 def reject_waitlist(entry_id: uuid.UUID, a: Annotated[auth.ConsoleIdentity, Depends(platform_admin)]):
     try:
         return waitlist.reject(str(entry_id), a.email, a.user_id)

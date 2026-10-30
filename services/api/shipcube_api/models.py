@@ -497,14 +497,16 @@ class Billing(BaseModel):
 
 class WaitlistRequest(_Model):
     # A plain shape check: the address is only ever compared, and approval needs a verified Google sign-in with it.
-    email: str = Field(max_length=254, pattern=r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]+$")
+    email: str | None = Field(None, max_length=254, pattern=r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]+$",
+                              description="Required unless signed in (then the session's verified email is used)")
     name: str = Field(min_length=1, max_length=100)
     use_case: str = Field(min_length=1, max_length=500)
     website: str = Field("", max_length=200, description="Honeypot: always empty from the real form")
 
     @model_validator(mode="after")
     def _strip(self) -> WaitlistRequest:
-        self.email, self.name, self.use_case = self.email.strip().lower(), self.name.strip(), self.use_case.strip()
+        self.email = self.email.strip().lower() if self.email else None
+        self.name, self.use_case = self.name.strip(), self.use_case.strip()
         if not self.name or not self.use_case:
             raise ValueError("name and use_case can't be blank")
         return self
@@ -528,5 +530,12 @@ class WaitlistCount(BaseModel):
 
 
 class WaitlistList(BaseModel):
-    items: list[WaitlistEntry]
+    requests: list[WaitlistEntry] = Field(description="Newest first")
     workspaces: WaitlistCount
+
+
+class WaitlistMe(BaseModel):
+    email: str
+    status: Literal["none", "pending", "approved", "rejected"]
+    requested_at: str | None
+    platform_admin: bool

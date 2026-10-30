@@ -150,6 +150,26 @@ def _verify_console_jwt(token: str, project: str, id_token: Any, request: Any) -
         return claims
 
 
+def _emulator_claims(token: str, project: str) -> dict[str, Any]:
+    """DEV_MODE with the Auth emulator (FIREBASE_AUTH_EMULATOR_HOST): its ID tokens and session cookies
+    are unsigned, so only their audience, issuer and expiry are checked. Never outside DEV_MODE."""
+    import base64
+    import json
+    import time
+
+    if not settings.dev_mode:
+        raise ValueError("emulator tokens are accepted only in DEV_MODE")
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError) as e:
+        raise ValueError(f"not an emulator token: {e}") from None
+    issuers = {f"https://securetoken.google.com/{project}", f"https://session.firebase.google.com/{project}"}
+    if claims.get("aud") != project or claims.get("iss") not in issuers or claims.get("exp", 0) < time.time():
+        raise ValueError("emulator token for another project, or expired")
+    return claims
+
+
 def _claim_pending_user(conn: Any, claims: dict[str, Any]) -> dict | None:
     """A person added by email (admin bootstrap, before their first sign-in) is stored with
     firebase_uid 'pending:<email>'. Their first console sign-in, with that email verified by
@@ -188,7 +208,10 @@ def console_identity(token: str) -> ConsoleIdentity | None:
     from google.oauth2 import id_token
 
     try:
-        claims = _verify_console_jwt(token, settings.idp_project, id_token, Request())
+        if settings.dev_mode and os.environ.get("FIREBASE_AUTH_EMULATOR_HOST"):
+            claims = _emulator_claims(token, settings.idp_project)
+        else:
+            claims = _verify_console_jwt(token, settings.idp_project, id_token, Request())
     except ValueError as e:
         log.info("console token rejected", extra={"reason": str(e)[:200]})
         return None

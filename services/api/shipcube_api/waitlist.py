@@ -68,13 +68,15 @@ def _count(conn, key: str, kind: str, window: datetime, limit: int) -> bool:
     return True
 
 
-def sign_up(email: str, name: str, use_case: str, honeypot: str, ip: str, now: datetime | None = None) -> None:
+def sign_up(email: str, name: str, use_case: str, honeypot: str, ip: str | None, now: datetime | None = None) -> None:
+    """ip None: a verified console session asked (one entry per Google-verified email), so only the
+    global limit applies."""
     now = (now or datetime.now(UTC)).astimezone(UTC)
     hour = now.replace(minute=0, second=0, microsecond=0)
     retry = int((hour + timedelta(hours=1) - now).total_seconds()) + 1
     with db.tx(role=db.APP, settings=SIGNUP_TX) as conn:
         # Per IP first (the narrower limit), so one client's burst doesn't spend the global budget.
-        if not _count(conn, _ip_key(ip), "waitlist_ip_per_hour", hour, settings.waitlist_per_ip_per_hour):
+        if ip is not None and not _count(conn, _ip_key(ip), "waitlist_ip_per_hour", hour, settings.waitlist_per_ip_per_hour):
             raise RateLimited("too many sign-ups from this address; try again later", retry)
         if not _count(conn, _GLOBAL, "waitlist_global_per_hour", hour, settings.waitlist_per_hour):
             raise RateLimited("the waitlist is busy; try again later", retry)
@@ -88,11 +90,13 @@ def sign_up(email: str, name: str, use_case: str, honeypot: str, ip: str, now: d
                      " on conflict do nothing", (uuid.uuid4(), email, name, use_case))  # no arbiter: one needs select under RLS
 
 
-def state_for(email: str) -> str:
-    """'waitlisted' while a person's own entry is pending, else 'no_access' (not listed, or rejected)."""
+def mine(email: str) -> dict[str, Any]:
+    """A signed-in person's own request: status none|pending|approved|rejected. `email` must be verified."""
     with db.tx(role=db.APP, settings={"app.via": "waitlist_self", "app.email": email}) as conn:
-        row = conn.execute("select status from waitlist where lower(email) = lower(%s)", (email,)).fetchone()
-    return "waitlisted" if row and row["status"] == "pending" else "no_access"
+        row = conn.execute("select status, created_at from waitlist where lower(email) = lower(%s)", (email,)).fetchone()
+    if row is None:
+        return {"email": email, "status": "none", "requested_at": None}
+    return {"email": email, "status": row["status"], "requested_at": row["created_at"].isoformat()}
 
 
 def is_admin(email: str | None, verified: bool) -> bool:
@@ -112,9 +116,9 @@ def list_entries(status: str, limit: int) -> dict[str, Any]:
         q += " where status = %s"
         args = (status,)
     with db.tx(role=db.APP, settings=ADMIN_TX) as conn:
-        rows = conn.execute(q + " order by created_at, id limit %s", (*args, limit)).fetchall()
+        rows = conn.execute(q + " order by created_at desc, id limit %s", (*args, limit)).fetchall()
         count = conn.execute("select count(*) as n from workspaces").fetchone()["n"]
-    return {"items": [_entry(r) for r in rows], "workspaces": {"count": count, "cap": settings.max_workspaces}}
+    return {"requests": [_entry(r) for r in rows], "workspaces": {"count": count, "cap": settings.max_workspaces}}
 
 
 def _audit(conn, admin_email: str, admin_user_id: str | None, action: str, entry_id: str, detail: dict) -> None:
@@ -124,10 +128,14 @@ def _audit(conn, admin_email: str, admin_user_id: str | None, action: str, entry
                   json.dumps({**detail, "admin": admin_email})))
 
 
-def _pending(conn, entry_id: str) -> dict[str, Any]:
+def _pending(conn, entry_id: str, decision: str) -> dict[str, Any] | None:
+    """The entry, locked, if it's still pending; None if it already has this decision (a repeated click);
+    Conflict if it has the other one."""
     row = conn.execute(f"select {_COLUMNS} from waitlist where id = %s for update", (entry_id,)).fetchone()
     if row is None:
         raise LookupError("no such waitlist entry")
+    if row["status"] == decision:
+        return None
     if row["status"] != "pending":
         raise Conflict("conflict", f"this entry was already {row['status']}")
     return row
@@ -141,7 +149,9 @@ def _slug(email: str) -> str:
 def approve(entry_id: str, admin_email: str, admin_user_id: str | None) -> dict[str, Any]:
     with db.tx(role=db.APP, settings=ADMIN_TX) as conn:
         conn.execute("select pg_advisory_xact_lock(%s)", (_APPROVE_LOCK,))
-        row = _pending(conn, entry_id)
+        row = _pending(conn, entry_id, "approved")
+        if row is None:
+            return _entry(conn.execute(f"select {_COLUMNS} from waitlist where id = %s", (entry_id,)).fetchone())
         if conn.execute("select count(*) as n from workspaces").fetchone()["n"] >= settings.max_workspaces:
             raise Conflict("workspace_cap_reached",
                            f"ShipCube is at its limit of {settings.max_workspaces} workspaces; raise SHIPCUBE_MAX_WORKSPACES to approve more")
@@ -168,7 +178,9 @@ def approve(entry_id: str, admin_email: str, admin_user_id: str | None) -> dict[
 
 def reject(entry_id: str, admin_email: str, admin_user_id: str | None) -> dict[str, Any]:
     with db.tx(role=db.APP, settings=ADMIN_TX) as conn:
-        row = _pending(conn, entry_id)
+        row = _pending(conn, entry_id, "rejected")
+        if row is None:
+            return _entry(conn.execute(f"select {_COLUMNS} from waitlist where id = %s", (entry_id,)).fetchone())
         out = conn.execute(f"update waitlist set status = 'rejected', decided_at = now(), decided_by = %s"
                            f" where id = %s returning {_COLUMNS}", (admin_email, entry_id)).fetchone()
         _audit(conn, admin_email, admin_user_id, "waitlist.reject", entry_id, {"email": row["email"]})
