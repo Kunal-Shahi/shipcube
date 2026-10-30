@@ -307,9 +307,8 @@ export interface AccountStatus {
   member: boolean;
   /** Can approve waitlist requests. Reported by the API; the API also enforces it. */
   platformAdmin: boolean;
-  /** For non-members: where their access request stands. */
+  /** For non-members: "pending" when they're on the list, "none" otherwise (not on it, or not approved). */
   waitlist?: WaitlistState;
-  requestedAt?: string;
 }
 
 export interface AccessRequestInput {
@@ -326,5 +325,15 @@ export interface WaitlistRequest {
   status: Exclude<WaitlistState, "none">;
   createdAt: string;
   decidedAt?: string;
+  /** The admin's email. */
   decidedBy?: string;
+  /** Set once approval has created the workspace. */
+  workspaceId?: string;
+}
+
+export interface WaitlistPage {
+  /** Oldest first: the queue in the order people joined it. */
+  requests: WaitlistRequest[];
+  /** Workspaces in use against the global cap; approving stops at the cap. */
+  workspaces?: { count: number; cap: number };
 }

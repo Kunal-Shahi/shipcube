@@ -6,7 +6,7 @@ import { signIn } from "./helpers";
 //
 // The landing and route checks run against any console. The full flow needs the local stack's API
 // to serve the waitlist (POST /v1/waitlist, /v1/waitlist/me, /v1/admin/waitlist), the Firebase Auth
-// emulator, and E2E_ADMIN_EMAIL: an address the API treats as a platform admin.
+// emulator, and E2E_ADMIN_EMAIL: an address in the API's SHIPCUBE_PLATFORM_ADMINS.
 
 const API_URL = (process.env.E2E_API_URL ?? "http://127.0.0.1:8080").replace(/\/+$/, "");
 const ADMIN = process.env.E2E_ADMIN_EMAIL ?? "";
@@ -14,7 +14,7 @@ const REQUESTER = `waitlist-${Date.now()}@example.com`;
 
 test("the landing page is public, and the console isn't", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: /deploy internal apps/i })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /your agent ships the app/i })).toBeVisible();
   await expect(page.getByRole("link", { name: "Sign in" }).first()).toBeVisible();
   for (const path of ["/apps", "/admin/waitlist", "/waitlist"]) {
     await page.goto(path);
@@ -22,12 +22,13 @@ test("the landing page is public, and the console isn't", async ({ page }) => {
   }
 });
 
-test("a bot that fills the honeypot is told it worked", async ({ page }) => {
+test("a bot that fills the honeypot sees the same answer", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Work email").fill(`bot-${Date.now()}@example.com`);
   await page.getByLabel("Name").fill("Bot");
   await page.getByLabel("What will you build?").fill("Anything");
-  await page.locator('input[name="website"]').fill("http://spam.example", { force: true });
+  // People can't reach the field (off-screen, aria-hidden, untabbable); a bot sets it directly.
+  await page.locator('input[name="website"]').evaluate((el) => ((el as HTMLInputElement).value = "http://spam.example"));
   await page.getByRole("button", { name: "Request access" }).click();
   await expect(page.getByText("Thanks, you're on the list.")).toBeVisible();
 });
@@ -58,7 +59,7 @@ test.describe("request, approve, sign in", () => {
     await signIn(page, REQUESTER);
     await page.goto("/apps");
     await expect(page).toHaveURL(/\/waitlist$/);
-    await expect(page.getByRole("heading", { name: "You're on the waitlist" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "You're on the list" })).toBeVisible();
     await page.context().close();
   });
 
@@ -77,7 +78,7 @@ test.describe("request, approve, sign in", () => {
     await signIn(page, REQUESTER);
     await page.goto("/apps");
     await expect(page).toHaveURL(/\/(apps|onboarding)/);
-    await expect(page.getByText("You're on the waitlist")).toHaveCount(0);
+    await expect(page.getByText("You're on the list")).toHaveCount(0);
     await page.context().close();
   });
 });

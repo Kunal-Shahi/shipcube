@@ -26,6 +26,7 @@ import type {
   TierId,
   Warehouse,
   AccountStatus,
+  WaitlistPage,
   WaitlistRequest,
   WaitlistState,
 } from "@/lib/types";
@@ -308,6 +309,7 @@ interface ApiWaitlistRequest {
   created_at: string;
   decided_at: string | null;
   decided_by: string | null;
+  workspace_id?: string | null;
 }
 
 export const waitlistFromApi = (r: ApiWaitlistRequest): WaitlistRequest => ({
@@ -319,29 +321,21 @@ export const waitlistFromApi = (r: ApiWaitlistRequest): WaitlistRequest => ({
   createdAt: r.created_at,
   decidedAt: r.decided_at ?? undefined,
   decidedBy: r.decided_by ?? undefined,
+  workspaceId: r.workspace_id ?? undefined,
 });
 
 /**
- * A verified console session that isn't a workspace member gets 401 from /v1/me; it then asks
- * /v1/waitlist/me where its request stands. Any other failure is the API's, and is thrown: a
- * member must never be sent to the waitlist because the API blipped.
+ * /v1/me answers 403 for a verified console session without a workspace: `waitlisted` when the
+ * email is on the list, `no_access` otherwise (not on it, or rejected). Anything else is the API
+ * failing, and is thrown: a member must never be sent to the waitlist because the API blipped.
  */
-export async function accountStatusFrom(
-  me: () => Promise<{ platform_admin?: boolean }>,
-  waitlistMe: () => Promise<{ status: WaitlistState; requested_at?: string | null; platform_admin?: boolean }>,
-): Promise<AccountStatus> {
+export async function accountStatusFrom(me: () => Promise<{ platform_admin?: boolean }>): Promise<AccountStatus> {
   try {
     const m = await me();
     return { member: true, platformAdmin: m.platform_admin === true };
   } catch (e) {
-    if (!(e instanceof ApiError) || (e.code !== "unauthenticated" && e.code !== "permission_denied")) throw e;
-  }
-  try {
-    const w = await waitlistMe();
-    return { member: false, platformAdmin: w.platform_admin === true, waitlist: w.status, requestedAt: w.requested_at ?? undefined };
-  } catch (e) {
-    // An API without the waitlist yet: the person simply hasn't asked.
-    if (e instanceof ApiError && (e.code === "not_found" || e.code === "unauthenticated")) return { member: false, platformAdmin: false, waitlist: "none" };
+    if (e instanceof ApiError && e.code === "waitlisted") return { member: false, platformAdmin: false, waitlist: "pending" };
+    if (e instanceof ApiError && e.code === "no_access") return { member: false, platformAdmin: false, waitlist: "none" };
     throw e;
   }
 }
@@ -634,26 +628,18 @@ export const httpData: ConsoleData = {
     return camelize<Migration>(m);
   },
 
-  async requestAccess(input, clientIp) {
-    // Public. Signed in, the API uses the session's verified email instead of the body's.
-    await api<unknown>("/v1/waitlist", {
-      method: "POST",
-      body: { email: input.email, name: input.name, use_case: input.useCase },
-      headers: clientIp ? { "X-Forwarded-For": clientIp } : undefined,
-    });
-  },
   async accountStatus() {
-    return accountStatusFrom(
-      () => api<{ platform_admin?: boolean }>("/v1/me"),
-      () => api<{ status: WaitlistState; requested_at?: string | null; platform_admin?: boolean }>("/v1/waitlist/me"),
-    );
+    return accountStatusFrom(() => api<{ platform_admin?: boolean }>("/v1/me"));
   },
-  async listWaitlist(status) {
-    const { requests } = await api<{ requests: ApiWaitlistRequest[] }>("/v1/admin/waitlist", { query: { status, limit: 200 } });
-    return requests.map(waitlistFromApi);
+  async listWaitlist(status): Promise<WaitlistPage> {
+    const r = await api<{ items: ApiWaitlistRequest[]; workspaces?: { count: number; cap: number } }>("/v1/admin/waitlist", {
+      query: { status, limit: 500 },
+    });
+    return { requests: r.items.map(waitlistFromApi), workspaces: r.workspaces };
   },
   async decideWaitlist(id, decision) {
-    // Approving creates the workspace; the API makes both calls safe to repeat.
-    return waitlistFromApi(await api<ApiWaitlistRequest>(`/v1/admin/waitlist/${enc(id)}/${decision}`, { method: "POST" }));
+    // Approving creates the workspace. Deciding twice answers 409 conflict; approving past the
+    // global workspace cap answers 409 workspace_cap_reached. Both show the API's message.
+    return waitlistFromApi(await api<ApiWaitlistRequest>(`/v1/admin/waitlist/${enc(id)}:${decision}`, { method: "POST" }));
   },
 };

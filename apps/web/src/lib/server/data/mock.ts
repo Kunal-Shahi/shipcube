@@ -318,18 +318,14 @@ export const mockData: ConsoleData = {
     return m;
   },
 
-  async requestAccess(input) {
-    await wait(400);
-    const known = waitlist.find((r) => r.email.toLowerCase() === input.email.toLowerCase());
-    if (!known) waitlist.unshift({ id: `wl_${waitlist.length + 1}`, ...input, status: "pending", createdAt: new Date().toISOString() });
-  },
   async accountStatus() {
     // DEV_MODE's demo user is a member and a platform admin, so every page is reachable.
     return { member: true, platformAdmin: true };
   },
   async listWaitlist(status) {
     await wait();
-    return status === "all" ? waitlist : waitlist.filter((r) => r.status === status);
+    const rows = status === "all" ? waitlist : waitlist.filter((r) => r.status === status);
+    return { requests: [...rows].reverse(), workspaces: { count: 12, cap: 50 } };
   },
   async decideWaitlist(id, decision) {
     await wait(500);

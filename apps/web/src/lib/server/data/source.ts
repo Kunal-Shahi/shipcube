@@ -2,7 +2,6 @@ import "server-only";
 
 import type {
   AccessGrant,
-  AccessRequestInput,
   AccountStatus,
   ApiToken,
   AppDetail,
@@ -16,6 +15,7 @@ import type {
   ProviderConfig,
   Role,
   Warehouse,
+  WaitlistPage,
   WaitlistRequest,
   WaitlistState,
   WarehouseKind,
@@ -102,10 +102,10 @@ export interface ConsoleData {
   getMigration(id: string): Promise<Migration | null>;
   decideMigration(id: string, decision: "apply" | "reject", opts: { allowBreaking: boolean; note?: string }): Promise<Migration>;
 
-  // Early access. requestAccess is public; signed in, the API takes the email from the session.
-  requestAccess(input: AccessRequestInput, clientIp?: string): Promise<void>;
+  // Early access. Requests come from the landing page's form, which posts from the browser
+  // straight to the API (POST /v1/waitlist); the console reads status and decides.
   /** Member, or where the signed-in person's access request stands. Throws only when the API fails. */
   accountStatus(): Promise<AccountStatus>;
-  listWaitlist(status: WaitlistState | "all"): Promise<WaitlistRequest[]>;
+  listWaitlist(status: WaitlistState | "all"): Promise<WaitlistPage>;
   decideWaitlist(id: string, decision: "approve" | "reject"): Promise<WaitlistRequest>;
 }

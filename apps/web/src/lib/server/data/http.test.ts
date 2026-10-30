@@ -224,34 +224,26 @@ describe("waitlistFromApi", () => {
         id: "wl_1", email: "a@example.com", name: "A", use_case: "A dashboard", status: "pending",
         created_at: "2026-10-31T10:00:00Z", decided_at: null, decided_by: null,
       }),
-    ).toEqual({ id: "wl_1", email: "a@example.com", name: "A", useCase: "A dashboard", status: "pending", createdAt: "2026-10-31T10:00:00Z", decidedAt: undefined, decidedBy: undefined });
+    ).toEqual({ id: "wl_1", email: "a@example.com", name: "A", useCase: "A dashboard", status: "pending", createdAt: "2026-10-31T10:00:00Z", decidedAt: undefined, decidedBy: undefined, workspaceId: undefined });
   });
 });
 
 describe("accountStatusFrom", () => {
-  const unauth = () => Promise.reject(new ApiError("unauthenticated", "no", 401, "r"));
+  const refuse = (code: string, status = 403) => () => Promise.reject(new ApiError(code, code, status, "r"));
 
   it("is a member when /v1/me answers, with the admin flag", async () => {
-    expect(await accountStatusFrom(async () => ({ platform_admin: true }), unauth)).toEqual({ member: true, platformAdmin: true });
-    expect(await accountStatusFrom(async () => ({}), unauth)).toEqual({ member: true, platformAdmin: false });
+    expect(await accountStatusFrom(async () => ({ platform_admin: true }))).toEqual({ member: true, platformAdmin: true });
+    expect(await accountStatusFrom(async () => ({}))).toEqual({ member: true, platformAdmin: false });
   });
 
-  it("asks the waitlist when /v1/me refuses the session", async () => {
-    expect(await accountStatusFrom(unauth, async () => ({ status: "pending", requested_at: "2026-10-31T10:00:00Z" }))).toEqual({
-      member: false,
-      platformAdmin: false,
-      waitlist: "pending",
-      requestedAt: "2026-10-31T10:00:00Z",
-    });
+  it("reads the API's 403 codes for someone without a workspace", async () => {
+    expect(await accountStatusFrom(refuse("waitlisted"))).toEqual({ member: false, platformAdmin: false, waitlist: "pending" });
+    expect(await accountStatusFrom(refuse("no_access"))).toEqual({ member: false, platformAdmin: false, waitlist: "none" });
   });
 
-  it("never sends a member to the waitlist because the API failed", async () => {
-    const down = () => Promise.reject(new ApiError("unavailable", "down", 503, "r"));
-    await expect(accountStatusFrom(down, async () => ({ status: "none" }))).rejects.toThrow("down");
-  });
-
-  it("treats an API without the waitlist as no request yet", async () => {
-    const missing = () => Promise.reject(new ApiError("not_found", "no route", 404, "r"));
-    expect(await accountStatusFrom(unauth, missing)).toEqual({ member: false, platformAdmin: false, waitlist: "none" });
+  it("never sends a member to the waitlist because the API failed or refused the session", async () => {
+    await expect(accountStatusFrom(refuse("unavailable", 503))).rejects.toThrow("unavailable");
+    await expect(accountStatusFrom(refuse("unauthenticated", 401))).rejects.toThrow("unauthenticated");
+    await expect(accountStatusFrom(refuse("permission_denied"))).rejects.toThrow("permission_denied");
   });
 });

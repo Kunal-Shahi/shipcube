@@ -26,11 +26,11 @@ describe("csp()", () => {
 
 describe("which routes need a session", () => {
   it("leaves only the landing page, sign-in and the auth endpoints public", () => {
-    for (const p of ["/", "/sign-in", "/sign-up", "/api/auth/session", "/api/healthz"]) expect(isPublic(p), p).toBe(true);
+    for (const p of ["/", "/opengraph-image", "/sign-in", "/sign-up", "/api/auth/session", "/api/healthz"]) expect(isPublic(p), p).toBe(true);
   });
 
   it("protects every console route, the waitlist page and the admin page", () => {
-    for (const p of ["/apps", "/apps/x", "/approvals", "/settings/tokens", "/billing", "/data", "/setup", "/onboarding", "/waitlist", "/admin/waitlist", "/x", "//apps"]) {
+    for (const p of ["/apps", "/apps/x", "/approvals", "/settings/tokens", "/billing", "/data", "/setup", "/onboarding", "/waitlist", "/admin/waitlist", "/x", "//apps", "/opengraph-image/x"]) {
       expect(isPublic(p), p).toBe(false);
     }
   });

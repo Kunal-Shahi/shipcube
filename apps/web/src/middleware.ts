@@ -1,14 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/auth/types";
-import { emulatorPublicUrl } from "@/lib/server/config";
+import { emulatorPublicUrl, publicApiUrl } from "@/lib/server/config";
 
 // Runs on every page request:
 // 1. A per-request nonce and Content-Security-Policy (Next applies the nonce to its own scripts).
 // 2. A cheap gate: no session cookie means no console. Pages still verify the session itself.
 
-// Pages anyone may open. "/" is the landing page, matched exactly (its "Request access" form posts
-// back to "/" as a server action); everything else needs a session cookie.
-const PUBLIC_EXACT = ["/"];
+// Pages anyone may open, matched exactly: the landing page and its link-preview image. (Its
+// "Request access" form posts from the browser straight to the API.) Everything else needs a session.
+const PUBLIC_EXACT = ["/", "/opengraph-image"];
 const PUBLIC = ["/sign-in", "/sign-up", "/api/auth/session", "/api/healthz"];
 
 export function isPublic(pathname: string) {
@@ -19,6 +19,15 @@ export function csp(nonce: string, dev: boolean) {
   const authDomain = process.env.FIREBASE_AUTH_DOMAIN;
   // Local only (config() refuses it elsewhere): the Firebase Auth emulator serves the sign-in popup and token API.
   const emulator = process.env.AUTH_PROVIDER === "firebase-emulator" ? emulatorPublicUrl(process.env) : null;
+  // The landing page's waitlist form posts from the browser straight to the API (its rate limit is per visitor IP).
+  const apiOrigin = (() => {
+    try {
+      const u = publicApiUrl(process.env);
+      return u ? new URL(u).origin : null;
+    } catch {
+      return null;
+    }
+  })();
   const frames = ["https://*.firebaseapp.com", "https://*.web.app", "https://accounts.google.com", authDomain && `https://${authDomain}`, emulator]
     .filter(Boolean)
     .join(" ");
@@ -29,7 +38,7 @@ export function csp(nonce: string, dev: boolean) {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: https://lh3.googleusercontent.com",
     "font-src 'self'",
-    "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com" + (dev ? " ws:" : "") + (emulator ? ` ${emulator}` : ""),
+    "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com" + (dev ? " ws:" : "") + (emulator ? ` ${emulator}` : "") + (apiOrigin ? ` ${apiOrigin}` : ""),
     `frame-src ${frames}`,
     "frame-ancestors 'none'",
     "form-action 'self'",

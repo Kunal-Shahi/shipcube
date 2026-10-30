@@ -55,20 +55,32 @@ export default async function WaitlistAdminPage({ searchParams }: Props) {
 }
 
 async function Requests({ filter }: { filter: WaitlistState | "all" }) {
-  const requests = await listWaitlist(filter);
+  const { requests, workspaces } = await listWaitlist(filter);
+  const usage = workspaces && (
+    <p className="mb-3 text-[12px] text-fg-muted">
+      <span className="num">{workspaces.count}</span> of <span className="num">{workspaces.cap}</span> workspaces in use. Approving
+      stops at the cap.
+    </p>
+  );
   if (!requests.length) {
     return (
-      <Panel>
-        <EmptyState
-          title={filter === "pending" ? "No requests waiting" : "No requests here"}
-          body="Requests from the landing page's form appear here, newest first."
-        />
-      </Panel>
+      <>
+        {usage}
+        <Panel>
+          <EmptyState
+            title={filter === "pending" ? "No requests waiting" : "No requests here"}
+            body="Requests from the landing page's form appear here, oldest first."
+          />
+        </Panel>
+      </>
     );
   }
   return (
-    <Panel>
-      <WaitlistTable initial={requests} />
-    </Panel>
+    <>
+      {usage}
+      <Panel>
+        <WaitlistTable initial={requests} />
+      </Panel>
+    </>
   );
 }

@@ -12,6 +12,8 @@ export interface Config {
   devMode: boolean;
   /** Base URL of the control-plane API (the shipcube-mcp Cloud Run service in production). */
   apiUrl: string | null;
+  /** The API as browsers reach it, for the landing page's waitlist form (defaults to apiUrl). */
+  publicApiUrl: string | null;
   /** The MCP endpoint users paste into their agent, e.g. https://shipcube-mcp-<n>.<region>.run.app/mcp. */
   mcpUrl: string;
   /** Per-request timeout for API calls. */
@@ -37,6 +39,11 @@ export const DEV_MCP_URL = "http://localhost:8080/mcp";
 /** The emulator's default address, and a demo- project, which the emulator never connects to Google for. */
 export const DEV_AUTH_EMULATOR_HOST = "127.0.0.1:9099";
 export const EMULATOR_PROJECT = "demo-shipcube";
+/** The API's browser-facing base URL; shared with the middleware's CSP (connect-src). */
+export function publicApiUrl(env: Record<string, string | undefined>) {
+  return (env.SHIPCUBE_PUBLIC_API_URL || env.SHIPCUBE_API_URL || "").replace(/\/+$/, "") || null;
+}
+
 /** Shared with the middleware's CSP, which can't import this server-only module's config(). */
 export function emulatorPublicUrl(env: Record<string, string | undefined>) {
   return (env.FIREBASE_AUTH_EMULATOR_PUBLIC_URL || `http://${env.FIREBASE_AUTH_EMULATOR_HOST || DEV_AUTH_EMULATOR_HOST}`).replace(/\/+$/, "");
@@ -55,6 +62,7 @@ export function config(): Config {
   const c: Config = {
     devMode,
     apiUrl: env.SHIPCUBE_API_URL?.replace(/\/+$/, "") || null,
+    publicApiUrl: publicApiUrl(env),
     mcpUrl: env.SHIPCUBE_MCP_URL?.trim() || (devMode ? DEV_MCP_URL : ""),
     apiTimeoutMs: Number(env.SHIPCUBE_API_TIMEOUT_MS ?? 10_000),
     auth,
