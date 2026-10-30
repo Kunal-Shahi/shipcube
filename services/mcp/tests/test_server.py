@@ -38,6 +38,8 @@ async def test_tool_contract():
     assert tools["delete_app"].annotations.destructive_hint is True
     assert tools["data_query"].annotations.read_only_hint is True
     assert "awaiting_approval" in tools["set_access"].description
+    # Keys and endpoints never pass through MCP (#42): ai_config takes neither.
+    assert set(tools["ai_config"].input_schema["properties"]) == {"app", "provider", "model"}
 
 
 async def test_data_tools_run_in_process_with_the_verified_caller(as_agent):
