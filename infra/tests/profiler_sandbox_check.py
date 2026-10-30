@@ -113,6 +113,7 @@ def check(root: Path) -> list[str]:
             if role and role.group(1) != "roles/iam.serviceAccountUser":
                 problems.append(f"{where} grants {role.group(1)} on the sandbox SA; only actAs for the estimator")
     problems += _uploads_worker_problems(resources)
+    problems += _uploads_objects_problems(root)
     return problems
 
 
@@ -120,6 +121,25 @@ def check(root: Path) -> list[str]:
 # (uploads.tf, profiler_source_janitor). Never bucket-wide delete or overwrite.
 WORKER_UPLOAD_ROLES = {"roles/storage.objectViewer", "roles/storage.objectCreator"}
 JANITOR_ROLE = "google_project_iam_custom_role.profiler_source_janitor.id"
+# One ws/ segment, then profiler/: the text between ws/ and /profiler/ equals the first segment
+# after ws/. Only startsWith and extract: IAM conditions have no regex (matches/contains).
+_OBJ = "${local.uploads_objects}"
+JANITOR_CONDITION = (f'resource.name.startsWith("{_OBJ}/ws/") && '
+                     f'resource.name.extract("{_OBJ}/ws/{{ws}}/profiler/") != "" && '
+                     f'resource.name.extract("{_OBJ}/ws/{{ws}}/profiler/") == resource.name.extract("{_OBJ}/ws/{{ws}}/")')
+UPLOADS_OBJECTS = 'uploads_objects = "projects/_/buckets/${google_storage_bucket.uploads.name}/objects"'
+
+
+def _condition_expression(body: str) -> str | None:
+    """The condition's expression: a quoted string or a <<-EOT heredoc."""
+    m = re.search(r"condition\s*\{(.*)\}", body, re.S)
+    if not m:
+        return None
+    here = re.search(r"expression\s*=\s*<<-?(\w+)\n(.*?)\n\s*\1\b", m[1], re.S)
+    if here:
+        return here[2]
+    quoted = re.search(r'expression\s*=\s*"((?:[^"\\]|\\.)*)"', m[1])
+    return quoted[1].replace('\\"', '"') if quoted else None
 
 
 def _uploads_worker_problems(resources) -> list[str]:
@@ -135,10 +155,13 @@ def _uploads_worker_problems(resources) -> list[str]:
             continue
         roles = set(re.findall(r'"(roles/[^"]+)"', body))
         if JANITOR_ROLE in body:
-            cond = re.search(r'expression\s*=\s*"(.*)"\s*$', body, re.M)
-            if not cond or "matches(" not in cond[1] or "^projects/_/buckets/" not in cond[1] \
-                    or "/objects/ws/" not in cond[1] or "/profiler/" not in cond[1] or not cond[1].rstrip(')\\"').endswith("$"):
-                problems.append(f"{where} must be conditioned on an anchored ws/<uuid>/profiler/ object regex")
+            expr = _condition_expression(body)
+            if expr is None:
+                problems.append(f"{where} must have a condition")
+            elif re.search(r"\.(?:matches|contains)\s*\(", expr):
+                problems.append(f"{where} uses matches()/contains(), which IAM conditions can't compile")
+            elif " ".join(expr.split()) != JANITOR_CONDITION:
+                problems.append(f"{where} condition must be exactly: {JANITOR_CONDITION}")
         elif not roles or not roles <= WORKER_UPLOAD_ROLES:
             problems.append(f"{where} gives the worker {sorted(roles - WORKER_UPLOAD_ROLES) or 'a non-literal role'} "
                             f"on the uploads bucket; only viewer, creator and the conditioned janitor role")
@@ -146,6 +169,14 @@ def _uploads_worker_problems(resources) -> list[str]:
                for _, t, n, _ in resources):
         problems.append("missing google_storage_bucket_iam_member.uploads_worker_profiler_janitor")
     return problems
+
+
+def _uploads_objects_problems(root: Path) -> list[str]:
+    texts = [f.read_text() for f in root.rglob("*.tf") if ".terraform" not in f.parts]
+    if not any(re.search(r'uploads_objects\s*=\s*"projects/_/buckets/\$\{google_storage_bucket\.uploads\.name\}/objects"', t)
+               for t in texts):
+        return [f"local.{UPLOADS_OBJECTS} is missing or changed"]
+    return []
 
 
 def main() -> int:

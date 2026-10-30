@@ -80,8 +80,14 @@ UPLOADS_BREAKS = {
     "bucket-wide admin": ('roles/storage.objectViewer", "roles/storage.objectCreator"',
                           'roles/storage.objectViewer", "roles/storage.objectAdmin"'),
     "condition dropped": None,
-    "condition widened": ("/objects/ws/[0-9a-f-]+/profiler/[^/]+$", "/objects/ws/.*"),
-    "unanchored": ('matches(\\"^projects', 'matches(\\"projects'),
+    "segment check dropped": (' &&\n      resource.name.extract("${local.uploads_objects}/ws/{ws}/profiler/") == '
+                              'resource.name.extract("${local.uploads_objects}/ws/{ws}/")', ""),
+    "regex reintroduced": ('resource.name.startsWith("${local.uploads_objects}/ws/") &&',
+                           'resource.name.matches("^${local.uploads_objects}/ws/[^/]+/profiler/") &&'),
+    "contains used": ('!= ""', '!= "" && !resource.name.contains("..")'),
+    "whole bucket": ('startsWith("${local.uploads_objects}/ws/")', 'startsWith("${local.uploads_objects}/")'),
+    "other bucket": ('"projects/_/buckets/${google_storage_bucket.uploads.name}/objects"',
+                     '"projects/_/buckets/other/objects"'),
     "extra permission": ('permissions = ["storage.objects.delete"]',
                          'permissions = ["storage.objects.delete", "storage.objects.create"]'),
 }
@@ -101,3 +107,52 @@ def test_worker_delete_on_uploads_stays_profiler_only(tmp_path, name):
     assert broken != text, name
     up.write_text(broken)
     assert chk.check(root), name
+
+
+# --- what the janitor condition allows, under IAM's extract() -----------------------------
+
+def _extract(name: str, template: str, shortest: bool = True) -> str:
+    """IAM's resource.name.extract(): the text where {placeholder} sits, or "" if the template
+    doesn't match. `shortest` is the documented first-occurrence reading; the other reading is
+    checked too, to show the condition is never broader under either."""
+    prefix, _, rest = template.partition("{ws}")
+    if not name.startswith(prefix):
+        return ""
+    tail = name[len(prefix):]
+    if not rest:
+        return tail
+    i = tail.find(rest) if shortest else tail.rfind(rest)
+    return tail[:i] if i >= 0 else ""
+
+
+def _janitor_allows(name: str, bucket: str = "shipcube-uploads-ks", shortest: bool = True) -> bool:
+    o = f"projects/_/buckets/{bucket}/objects"
+    seg_profiler = _extract(name, f"{o}/ws/{{ws}}/profiler/", shortest)
+    return (name.startswith(f"{o}/ws/") and seg_profiler != ""
+            and seg_profiler == _extract(name, f"{o}/ws/{{ws}}/", shortest))
+
+
+def test_janitor_condition_text_is_the_one_modelled():
+    expr = chk._condition_expression((TF / "uploads.tf").read_text().split("uploads_worker_profiler_janitor", 1)[1])
+    assert " ".join(expr.split()) == chk.JANITOR_CONDITION
+
+
+@pytest.mark.parametrize("obj,allowed", [
+    ("ws/3c1d5e2a-7b4f-4e8a-9c6d-1234567890ab/profiler/est-1.tar.gz", True),
+    ("ws/3c1d/profiler/sub/x.tar.gz", True),                    # anything under that one folder
+    ("ws/3c1d/uploads/upl_1.tgz", False),
+    ("ws/3c1d/build-logs/log.txt", False),
+    ("ws/a/b/profiler/x", False),                               # two segments before profiler/
+    ("ws/3c1d/x/profiler/y", False),
+    ("ws//profiler/x", False),                                  # empty segment
+    ("ws/3c1d/profilerX/y", False),
+    ("ws/3c1d/profiler", False),
+    ("other/3c1d/profiler/x", False),
+    ("profiler/x", False),
+])
+def test_janitor_condition_allows_exactly_one_ws_segment_then_profiler(obj, allowed):
+    name = f"projects/_/buckets/shipcube-uploads-ks/objects/{obj}"
+    assert _janitor_allows(name) is allowed, obj
+    if not allowed:                                            # never broader under the other reading
+        assert _janitor_allows(name, shortest=False) is False, obj
+    assert _janitor_allows(name.replace("shipcube-uploads-ks", "other-bucket")) is False

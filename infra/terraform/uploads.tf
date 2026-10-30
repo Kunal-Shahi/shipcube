@@ -42,9 +42,20 @@ resource "google_storage_bucket_iam_member" "uploads_worker_profiler_janitor" {
   bucket = google_storage_bucket.uploads.name
   role   = google_project_iam_custom_role.profiler_source_janitor.id
   member = google_service_account.worker.member
+  # IAM conditions have no regex (matches() and contains() fail to compile), so: the text
+  # between ws/ and /profiler/ must equal the first segment after ws/, i.e. exactly one
+  # segment, followed directly by profiler/. Checked with IAM's lintPolicy.
   condition {
     title       = "profiler sources only"
-    description = "ws/<workspace uuid>/profiler/ objects"
-    expression  = "resource.name.matches(\"^projects/_/buckets/${replace(google_storage_bucket.uploads.name, ".", "\\\\.")}/objects/ws/[0-9a-f-]+/profiler/[^/]+$\")"
+    description = "ws/<one segment>/profiler/ objects"
+    expression  = <<-EOT
+      resource.name.startsWith("${local.uploads_objects}/ws/") &&
+      resource.name.extract("${local.uploads_objects}/ws/{ws}/profiler/") != "" &&
+      resource.name.extract("${local.uploads_objects}/ws/{ws}/profiler/") == resource.name.extract("${local.uploads_objects}/ws/{ws}/")
+    EOT
   }
+}
+
+locals {
+  uploads_objects = "projects/_/buckets/${google_storage_bucket.uploads.name}/objects"
 }
