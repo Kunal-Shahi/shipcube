@@ -232,7 +232,8 @@ def test_openai_compatible_apps_inherit_the_endpoint_saved_with_the_key(client, 
     agent, human = ws["agent"], ws["human"]
     body = {"provider": "openai_compatible", "model": "llama-3.3"}
     assert client.put("/v1/apps/compat-app/ai", json=body, headers=agent).status_code == 404  # nothing saved yet
-    client.put("/v1/ai/providers/openai-compatible", json={"key": KEY, "base_url": "https://llm.example.com/v1",
+    # Trailing slashes are stripped when the key is saved, so the binding compares exactly.
+    client.put("/v1/ai/providers/openai-compatible", json={"key": KEY, "base_url": "https://llm.example.com/v1//",
                                                            "model": "llama-3.3"}, headers=human)
     r = client.put("/v1/apps/compat-app/ai", json=body, headers=agent)
     assert r.status_code == 200 and r.json()["ai"]["key_secret"] == "ai-provider-openai-compatible"
