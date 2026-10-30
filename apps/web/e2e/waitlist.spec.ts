@@ -8,6 +8,10 @@ import { signIn } from "./helpers";
 // to serve the waitlist (POST /v1/waitlist, /v1/waitlist/me, /v1/admin/waitlist), the Firebase Auth
 // emulator, and E2E_ADMIN_EMAIL: an address in the API's SHIPCUBE_PLATFORM_ADMINS.
 
+// The local stack runs this spec against a second console without a dev API session
+// (console-waitlist), so each person is themselves; elsewhere it uses E2E_BASE_URL.
+if (process.env.E2E_WAITLIST_BASE_URL) test.use({ baseURL: process.env.E2E_WAITLIST_BASE_URL });
+
 const API_URL = (process.env.E2E_API_URL ?? "http://127.0.0.1:8080").replace(/\/+$/, "");
 const ADMIN = process.env.E2E_ADMIN_EMAIL ?? "";
 const REQUESTER = `waitlist-${Date.now()}@example.com`;
