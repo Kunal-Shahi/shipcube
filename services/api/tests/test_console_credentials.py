@@ -3,8 +3,12 @@ session cookie). Each must verify against its own key set and issuer."""
 
 from __future__ import annotations
 
+import dataclasses
+import uuid
+
 import pytest
 
+from shipcube_api import admin, auth, db
 from shipcube_api.auth import SESSION_COOKIE_CERTS, _verify_console_jwt
 
 P = "shipcube-control-ks"
@@ -46,3 +50,53 @@ def test_session_cookie_from_another_project_rejected():
 def test_neither_reports_the_id_token_error():
     with pytest.raises(ValueError, match="KgkHcg"):
         _verify_console_jwt("t", P, FakeIdToken(), None)
+
+
+# --- mapping a verified console sign-in to a workspace member ------------------------------
+
+
+@pytest.fixture
+def idp(monkeypatch, client):
+    """Identity Platform on, with _verify_console_jwt returning whatever claims a test sets.
+    `client` starts the app, which migrates the test database."""
+    monkeypatch.setattr(auth, "settings", dataclasses.replace(auth.settings, idp_project=P))
+    box: dict = {}
+    monkeypatch.setattr(auth, "_verify_console_jwt", lambda token, project, id_token, request: box["claims"])
+    return box
+
+
+def _pending_member():
+    email = f"Invitee-{uuid.uuid4().hex[:8]}@example.com"
+    user_id, ws_id, _ = admin.bootstrap(email, f"ws-{uuid.uuid4().hex[:8]}", "Test", None)
+    return email, user_id, ws_id
+
+
+def test_first_sign_in_claims_the_pending_user_by_verified_email(idp):
+    email, user_id, ws_id = _pending_member()
+    uid = f"uid-{uuid.uuid4().hex[:8]}"
+    idp["claims"] = {"sub": uid, "email": email.lower(), "email_verified": True}
+    c = auth.verify("session-cookie", None)
+    assert c is not None and c.user_id == user_id and c.workspace_id == ws_id and c.via == "console"
+    with db.worker_tx() as conn:
+        assert conn.execute("select firebase_uid from users where id = %s", (user_id,)).fetchone()["firebase_uid"] == uid
+    # Later sign-ins find the user by uid.
+    idp["claims"] = {"sub": uid}
+    assert auth.verify("session-cookie", None).user_id == user_id
+
+
+def test_unverified_email_claims_nothing(idp):
+    email, user_id, _ = _pending_member()
+    idp["claims"] = {"sub": f"uid-{uuid.uuid4().hex[:8]}", "email": email, "email_verified": False}
+    assert auth.verify("session-cookie", None) is None
+    with db.worker_tx() as conn:
+        assert conn.execute("select firebase_uid from users where id = %s", (user_id,)).fetchone()["firebase_uid"].startswith("pending:")
+
+
+def test_a_bound_user_is_never_reclaimed_by_email(idp):
+    email, user_id, _ = _pending_member()
+    first = f"uid-{uuid.uuid4().hex[:8]}"
+    idp["claims"] = {"sub": first, "email": email, "email_verified": True}
+    assert auth.verify("session-cookie", None).user_id == user_id
+    # Another Google account with the same verified email can't take the row over.
+    idp["claims"] = {"sub": f"uid-{uuid.uuid4().hex[:8]}", "email": email, "email_verified": True}
+    assert auth.verify("session-cookie", None) is None

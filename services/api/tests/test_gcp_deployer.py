@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from shipcube_api.deploy import gcp
+from shipcube_api.deploy import gcp, isolation
 from shipcube_api.deploy.base import AppRef, DeployError, Target, normalize_caps
 from shipcube_api.settings import Settings
 
@@ -139,24 +139,17 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
     assert all("managedFolders" not in u and "repositories?" not in u for _, u, _, _ in deployer._sessions.get(None, FakeSession({})).calls)
 
 
-def test_ensure_link_deployer_creates_the_sa_and_lets_only_api_and_worker_use_it(deployer):
-    sa = "ws-3c1d5e2a7b4f-deployer@shipcube-control-ks.iam.gserviceaccount.com"
-    adc = FakeSession({
-        ("POST", ":getIamPolicy"): (200, {"etag": "e", "bindings": [
-            {"role": "roles/iam.serviceAccountTokenCreator", "members": [f"serviceAccount:{deployer.s.worker_sa}"]}]}),
-        ("POST", ":setIamPolicy"): (200, {}),
-        ("POST", "/serviceAccounts"): (409, {"error": {"message": "exists"}}),  # a retry: already created
-    })
+def test_ensure_link_deployer_only_creates_the_sa_in_the_links_project(deployer):
+    sa = isolation.link_deployer_sa(deployer.s, WS)
+    assert sa == f"ws-{WS.replace('-', '')[:12]}-deployer@shipcube-links-ks.iam.gserviceaccount.com"
+    adc = FakeSession({("POST", "/serviceAccounts"): (409, {"error": {"message": "exists"}})})  # a retry
     deployer._sessions[None] = adc
     deployer.ensure_link_deployer(WS, sa)
-    deployer.ensure_link_deployer(WS, sa)  # cached: no second round of calls
+    deployer.ensure_link_deployer(WS, sa)  # cached: no second call
     calls = [(m, u.split("/v1/")[-1], b) for m, u, b, _ in adc.calls]
-    assert calls[0][0:2] == ("POST", "projects/shipcube-control-ks/serviceAccounts")
-    assert calls[0][2]["accountId"] == "ws-3c1d5e2a7b4f-deployer"
-    assert calls[2][1] == f"projects/shipcube-control-ks/serviceAccounts/{sa}:setIamPolicy"
-    assert calls[2][2]["policy"] == {"etag": "e", "bindings": [{"role": "roles/iam.serviceAccountTokenCreator", "members": [
-        f"serviceAccount:{deployer.s.worker_sa}", f"serviceAccount:{deployer.s.api_sa}"]}]}
-    assert len(adc.calls) == 3
+    # One create, nothing else: no getIamPolicy/setIamPolicy, which the API may no longer call (#15).
+    assert [c[0:2] for c in calls] == [("POST", "projects/shipcube-links-ks/serviceAccounts")]
+    assert calls[0][2]["accountId"] == f"ws-{WS.replace('-', '')[:12]}-deployer"
 
 
 @pytest.mark.parametrize("bucket,obj", [
@@ -221,11 +214,14 @@ def test_deploy_is_private_gen2_scale_to_zero_with_iap(deployer):
                                         "response": {"uri": "https://x.run.app", "latestReadyRevision": "a/b/rev-1"}}),
         ("GET", ":getIamPolicy"): (200, {"bindings": []}),
     })
+    prov = FakeSession({})
     deployer._sessions[None] = sess
+    deployer._sessions[deployer.s.provisioner_sa] = prov
     out = deployer.deploy(APP, f"{REPO}/{APP.service}@{DIGEST}", {"max_instances": 2, "concurrency": 40, "cpu": "1", "memory": "512Mi", "timeout_s": 60}, {})
     assert out.url == "https://x.run.app" and out.revision == "rev-1"
-    sa_create = next(c for c in sess.calls if c[0] == "POST" and c[1].endswith("/serviceAccounts"))
+    sa_create = next(c for c in prov.calls if c[0] == "POST" and c[1].endswith("/serviceAccounts"))  # the provisioner's (#16)
     assert sa_create[2]["accountId"] == APP.runtime_sa.split("@")[0]
+    assert not any(c[1].endswith("/serviceAccounts") for c in sess.calls)
     patch = next(c for c in sess.calls if c[0] == "PATCH")
     svc = patch[2]
     assert svc["iapEnabled"] is True and svc["invokerIamDisabled"] is False
@@ -271,3 +267,90 @@ def test_soft_delete_blocks_ingress_and_access(deployer):
     assert iam[2]["policy"]["bindings"] == []
     patch = next(c for c in sess.calls if c[0] == "PATCH")
     assert patch[2] == {"ingress": "INGRESS_TRAFFIC_INTERNAL_ONLY"} and patch[3] == {"updateMask": "ingress"}
+
+
+# --- #16: the hosted deployer may act only as each app's own runtime SA ---------------------------
+
+HOSTED_DEPLOYER = "sc-hosted-deployer@shipcube-control-ks.iam.gserviceaccount.com"
+
+
+@pytest.fixture
+def hosted(monkeypatch):
+    monkeypatch.setattr(gcp.google.auth, "default", lambda scopes: (object(), "p"))
+    d = gcp.GcpDeployer(Settings(hosted_deployer_sa=HOSTED_DEPLOYER))
+    d._project_numbers["shipcube-apps-ks"] = "330999971585"
+    d._iap_agents["shipcube-apps-ks"] = "service-330999971585@gcp-sa-iap.iam.gserviceaccount.com"
+    return d
+
+
+def test_hosted_runtime_sa_grants_the_deployer_act_as_on_that_sa_only(hosted):
+    prov = FakeSession({("POST", ":getIamPolicy"): (200, {"etag": "e", "bindings": []})})
+    dep = FakeSession({
+        ("PATCH", "/services/"): (200, {"name": "operations/1", "done": True, "response": {"uri": "https://x.run.app"}}),
+        ("GET", ":getIamPolicy"): (200, {"bindings": []}),
+    })
+    hosted._sessions[hosted.s.provisioner_sa] = prov
+    hosted._sessions[HOSTED_DEPLOYER] = dep
+    hosted.deploy(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {})
+    sa_url = f"projects/shipcube-apps-ks/serviceAccounts/{APP.runtime_sa}"
+    calls = [(m, u.split("/v1/")[-1], b) for m, u, b, _ in prov.calls]
+    assert calls[0][0:2] == ("POST", "projects/shipcube-apps-ks/serviceAccounts")
+    set_policy = next(c for c in calls if c[1] == f"{sa_url}:setIamPolicy")
+    assert set_policy[2]["policy"] == {"etag": "e", "bindings": [
+        {"role": "roles/iam.serviceAccountUser", "members": [f"serviceAccount:{HOSTED_DEPLOYER}"]}]}
+    # The deployer itself never creates SAs or edits their IAM.
+    assert not any("/serviceAccounts" in u for _, u, _, _ in dep.calls)
+
+
+def test_hosted_runtime_sa_binding_is_idempotent(hosted):
+    prov = FakeSession({("POST", ":getIamPolicy"): (200, {"etag": "e", "bindings": [
+        {"role": "roles/iam.serviceAccountUser", "members": [f"serviceAccount:{HOSTED_DEPLOYER}"]}]})})
+    hosted._sessions[hosted.s.provisioner_sa] = prov
+    assert hosted._ensure_runtime_sa(FakeSession({}), APP) == APP.runtime_sa
+    assert not any(u.endswith(":setIamPolicy") for _, u, _, _ in prov.calls)
+
+
+def test_purge_deletes_the_hosted_runtime_sa_as_the_provisioner(hosted):
+    prov = FakeSession({})
+    dep = FakeSession({("DELETE", "/services/"): (200, {"name": "operations/1", "done": True}),
+                       ("DELETE", "/packages/"): (200, {"name": "operations/2", "done": True})})
+    hosted._sessions[hosted.s.provisioner_sa] = prov
+    hosted._sessions[HOSTED_DEPLOYER] = dep
+    hosted.purge(APP)
+    assert ("DELETE", f"https://iam.googleapis.com/v1/projects/shipcube-apps-ks/serviceAccounts/{APP.runtime_sa}") in [
+        (m, u) for m, u, _, _ in prov.calls]
+    assert not any("/serviceAccounts/" in u for _, u, _, _ in dep.calls)
+
+
+def test_retry_act_as_waits_for_a_new_binding_only(monkeypatch):
+    monkeypatch.setattr(gcp.time, "sleep", lambda s: None)
+    tries = []
+
+    def flaky():
+        tries.append(1)
+        if len(tries) < 3:
+            raise DeployError("permission_denied", "Permission 'iam.serviceaccounts.actAs' denied on service account app-x")
+        return "ok"
+
+    assert gcp.GcpDeployer._retry_act_as(flaky) == "ok" and len(tries) == 3
+
+    def other():
+        tries.append(1)
+        raise DeployError("permission_denied", "Permission 'run.services.update' denied")
+
+    tries.clear()
+    with pytest.raises(DeployError):
+        gcp.GcpDeployer._retry_act_as(other)
+    assert len(tries) == 1
+
+
+def test_public_services_finds_all_users_bindings(hosted):
+    base = "/projects/shipcube-apps-ks/locations/asia-south1/services"
+    adc = FakeSession({
+        ("GET", "a:getIamPolicy"): (200, {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}),
+        ("GET", "b:getIamPolicy"): (200, {"bindings": [{"role": "roles/run.invoker", "members": ["serviceAccount:iap@x"]}]}),
+        ("GET", base): (200, {"services": [{"name": f"projects/shipcube-apps-ks/locations/asia-south1/services/a"},
+                                           {"name": f"projects/shipcube-apps-ks/locations/asia-south1/services/b"}]}),
+    })
+    hosted._sessions[None] = adc
+    assert hosted.public_services(["asia-south1"]) == (["projects/shipcube-apps-ks/locations/asia-south1/services/a"], 2)

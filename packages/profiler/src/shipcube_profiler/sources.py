@@ -9,15 +9,19 @@ Source shapes follow the control-plane contract (services/api models):
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import re
 import shutil
 import signal
+import socket
 import subprocess
 import tarfile
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 INLINE_MAX_FILES = 50
 INLINE_MAX_BYTES = 256 * 1024
@@ -133,6 +137,72 @@ def _reject_symlinks(root: Path) -> None:
                 raise SourceError(f"the checkout contains a symlink ({name}); symlinks aren't allowed")
 
 
+_HOSTNAME = re.compile(r"^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$")
+_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@/%-]*$")
+
+
+def _safe_git_url(url: str) -> tuple[str, str, int]:
+    """(rebuilt URL, host, port) for an https git source; git only ever sees the rebuilt URL.
+
+    Python's parser and curl must agree on the host, so anything they might read
+    differently is refused: userinfo (`https://evil@good/`), backslashes
+    (`https://good\\@evil/`), `%` or non-ASCII in the authority, whitespace or control
+    characters anywhere, queries and fragments."""
+    if any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7f or c == "\\" for c in url) or not url.isascii():
+        raise SourceError("git URL has characters that aren't allowed")
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        raise SourceError("git sources must be https:// URLs")
+    if "@" in parts.netloc or "%" in parts.netloc:
+        raise SourceError("git URL must not carry credentials or encoded characters in its host")
+    if parts.query or parts.fragment or "?" in url or "#" in url:
+        raise SourceError("git URL must not have a query or fragment")
+    host = (parts.hostname or "").rstrip(".")
+    try:
+        port = parts.port or 443
+    except ValueError as e:
+        raise SourceError(f"bad port in git URL: {e}") from e
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is None and not _HOSTNAME.match(host):
+        raise SourceError(f"git host {host!r} isn't a valid hostname")
+    path = parts.path or "/"
+    if not _PATH.match(path) or "/../" in f"{path}/" or "/./" in f"{path}/":
+        raise SourceError("git URL path has characters or segments that aren't allowed")
+    netloc = f"[{host}]" if isinstance(literal, ipaddress.IPv6Address) else host
+    if parts.port is not None:
+        netloc += f":{port}"
+    return f"https://{netloc}{path}", host, port
+
+
+def _resolve_public(url: str) -> list[str]:
+    """`-c` options pinning an https URL's host to a public address (red-team P-3, #23).
+
+    The host is resolved once here and every address must be public (not private,
+    loopback, link-local such as the metadata server, CGNAT, multicast or reserved).
+    git then connects to the checked address (http.curloptResolve), so DNS can't
+    rebind it between the check and the connect, and redirects are off, so it can't be
+    bounced to an internal host either."""
+    _, host, port = _safe_git_url(url)
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError) as e:
+        raise SourceError(f"git host {host!r} doesn't resolve") from e
+    addrs = sorted({info[4][0].split("%", 1)[0] for info in infos}, key=lambda a: (":" in a, a))
+    for a in addrs:
+        ip = ipaddress.ip_address(a)
+        if getattr(ip, "ipv4_mapped", None):
+            ip = ip.ipv4_mapped
+        if not ip.is_global or ip.is_multicast:
+            raise SourceError(f"git host {host!r} resolves to a non-public address ({a}); only public hosts are allowed")
+    if not addrs:
+        raise SourceError(f"git host {host!r} doesn't resolve")
+    pinned = f"[{addrs[0]}]" if ":" in addrs[0] else addrs[0]
+    return ["-c", f"http.curloptResolve={host}:{port}:{pinned}", "-c", "http.followRedirects=false"]
+
+
 def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) -> Path:
     """A shallow, size- and time-capped clone of one branch, in three steps:
 
@@ -156,7 +226,12 @@ def _clone(url: str, ref: str | None, target: Path, allow_file: bool = False) ->
     deadline = time.monotonic() + GIT_CLONE_TIMEOUT_S
     env = _git_env(target.parent, allow_file)
     cfg = _git_config(allow_file)
-    clone = [*cfg, "clone", "--quiet", "--no-checkout", "--depth", "1", "--single-branch", "--no-tags",
+    if allow_file and url.startswith("file://"):
+        pin = []
+    else:
+        url = _safe_git_url(url)[0]      # git sees only the rebuilt URL, never the raw string
+        pin = _resolve_public(url)
+    clone = [*cfg, *pin, "clone", "--quiet", "--no-checkout", "--depth", "1", "--single-branch", "--no-tags",
              "--no-recurse-submodules", f"--filter=blob:limit={GIT_MAX_BLOB_BYTES}"]
     if ref:
         clone += ["--branch", ref]
