@@ -334,9 +334,10 @@ def replay(conn, workspace_id: str, kind: str, app_id: Any, payload: dict[str, A
         return None, idem
     if bytes(prior["request_hash"]) != _request_hash(kind, app_id, payload):
         raise Conflict("idempotency key reused with a different request")
-    latest = conn.execute("select id from operations where app_id = %s and kind = %s order by created_at desc limit 1",
-                          (app_id, kind)).fetchone()
-    if latest is not None and latest["id"] == prior["id"]:
+    # Operations created in the prior's own transaction share its created_at and don't count as later.
+    later = conn.execute("select 1 from operations where app_id = %s and kind = %s and created_at > %s limit 1",
+                         (app_id, kind, prior["created_at"])).fetchone()
+    if later is None:
         return op_view(prior, _slug(conn, prior["app_id"])), idem
     return None, None
 
