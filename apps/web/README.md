@@ -69,6 +69,7 @@ ShipCube is in early access, with a waitlist that a platform admin approves by h
 | Route | Who | What |
 |---|---|---|
 | `/` | Anyone | The landing page. Its "Request access" form posts from the browser straight to `POST /v1/waitlist` (`SHIPCUBE_PUBLIC_API_URL`), so the API's per-IP limit sees the visitor's own IP. The API allows that one cross-origin call from the origins in `SHIPCUBE_CONSOLE_ORIGINS` (run.app, and the Firebase Hosting address once it's added); on a host not in that list, the form becomes a link to the first one's `/#request-access`. A hidden honeypot is sent for the API to drop. The link preview is `/opengraph-image`, with absolute URLs from the request's host. |
+| `/terms`, `/privacy` | Anyone | The terms of use (with the acceptable-use policy) and the privacy notice. Draft text for review. The request-access form needs both agreed to and sends `terms_version` (`src/lib/legal.ts`); bump it when either page changes in substance. |
 | `/waitlist` | Signed in, no workspace | `/v1/me` refuses the session (403 `waitlisted`/`no_access`, or 401 on older APIs); `/v1/waitlist/me` gives the state: "You're on the list", approved, not approved, or a one-click "Request access" (server-side with the session, so the API uses the verified email). The console layout and onboarding send non-members here; an API failure never does. |
 | `/admin/waitlist` | Platform admins | Its own layout (`src/app/(admin)`), so an admin needs no workspace. Requests newest first, Approve and Reject, and workspaces used against the cap. 404 for everyone else; the API enforces it too. |
 
@@ -84,6 +85,7 @@ Everything is read from the environment at request time.
 | `SHIPCUBE_MCP_URL` | Yes, unless `DEV_MODE=1` | The MCP endpoint shown on the setup guide: `<your ShipCube MCP URL>`, the `shipcube-mcp` service URL plus `/mcp`. Must be `https` in production; the server exits at boot without it. `DEV_MODE` defaults to `http://localhost:8080/mcp` |
 | `SHIPCUBE_CONSOLE_ORIGINS` | No (`SHIPCUBE_CONSOLE_URL`) | Comma-separated origins the API accepts the waitlist form from: the same value the API gets. The first is canonical. On a host not listed, the landing page's form becomes a link to the canonical one |
 | `SHIPCUBE_PUBLIC_API_URL` | No (`SHIPCUBE_API_URL`) | The API as browsers reach it, for the landing page's waitlist form, and allowed in the CSP's `connect-src`. Set it when the console reaches the API at an internal address (Docker Compose) |
+| `SHIPCUBE_CONTACT_EMAIL` | No | The address `/terms` and `/privacy` give for questions and deletion requests. Unset or not an address: the pages show a visible placeholder |
 | `SHIPCUBE_API_TIMEOUT_MS` | No (10000) | Per-request timeout for API calls |
 | `AUTH_PROVIDER` | No | `identity-platform` (default). `DEV_MODE` only: `firebase-emulator` (the real sign-in flow against the Firebase Auth emulator) or `mock` |
 | `FIREBASE_AUTH_EMULATOR_HOST` | With `firebase-emulator` (`127.0.0.1:9099`) | The emulator as the console server reaches it. Refused outside `DEV_MODE` with any provider, because the Admin SDK would accept unsigned tokens |
