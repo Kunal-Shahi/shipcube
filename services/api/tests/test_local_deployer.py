@@ -40,11 +40,17 @@ class FakeDocker:
 
 
 class FakeBlob:
-    def __init__(self, store, name):
-        self.store, self.name, self.size = store, name, None
+    """GCS-like: every write is a new generation; asking for an old generation finds nothing."""
+
+    def __init__(self, store, name, generation=None):
+        self.store, self.name, self.size, self.want = store, name, None, generation
+
+    @property
+    def generation(self):
+        return self.store.generations.get(self.name)
 
     def exists(self):
-        return self.name in self.store
+        return self.name in self.store and (self.want is None or self.generation == self.want)
 
     def reload(self):
         self.size = len(self.store[self.name])
@@ -56,12 +62,25 @@ class FakeBlob:
         self.store[self.name] = data
 
 
+class _Store(dict):
+    def __init__(self):
+        super().__init__()
+        self.generations: dict[str, int] = {}
+
+    def __setitem__(self, name, data):
+        super().__setitem__(name, data)
+        self.generations[name] = self.generations.get(name, 0) + 1
+
+
 class FakeBucket:
     def __init__(self):
-        self.store = {}
+        self.store = _Store()
 
-    def blob(self, name):
-        return FakeBlob(self.store, name)
+    def blob(self, name, generation=None):
+        return FakeBlob(self.store, name, generation)
+
+    def get_blob(self, name):
+        return FakeBlob(self.store, name) if name in self.store else None
 
 
 def tgz(files: dict[str, str]) -> bytes:
@@ -104,7 +123,7 @@ def test_upload_build_uses_only_the_workspace_object_and_namespace(d):
     obj = isolation.upload_object(d.s, WS, "upl_0123456789ab")
     d.fake_bucket.store[obj] = tgz({"main.py": "print(1)", "requirements.txt": ""})
     staged = d.stage_source(app(), {"kind": "upload", "upload_id": "upl_0123456789ab"}, "op_1")
-    assert staged == {"storageSource": {"bucket": "shipcube-uploads-ks", "object": obj}}
+    assert staged == {"storageSource": {"bucket": "shipcube-uploads-ks", "object": obj, "generation": "1"}}  # pinned
     image = d.build(app(), staged, "op_1", lambda: False, lambda _: None)
     ns = f"shipcube.local/ws-{WS.replace('-', '')[:20]}/"
     assert image == f"{ns}{app().service}@{IMAGE_ID}"

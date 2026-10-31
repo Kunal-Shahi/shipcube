@@ -86,8 +86,12 @@ class Deployer(Protocol):
     def route_traffic(self, app: AppRef, revision: str) -> None:
         """Send 100% of traffic to an existing revision (rollback)."""
 
-    def download_upload(self, workspace_id: str, upload_id: str, dest: Any) -> Any:
-        """Fetch an uploaded source tarball to a local path (for the estimator)."""
+    def upload_generation(self, workspace_id: str, upload_id: str) -> int:
+        """The upload object's current generation (the version a screen reads and a build must use)."""
+
+    def download_upload(self, workspace_id: str, upload_id: str, dest: Any, generation: int | None = None) -> Any:
+        """Fetch an uploaded source tarball to a local path (for the estimator and the abuse screen);
+        with generation, exactly that version or not found."""
 
     def delete_objects(self, workspace_id: str, names: list[str]) -> None:
         """Delete source objects inside the workspace's uploads folder; a missing one is fine."""

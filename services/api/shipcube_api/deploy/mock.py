@@ -15,6 +15,7 @@ from .base import AppRef, Deployed, DeployError, ShouldStop
 
 class MockDeployer:
     name = "mock"
+    screens_sources = False  # nothing is built or deployed, so there's nothing to pre-screen
 
     def __init__(self, speed: float = 1.0) -> None:
         self.speed = speed
@@ -74,7 +75,10 @@ class MockDeployer:
             isolation.check_object(settings, workspace_id, settings.upload_bucket, name)
             self.uploads.discard(name)
 
-    def download_upload(self, workspace_id: str, upload_id: str, dest: Any) -> Any:
+    def upload_generation(self, workspace_id: str, upload_id: str) -> int:
+        return 1
+
+    def download_upload(self, workspace_id: str, upload_id: str, dest: Any, generation: int | None = None) -> Any:
         raise NotImplementedError("the mock deployer stores no uploads")
 
     def set_access(self, app: AppRef, principals: list[str]) -> None:

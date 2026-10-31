@@ -18,7 +18,7 @@ def test_every_migration_is_applied_with_its_checksum(client):
     assert [f.stem for f in files] == ["0001_security_schema", "0002_operations_runner",
                                        "0003_tenant_rls_and_rate_counters", "0004_api_token_lookup",
                                        "0005_lock_migration_ledger", "0006_profiler_guard", "0007_gateway_counters",
-                                       "0008_waitlist", "0009_waitlist_consent"]
+                                       "0008_waitlist", "0009_waitlist_consent", "0010_strikes_per_source"]
     for f in files:
         assert applied[f.stem] == hashlib.sha256(f.read_bytes()).hexdigest()
     assert db.pending_migrations() == []
