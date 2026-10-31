@@ -143,7 +143,7 @@ export function HeroStage() {
 
         <figure className="flex min-h-[300px] flex-1 flex-col overflow-hidden rounded-xl border border-border-strong bg-[#0a0f24]/90">
           <figcaption className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5 text-[12px] text-fg-subtle">
-            <span>Claude Code, with ShipCube connected</span>
+            <span>Muse / Claude Code, with ShipCube connected</span>
             <button
               type="button"
               onClick={() => pick(active)}

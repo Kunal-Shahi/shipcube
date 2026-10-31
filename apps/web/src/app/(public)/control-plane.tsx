@@ -247,7 +247,7 @@ function ApprovalArt() {
       <div className="mt-3">
         <Row label="What changes" value="The app stops serving" />
         <Row label="Data" value="Kept, restorable from the console" />
-        <Row label="Asked by" value="Claude Code, with your token" />
+        <Row label="Asked by" value="Muse / Claude Code, with your token" />
       </div>
       <div className="mt-4 flex gap-2" aria-hidden>
         <span className="rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg">Delete app</span>

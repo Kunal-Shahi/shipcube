@@ -16,7 +16,7 @@ const display = Bricolage_Grotesque({ subsets: ["latin"], variable: "--font-disp
 
 const TITLE = "ShipCube: your agent builds it, the cloud runs it";
 const DESCRIPTION =
-  "One control plane for AI-built apps, jobs and data on Google Cloud. Claude Code, Cursor and other agents estimate, deploy, schedule and cap work from the conversation, and a person approves anything risky.";
+  "One control plane for AI-built apps, jobs and data on Google Cloud. Muse, Claude Code, Cursor and other agents estimate, deploy, schedule and cap work from the conversation, and a person approves anything risky.";
 
 /** src/app/opengraph-image.tsx, made absolute with the request's host below. */
 const OG_IMAGE = { url: "/opengraph-image", width: 1200, height: 630, alt: TITLE };
@@ -54,7 +54,7 @@ const COMPUTE = [
 ];
 
 const FLOW = [
-  { title: "Your agent", items: ["Claude Code", "Cursor", "Any MCP client"] },
+  { title: "Your agent", items: ["Muse", "Claude Code", "Cursor", "Any MCP client"] },
   { title: "ShipCube", items: ["Load estimator", "Approval gate", "AI gateway", "Semantic data layer"] },
   { title: "Google Cloud", items: ["Cloud Run services and jobs", "GPUs", "BigQuery and your warehouse"] },
 ];
@@ -114,7 +114,7 @@ export default async function Landing() {
             </h1>
             <div className="lg:pb-2">
               <p className="max-w-[48ch] text-[16px] leading-[26px] text-fg-muted sm:text-[17px] sm:leading-[28px]">
-                ShipCube is one control plane for AI-built apps, jobs and data on Google Cloud. Ask in Claude Code or Cursor;
+                ShipCube is one control plane for AI-built apps, jobs and data on Google Cloud. Ask in Muse, Claude Code or Cursor;
                 it estimates, deploys, schedules and caps the work. No heavy laptop, and anything risky waits for your yes.
               </p>
               <div className="mt-6 flex flex-wrap items-center gap-4">

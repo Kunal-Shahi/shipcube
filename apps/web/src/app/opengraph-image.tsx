@@ -53,7 +53,7 @@ export default async function OpenGraphImage() {
             Your agent builds it. The cloud runs it.
           </div>
           <div style={{ fontSize: 30, color: "#a6aed6", maxWidth: 940 }}>
-            One control plane for AI-built apps, jobs and data on Google Cloud, driven from Claude Code, Cursor and other agents.
+            One control plane for AI-built apps, jobs and data on Google Cloud, driven from Muse, Claude Code, Cursor and other agents.
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 26, color: "#ffb547" }}>
