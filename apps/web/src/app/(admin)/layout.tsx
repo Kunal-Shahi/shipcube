@@ -18,7 +18,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       <header className="border-b border-border">
         <div className="mx-auto flex h-14 max-w-[1120px] items-center justify-between gap-4 px-4 sm:px-6">
           <div className="flex items-center gap-4">
-            <Link href={account.member ? "/apps" : "/admin/waitlist"} aria-label="ShipCube home">
+            <Link href={account.member ? "/overview" : "/admin/waitlist"} aria-label="ShipCube home">
               <Wordmark />
             </Link>
             <span className="text-fg-muted">Platform</span>

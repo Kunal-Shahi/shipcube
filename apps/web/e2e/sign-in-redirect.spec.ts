@@ -18,7 +18,7 @@ async function pickEmulatorAccount(page: Page, email: string) {
 
 /** Signed in, wherever the console sends this new person: the console, or the waitlist for a non-member. */
 async function expectSignedIn(page: Page) {
-  await page.waitForURL(/\/(apps|onboarding|waitlist)/, { timeout: 20_000 });
+  await page.waitForURL(/\/(overview|apps|onboarding|waitlist)/, { timeout: 20_000 });
   // /waitlist needs a session: without one it redirects to sign-in.
   const res = await page.request.get("/waitlist", { maxRedirects: 0 });
   expect([200, 307]).toContain(res.status());
@@ -80,7 +80,7 @@ test("recovers when the sign-in window took over this tab", async ({ browser }) 
 
   // Either the redirect won the race and sign-in finished, or the popup page took the tab and
   // failed; then, back on /sign-in, the page explains and the link finishes it.
-  const done = await page.waitForURL(/\/(apps|onboarding|waitlist)/, { timeout: 8_000 }).then(() => true, () => false);
+  const done = await page.waitForURL(/\/(overview|apps|onboarding|waitlist)/, { timeout: 8_000 }).then(() => true, () => false);
   if (!done) {
     await page.goto("/sign-in");
     await page.getByRole("button", { name: "Sign in in this tab" }).click();

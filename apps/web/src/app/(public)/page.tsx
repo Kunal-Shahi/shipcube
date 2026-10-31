@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { Bricolage_Grotesque } from "next/font/google";
 import { headers } from "next/headers";
 import { Building2, KeyRound, ShieldCheck, UserCheck } from "lucide-react";
 import Link from "next/link";
@@ -14,7 +13,6 @@ import { ControlPlane } from "./control-plane";
 import { FlowDiagram } from "./flow-diagram";
 import { HeroStage } from "./hero-stage";
 
-const display = Bricolage_Grotesque({ subsets: ["latin"], variable: "--font-display", weight: ["600", "800"] });
 
 const TITLE = "ShipCube: your agent builds it, the cloud runs it";
 const DESCRIPTION =
@@ -67,7 +65,7 @@ export default async function Landing() {
     !session && c.consoleOrigins.length && !c.consoleOrigins.includes(origin) ? `${c.consoleOrigins[0]}/#request-access` : null;
 
   return (
-    <div className={`landing ${display.variable} min-h-dvh`}>
+    <div className="landing min-h-dvh">
       <a href="#main" className="sr-only-focusable rounded-md bg-cta px-3 py-1.5 font-medium text-cta-fg">
         Skip to content
       </a>

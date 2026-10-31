@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Bricolage_Grotesque, Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import { themeScript } from "@/components/theme-toggle";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
+// Headings on the landing page and in the console.
+const display = Bricolage_Grotesque({ variable: "--font-display", subsets: ["latin"], weight: ["600", "800"] });
 
 export const metadata: Metadata = {
   title: { default: "ShipCube", template: "%s · ShipCube" },
@@ -20,7 +22,7 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
         {/* Browsers hide the nonce attribute after load, so the client sees "" here. */}
         <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body>
+      <body className={`${geistSans.variable} ${geistMono.variable} ${display.variable}`}>{children}</body>
     </html>
   );
 }

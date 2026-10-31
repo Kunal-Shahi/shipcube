@@ -1,78 +1,93 @@
 @import "tailwindcss";
 
 /* Tokens are documented in docs/design/DESIGN.md. Light values on :root, dark values
-   under prefers-color-scheme (unless the user picked light) and under data-theme="dark". */
+   under prefers-color-scheme (unless the user picked light) and under data-theme="dark".
+   The console shares the landing page's palette: paper and ink with royal blue in light,
+   ink with yellow text accents and teal marks (--mark: bars, lines) in dark. */
 :root {
-  --bg: #f7f8fa;
-  --surface: #ffffff;
-  --surface-2: #f1f2f5;
-  --border: #e3e5ea;
-  --border-strong: #cfd2d9;
-  --input-border: #878d99;
-  --fg: #15171c;
-  --fg-muted: #5d626d;
-  --fg-subtle: #686d79;
-  --accent: #3355e0;
-  --accent-hover: #2846c4;
-  --accent-fg: #ffffff;
-  --accent-soft: #eceffd;
-  --good: #0f7a43;
-  --good-soft: #e6f4ec;
-  --warning: #94600a;
-  --warning-soft: #fbf1df;
-  --critical: #bd2f2f;
-  --critical-soft: #fbeaea;
-  --shadow: 0 4px 16px rgb(21 23 28 / 0.08), 0 1px 2px rgb(21 23 28 / 0.06);
+  --bg: #f6f5ee;
+  --surface: #fffffa;
+  --surface-2: #eeece2;
+  --border: #e0ddcf;
+  --border-strong: #c9c5b3;
+  --input-border: #8a8574;
+  --fg: #1f1300;
+  --fg-muted: #4e4636;
+  --fg-subtle: #655c49;
+  --accent: #29339b;
+  --accent-hover: #1f2779;
+  --accent-fg: #fffffa;
+  --accent-soft: #e4e6f7;
+  --mark: #29339b;
+  /* Categories in charts: compute, data, AI. Each at least 3:1 against the page. */
+  --chart-1: #29339b;
+  --chart-2: #0e8c88;
+  --chart-3: #a87200;
+  --good: #0b6f6c;
+  --good-soft: #dcf4f3;
+  --warning: #a64106;
+  --warning-soft: #fdebdf;
+  --critical: #b3261e;
+  --critical-soft: #fbe5e2;
+  --shadow: 0 4px 16px rgb(31 19 0 / 0.08), 0 1px 2px rgb(31 19 0 / 0.06);
   color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0d0e11;
-    --surface: #14161a;
-    --surface-2: #1b1d22;
-    --border: #262930;
-    --border-strong: #363a43;
-    --input-border: #636875;
-    --fg: #eceef2;
-    --fg-muted: #9a9fab;
-    --fg-subtle: #868b97;
-    --accent: #6b8aff;
-    --accent-hover: #8aa2ff;
-    --accent-fg: #0d0e11;
-    --accent-soft: #1a2140;
-    --good: #3fbf7f;
-    --good-soft: #12261b;
-    --warning: #e0a43a;
-    --warning-soft: #2a2010;
-    --critical: #f06a6a;
-    --critical-soft: #2c1414;
-    --shadow: 0 4px 16px rgb(0 0 0 / 0.4), 0 1px 2px rgb(0 0 0 / 0.3);
+    --bg: #1a1000;
+    --surface: #241806;
+    --surface-2: #2f2310;
+    --border: #3d311b;
+    --border-strong: #54462b;
+    --input-border: #8f8064;
+    --fg: #fffffa;
+    --fg-muted: #cfc8b8;
+    --fg-subtle: #ada48f;
+    --accent: #ffd23f;
+    --accent-hover: #ffe17a;
+    --accent-fg: #1f1300;
+    --accent-soft: #3a2f0c;
+    --mark: #17bebb;
+    --chart-1: #17bebb;
+    --chart-2: #8c94d6;
+    --chart-3: #ffd23f;
+    --good: #95e8a6;
+    --good-soft: #15301c;
+    --warning: #ff9b6a;
+    --warning-soft: #3a1f0c;
+    --critical: #ff9d9d;
+    --critical-soft: #3a1612;
+    --shadow: 0 4px 16px rgb(0 0 0 / 0.45), 0 1px 2px rgb(0 0 0 / 0.35);
     color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #0d0e11;
-  --surface: #14161a;
-  --surface-2: #1b1d22;
-  --border: #262930;
-  --border-strong: #363a43;
-  --input-border: #636875;
-  --fg: #eceef2;
-  --fg-muted: #9a9fab;
-  --fg-subtle: #868b97;
-  --accent: #6b8aff;
-  --accent-hover: #8aa2ff;
-  --accent-fg: #0d0e11;
-  --accent-soft: #1a2140;
-  --good: #3fbf7f;
-  --good-soft: #12261b;
-  --warning: #e0a43a;
-  --warning-soft: #2a2010;
-  --critical: #f06a6a;
-  --critical-soft: #2c1414;
-  --shadow: 0 4px 16px rgb(0 0 0 / 0.4), 0 1px 2px rgb(0 0 0 / 0.3);
+  --bg: #1a1000;
+  --surface: #241806;
+  --surface-2: #2f2310;
+  --border: #3d311b;
+  --border-strong: #54462b;
+  --input-border: #8f8064;
+  --fg: #fffffa;
+  --fg-muted: #cfc8b8;
+  --fg-subtle: #ada48f;
+  --accent: #ffd23f;
+  --accent-hover: #ffe17a;
+  --accent-fg: #1f1300;
+  --accent-soft: #3a2f0c;
+  --mark: #17bebb;
+  --chart-1: #17bebb;
+  --chart-2: #8c94d6;
+  --chart-3: #ffd23f;
+  --good: #95e8a6;
+  --good-soft: #15301c;
+  --warning: #ff9b6a;
+  --warning-soft: #3a1f0c;
+  --critical: #ff9d9d;
+  --critical-soft: #3a1612;
+  --shadow: 0 4px 16px rgb(0 0 0 / 0.45), 0 1px 2px rgb(0 0 0 / 0.35);
   color-scheme: dark;
 }
 
@@ -207,7 +222,9 @@ h3 {
   background: var(--bg);
   color: var(--fg);
 }
-.landing .tone-blue {
+/* The console's sidebar uses the same blue tone, in both console themes. */
+.landing .tone-blue,
+.console-rail {
   --bg: #29339b;
   --surface: #222b86;
   --surface-2: #1c2472;
@@ -307,8 +324,9 @@ h3 {
   position: relative;
   isolation: isolate;
 }
-/* Blueprint sections sit a shade deeper than the tone's own blue. */
-.landing .landing-hero {
+/* Blueprint sections, and the console's sidebar, sit a shade deeper than the tone's own blue. */
+.landing .landing-hero,
+.console-rail {
   background-color: #232c8a;
 }
 /* Behind the hero cube: a deep blue pool that softens the grid lines without hiding them. */
