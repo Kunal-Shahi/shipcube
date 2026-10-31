@@ -77,7 +77,7 @@ export function ControlPlane() {
         ))}
       </ol>
       <div className="flex flex-col gap-6" aria-live="polite">
-        <div className="rounded-xl border border-border bg-bg p-4 sm:p-6">
+        <div className="tone-blue blueprint rounded-xl border border-border p-4 sm:p-6">
           <job.Art key={active} />
         </div>
         <div>

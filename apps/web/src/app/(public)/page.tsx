@@ -83,7 +83,7 @@ export default async function Landing() {
         Skip to content
       </a>
 
-      <div className="landing-hero">
+      <div className="landing-hero tone-blue">
         <header className="mx-auto flex h-16 max-w-[1180px] items-center justify-between gap-4 px-4 sm:px-6">
           <Link href="/" aria-label="ShipCube home">
             <Wordmark />
@@ -134,7 +134,7 @@ export default async function Landing() {
       </div>
 
       <main id="main">
-        <section id="how-it-works" aria-labelledby="plane-heading" className="border-t border-border bg-surface">
+        <section id="how-it-works" aria-labelledby="plane-heading" className="border-t border-border">
           <div className="mx-auto max-w-[1180px] px-4 py-20 sm:px-6">
             <h2 id="plane-heading" className={`max-w-[22ch] ${H2}`}>
               One control plane for everything your agent builds
@@ -149,7 +149,7 @@ export default async function Landing() {
           </div>
         </section>
 
-        <section aria-labelledby="compute-heading" className="border-t border-border">
+        <section aria-labelledby="compute-heading" className="tone-ink">
           <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-20 sm:px-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
             <div>
               <h2 id="compute-heading" className={H2}>
@@ -202,7 +202,7 @@ export default async function Landing() {
                     <ArrowRight className="size-5 rotate-90 self-center justify-self-center text-fg-subtle md:rotate-0" aria-hidden />
                   )}
                   <div
-                    className={`rounded-xl border p-5 ${f.title === "ShipCube" ? "border-accent bg-accent-soft" : "border-border bg-bg"}`}
+                    className={`rounded-xl border p-5 ${f.title === "ShipCube" ? "tone-blue blueprint border-border" : "border-border bg-bg"}`}
                   >
                     <h3 className="text-[15px] font-semibold">{f.title}</h3>
                     <ul className="mt-3 flex flex-col gap-1.5 text-[14px] text-fg-muted">
@@ -248,7 +248,7 @@ export default async function Landing() {
           </div>
         </section>
 
-        <section id="request-access" aria-labelledby="request-heading" className="landing-hero border-t border-border">
+        <section id="request-access" aria-labelledby="request-heading" className="landing-hero tone-blue">
           <div className="mx-auto grid max-w-[1180px] gap-10 px-4 py-20 sm:px-6 md:grid-cols-[minmax(0,1fr)_minmax(0,460px)] md:items-start">
             <div>
               <h2 id="request-heading" className="font-display text-[40px] leading-[1.02] font-extrabold tracking-[-0.03em] sm:text-[56px]">
