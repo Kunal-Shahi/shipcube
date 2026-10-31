@@ -97,7 +97,10 @@ def test_an_estimate_the_prescreen_blocks_is_a_typed_refusal(client, ws, monkeyp
 
 
 def test_screen_materializes_the_source_and_skips_images(client, ws, monkeypatch):
-    pytest.importorskip("shipcube_profiler")  # the API's optional estimator extra
+    profiler = pytest.importorskip("shipcube_profiler")  # the API's optional estimator extra
+    # Installed but without the pre-screen means a stale pin: fail, so screening can't silently switch off.
+    assert hasattr(profiler, "prescreen") and hasattr(profiler, "AbuseRefused"), \
+        "the installed shipcube_profiler predates prescreen: bump its pin in services/api/pyproject.toml"
     seen: dict = {}
 
     def fake_prescreen(app_dir):
@@ -118,3 +121,14 @@ def test_without_the_prescreen_installed_deploys_are_not_screened(client, monkey
 def test_refusal_message_never_carries_matched_text():
     e = abuse_screen.refusal(["phishing_kit"])
     assert isinstance(e, DeployError) and e.code == "abuse_refused" and "phishing_kit" in str(e)
+
+
+def test_the_real_prescreen_blocks_a_miner(client, ws):
+    """With the estimator's pre-screen installed (#95): an obvious miner is blocked end to end."""
+    profiler = pytest.importorskip("shipcube_profiler")
+    if not hasattr(profiler, "prescreen"):
+        pytest.skip("the installed shipcube_profiler predates prescreen")
+    miner = {"kind": "inline", "files": [{"path": "run.sh", "content": "./xmrig -o stratum+tcp://pool.example.com:3333 -u wallet\n"}]}
+    v = abuse_screen.screen(store_runtime.deployer(), ws["workspace_id"], miner)
+    assert v["verdict"] == "blocked" and "crypto_miner" in v["reasons"]
+    assert "pool.example.com" not in str(v) and "wallet" not in str(v)  # never the matched text

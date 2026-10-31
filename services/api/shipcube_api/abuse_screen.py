@@ -26,7 +26,9 @@ REFUSED = "abuse_refused"
 
 
 def _prescreen():
-    """The pre-screen, or None while the installed shipcube_profiler predates it."""
+    """The pre-screen, or None while the installed shipcube_profiler predates it. Production installs the
+    profiler from the deployed commit (deploy/api.Dockerfile), so this only happens with a stale local or
+    CI install of the pinned estimator extra."""
     try:
         from shipcube_profiler import prescreen
     except ImportError:
