@@ -45,7 +45,7 @@ class MockDeployer:
         self._sleep(1)
         isolation.check_source(settings, app.workspace_id, source, linked=app.target.kind == "linked")
         if source.get("kind") == "upload" and isolation.upload_object(settings, app.workspace_id, source["upload_id"]) not in self.uploads:
-            raise DeployError("invalid_argument", f"upload {source['upload_id']} was not found; PUT the tarball first")
+            raise DeployError("invalid_argument", f"upload {source['upload_id']} was not found; PUT the tarball first (uploads are deleted once a build uses them, or an hour after an estimate; create a new upload)")
         if source.get("kind") == "image":
             return {"image": source["uri"]}
         return {"mock": source.get("kind")}
@@ -69,6 +69,11 @@ class MockDeployer:
 
     def route_traffic(self, app: AppRef, revision: str) -> None:
         self._sleep(1)
+
+    def delete_objects(self, workspace_id: str, names: list[str]) -> None:
+        for name in names:
+            isolation.check_object(settings, workspace_id, settings.upload_bucket, name)
+            self.uploads.discard(name)
 
     def upload_generation(self, workspace_id: str, upload_id: str) -> int:
         return 1

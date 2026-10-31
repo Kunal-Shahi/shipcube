@@ -644,9 +644,9 @@ export const httpData: ConsoleData = {
     return camelize<Migration>(m);
   },
 
-  async requestAccessSignedIn({ name, useCase }) {
+  async requestAccessSignedIn({ name, useCase, termsVersion }) {
     // The API takes the email from the verified session; anonymous requests come from the browser.
-    await api<unknown>("/v1/waitlist", { method: "POST", body: { name, use_case: useCase } });
+    await api<unknown>("/v1/waitlist", { method: "POST", body: { name, use_case: useCase, terms_version: termsVersion } });
   },
   async accountStatus() {
     return accountStatusFrom(

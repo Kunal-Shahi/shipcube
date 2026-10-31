@@ -34,6 +34,8 @@ export interface Config {
   sessionDays: number;
   /** A console session token for a local API (sc_ses_…), used only with the mock sign-in. */
   devApiSession: string | null;
+  /** Where people write about privacy, deletion and the terms (SHIPCUBE_CONTACT_EMAIL). Null: not set. */
+  contactEmail: string | null;
   onCloudRun: boolean;
 }
 
@@ -61,6 +63,12 @@ export function publicApiUrl(env: Record<string, string | undefined>) {
 export function emulatorPublicUrl(env: Record<string, string | undefined>) {
   return (env.FIREBASE_AUTH_EMULATOR_PUBLIC_URL || `http://${env.FIREBASE_AUTH_EMULATOR_HOST || DEV_AUTH_EMULATOR_HOST}`).replace(/\/+$/, "");
 }
+/** An address that looks like one, or null: a typo shouldn't render as a broken mailto link. */
+export function contactEmail(raw: string | undefined) {
+  const v = raw?.trim();
+  return v && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? v : null;
+}
+
 const PROVIDERS: AuthProviderId[] = ["identity-platform", "firebase-emulator", "mock"];
 
 /** Set by Cloud Run on every service and job: their presence means production (#29). */
@@ -107,6 +115,7 @@ export function config(): Config {
     authEmulatorPublicUrl: emulator ? emulatorPublicUrl(env) : null,
     sessionDays: Number(env.SESSION_DAYS ?? 5),
     devApiSession: env.SHIPCUBE_DEV_API_SESSION || null,
+    contactEmail: contactEmail(env.SHIPCUBE_CONTACT_EMAIL),
     onCloudRun,
   };
 

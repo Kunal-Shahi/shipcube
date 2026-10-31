@@ -9,8 +9,9 @@ import uuid
 from pathlib import Path
 
 from shipcube_classifier import load_model, obs, rule_class
-from shipcube_profiler import (CodeSummary, abuse_signals, Hints, NotRunnable, ProfilerError, Runner, StaticRunner,
-                               default_runner, materialize, summarize, to_features)
+from shipcube_profiler import (AbuseRefused, CodeSummary, Hints, NotRunnable, ProfilerError, Runner, StaticRunner,
+                               Verdict, abuse_signals, default_runner, materialize, prescreen, summarize,
+                               to_features)
 from shipcube_profiler.sources import UploadFetcher
 
 from . import placement as pl
@@ -116,9 +117,16 @@ def _estimate(estimate_id, source, h: Hints, runner, explainer, fetch_upload, wo
         summary = CodeSummary()
         app_dir = None
         reason = None   # shipcube_profiler.STATIC_REASONS code when the estimate is static
+        verdict = Verdict()
         try:
             app_dir = materialize(source, work / "src", fetch_upload=fetch_upload)
             summary = summarize(app_dir)
+            # Before anything is built or run: high-confidence abuse markers refuse the estimate
+            # (AbuseRefused); low-confidence ones become abuse signals below.
+            verdict = prescreen(app_dir)
+            if verdict.blocked:
+                obs.event(log, "prescreen.blocked", logging.WARNING, reasons=verdict.reasons)
+                raise AbuseRefused(verdict)
         except NotRunnable as e:
             notes.append(str(e))
             reason = "image_source"
@@ -153,6 +161,9 @@ def _estimate(estimate_id, source, h: Hints, runner, explainer, fetch_upload, wo
             profile.abuse_signals = signals or abuse_signals(profile)
             obs.event(log, "profile.static", logging.WARNING, reason=reason, notes=notes[:3])
 
+        if verdict.signals:
+            profile.abuse_signals = sorted(set(profile.abuse_signals) | set(verdict.signals))
+            obs.event(log, "prescreen.flagged", logging.WARNING, signals=verdict.signals)
         features, assumptions = to_features(profile, h, api_only=summary.api_only)
         shape = "worker" if summary.kind == "script" and profile.timed_out else summary.kind
         cls, confidence, decided_by, low_conf, pred, rules_cls = decide(features, shape)
@@ -191,14 +202,14 @@ def _estimate(estimate_id, source, h: Hints, runner, explainer, fetch_upload, wo
             "measured": _measured(profile, tr),
             "code": {k: summary.to_dict()[k] for k in ("framework", "kind", "entrypoint", "routes", "api_only",
                                                        "files", "lines", "uses_data_libs",
-                                                       "uses_gpu_libs", "uses_network_libs")},
+                                                       "uses_gpu_libs", "uses_network_libs", "accepts_input")},
             "hints": {"expected_users": h.expected_users, "schedule": h.schedule, "traffic": h.traffic},
             "candidate_alternatives": [a.model_dump() for a in alts],
             "rule_caps": caps.model_dump(exclude_none=True),
             "assumptions": assumptions + notes,
         }
         with obs.timed(log, "explain.completed") as ex_log:
-            ex = explainer.explain(facts, alts, caps, summary.excerpt)
+            ex = explainer.explain(facts, alts, caps)   # no code: Muse gets muse_facts() only
             ex_log.update(explained_by=ex.explained_by, fallback=bool(ex.fallback_reason))
 
         return EstimateResult(
@@ -211,6 +222,7 @@ def _estimate(estimate_id, source, h: Hints, runner, explainer, fetch_upload, wo
             monthly_cost_usd=monthly,
             profile={
                 "measurements": profile.to_dict(),
+                "prescreen": verdict.to_dict(),
                 "features": features,
                 "class_probabilities": pred.probabilities,
                 "classifier": {"workload_class": pred.workload_class, "confidence": pred.confidence,

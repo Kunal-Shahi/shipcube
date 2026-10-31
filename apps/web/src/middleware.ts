@@ -8,7 +8,7 @@ import { emulatorPublicUrl, publicApiUrl } from "@/lib/server/config";
 
 // Pages anyone may open, matched exactly: the landing page and its link-preview image. (Its
 // "Request access" form posts from the browser straight to the API.) Everything else needs a session.
-const PUBLIC_EXACT = ["/", "/opengraph-image"];
+const PUBLIC_EXACT = ["/", "/opengraph-image", "/terms", "/privacy"];
 const PUBLIC = ["/sign-in", "/sign-up", "/api/auth/session", "/api/healthz"];
 
 export function isPublic(pathname: string) {

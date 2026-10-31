@@ -93,6 +93,9 @@ class Deployer(Protocol):
         """Fetch an uploaded source tarball to a local path (for the estimator and the abuse screen);
         with generation, exactly that version or not found."""
 
+    def delete_objects(self, workspace_id: str, names: list[str]) -> None:
+        """Delete source objects inside the workspace's uploads folder; a missing one is fine."""
+
     def deploy(self, app: AppRef, image: str, caps: dict[str, Any], env: dict[str, str]) -> Deployed:
         """Create or update the Cloud Run service (private, IAP on) and wait until it's ready."""
 

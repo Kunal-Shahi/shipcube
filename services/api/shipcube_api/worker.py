@@ -31,6 +31,7 @@ import random
 import threading
 import time
 import uuid
+from datetime import timedelta
 from collections.abc import Callable
 from typing import Any
 
@@ -46,6 +47,8 @@ from .store import STEPS, app_ref, current_deployment, enqueue, grants, write_ap
 log = logging.getLogger("shipcube.worker")
 LEASE_S = 90
 HEARTBEAT_S = 30
+# How long an estimate's upload is kept for the deploy that usually follows (sweep_estimate_uploads).
+ESTIMATE_UPLOAD_GRACE = timedelta(hours=1)
 RETRYABLE = {"unavailable", "timeout", "rate_limited"}
 HINTS = ("expected_users", "schedule", "region", "traffic")  # estimate_load hints passed to the estimator
 LANES = {"all": "true", "deploy": "o.kind <> 'estimate'", "estimate": "o.kind = 'estimate'"}
@@ -74,6 +77,7 @@ class Worker:
         self._stop = threading.Event()
         self._last_housekeeping = 0.0
         self._last_exposure_check = 0.0
+        self._swept_estimates: set[Any] = set()
 
     # --- loop ---------------------------------------------------------------------------
 
@@ -218,6 +222,8 @@ class Worker:
                                             Jsonb(steps), Jsonb(timings), message, op["id"]))
             if status != "succeeded":
                 self._on_failure(conn, op, status, error)
+        if op["kind"] == "deploy" and status != "succeeded":
+            self._delete_sources(op)  # final: retries are spent, so its source won't be read again
         log.info("operation finished", extra={"kind": op["kind"], "status": status, "code": code, "timings_s": timings})
 
     @staticmethod
@@ -227,6 +233,37 @@ class Worker:
                          (error or status, dep))
             conn.execute("update apps set status = case when exists (select 1 from deployments where app_id = apps.id and"
                          " status = 'succeeded') then 'running' else 'failed' end where id = %s", (op["app_id"],))
+
+    def _delete_sources(self, op: dict[str, Any]) -> None:
+        """Delete the uploads-bucket objects an operation's source used (its upload, or its staged inline
+        tarball). Best effort: the bucket's one-day lifecycle rule is the backstop."""
+        names = isolation.source_objects(settings, str(op["workspace_id"]), str(op["id"]), (op["input"] or {}).get("source"))
+        if not names:
+            return
+        try:
+            self.d.delete_objects(str(op["workspace_id"]), names)
+            log.info("source deleted", extra={"objects": len(names), "kind": op.get("kind")})
+        except Exception:  # noqa: BLE001
+            log.exception("could not delete an operation's source; the bucket lifecycle will")
+
+    def sweep_estimate_uploads(self) -> int:
+        """An estimate's upload is usually deployed next (create_upload -> estimate_load -> deploy_app,
+        same upload_id), so it isn't deleted when the estimate finishes. ESTIMATE_UPLOAD_GRACE later it is,
+        unless a deploy that hasn't finished still names it (the deploy deletes it after its build)."""
+        with db.worker_tx() as conn:
+            rows = conn.execute(
+                "select o.id, o.workspace_id, o.input from operations o where o.kind = 'estimate'"
+                " and o.status in ('succeeded', 'failed', 'cancelled') and o.input->'source'->>'kind' = 'upload'"
+                " and o.finished_at < now() - make_interval(secs => %s) and o.finished_at > now() - interval '25 hours'"
+                " and not exists (select 1 from operations d where d.kind = 'deploy' and d.workspace_id = o.workspace_id"
+                "   and d.status in ('queued', 'running', 'awaiting_approval')"
+                "   and d.input->'source'->>'upload_id' = o.input->'source'->>'upload_id')",
+                (ESTIMATE_UPLOAD_GRACE.total_seconds(),)).fetchall()
+        fresh = [r for r in rows if r["id"] not in self._swept_estimates]
+        for r in fresh:
+            self._delete_sources(r)
+            self._swept_estimates.add(r["id"])
+        return len(fresh)
 
     # --- step plans -----------------------------------------------------------------------------
 
@@ -312,6 +349,7 @@ class Worker:
 
                 state["image"] = self.d.build(ref, state["staged"], str(op["id"]), lambda: self._cancel_requested(op["id"]),
                                               on_build, existing_build_id=state.get("build_id"))
+                self._delete_sources(op)  # the image is built: only it is kept
 
             def push() -> dict[str, Any]:
                 return {"app": ref.name, "image": state["image"], "build_id": state.get("build_id")}
@@ -387,7 +425,12 @@ class Worker:
 
         if kind == "purge":
             def purge() -> dict[str, Any]:
-                self.d.purge(ref)
+                self.d.purge(ref)  # the service, its runtime SA and its images
+                with db.worker_tx() as conn:  # and any source a deploy left behind
+                    deploys = conn.execute("select id, workspace_id, input from operations where app_id = %s and kind = 'deploy'",
+                                           (app_id,)).fetchall()
+                for d in deploys:
+                    self._delete_sources(d)
                 with db.worker_tx() as conn:
                     conn.execute("update apps set purged_at = now() where id = %s", (app_id,))
                 return {"app": ref.name, "purged": True}
@@ -446,6 +489,10 @@ class Worker:
         if expired or due or busy:
             log.info("housekeeping", extra={"approvals_expired": len(expired), "purges_enqueued": len(due),
                                             "estimates_static_busy": busy})
+        try:
+            self.sweep_estimate_uploads()
+        except Exception:  # noqa: BLE001 — a storage error must not stop the rest of housekeeping
+            log.exception("estimate upload sweep failed")
         if self.janitor is not None:
             try:
                 self.janitor.sweep()
