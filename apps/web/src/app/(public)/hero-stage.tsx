@@ -132,7 +132,7 @@ export function HeroStage() {
               aria-pressed={i === active}
               className={cn(
                 "rounded-lg border px-3 py-2.5 text-left transition-colors",
-                i === active ? "border-accent bg-accent-soft" : "border-border bg-surface/70 hover:border-border-strong",
+                i === active ? "border-accent bg-accent-soft" : "border-input-border bg-surface/70 hover:border-fg-muted",
               )}
             >
               <span className="block text-[12px] font-medium text-accent">{r.team}</span>

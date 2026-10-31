@@ -172,7 +172,8 @@ h3 {
   --surface-2: #151c40;
   --border: #222b52;
   --border-strong: #303b6c;
-  --input-border: #5b6696;
+  /* Inputs and button outlines: at least 3:1 against the page, even under the hero's glow. */
+  --input-border: #6b77ab;
   --fg: #eef1ff;
   --fg-muted: #a6aed6;
   --fg-subtle: #8a93c0;
