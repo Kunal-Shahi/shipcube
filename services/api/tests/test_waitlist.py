@@ -343,3 +343,18 @@ def test_new_entries_must_record_consent_in_the_database(client):
         with db.tx(role=db.APP, settings={"app.via": "waitlist"}) as conn:
             conn.execute("insert into waitlist (id, email, name, use_case) values (%s, %s, 'a', 'b')",
                          (uuid.uuid4(), email()))
+
+
+def test_entries_from_before_consent_can_still_be_decided(client, idp):
+    """Security #96: rows written before 0009 have no consent; approving or rejecting them must work."""
+    old = [email(), email()]
+    with db.tx() as conn:  # the test superuser writes them as 0008 would have, skipping 0009's insert trigger
+        conn.execute("set local session_replication_role = replica")
+        for addr in old:
+            conn.execute("insert into waitlist (id, email, name, use_case) values (%s, %s, 'Old', 'from before consent')",
+                         (uuid.uuid4(), addr))
+    ids = {i["email"]: i["id"] for i in client.get("/v1/admin/waitlist?status=pending&limit=500", headers=idp(ADMIN)).json()["requests"]}
+    approved = client.post(f"/v1/admin/waitlist/{ids[old[0]]}/approve", headers=idp(ADMIN))
+    assert approved.status_code == 200 and approved.json()["status"] == "approved" and approved.json()["terms_version"] is None
+    rejected = client.post(f"/v1/admin/waitlist/{ids[old[1]]}/reject", headers=idp(ADMIN))
+    assert rejected.status_code == 200 and rejected.json()["status"] == "rejected"
