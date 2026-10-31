@@ -288,7 +288,7 @@ Each step was a profiler or feature fix found on the dev suite. The held-out sui
 ### 4.1 Steps
 
 1. **`materialize`:** `inline` (≤50 files / 256 KB, no path traversal), `git` (https, shallow), `upload` (tar `filter="data"`). `image` → `NotRunnable`.
-2. **`summarize`:** static parsing only; user code is never imported. It finds the entrypoint, framework, routes, `api_only`, libraries, written output types, and a 60-line excerpt.
+2. **`summarize`:** static parsing only; user code is never imported. It finds the entrypoint, framework, routes, `api_only`, libraries and written output types. No code excerpt is kept (see §6, no user code to Muse).
 3. **Runners:**
    - **`CloudRunJobRunner` (production, implemented):** packages `app/` plus the profiler and the classifier's feature code with a generated Dockerfile, and uploads it with `ifGenerationMatch=0`. Then:
      1. Cloud Build builds and pushes the image (the build has egress for requirements).
@@ -462,7 +462,17 @@ Monthly cost by tier:
 - Alternatives are matched to tiers we priced; only the `tradeoff` text is taken.
 - Caps are validated, numeric caps are clamped to [0.5×, 2×] of the rule caps, `max_instances` can only go down, and `cpu` and `memory` are never taken from Muse.
 
-**Prompt injection:** the code goes inside `<untrusted_code>`, and any copy of that tag in the code is neutralised. Tests feed a reply that tries to change everything and a payload that tries to close the tag.
+**No user code to Muse (compliance, Oct 31).** Earlier, every estimate sent up to 4,000 characters of the entrypoint to Muse, which is third-party processing of users' source with no notice or consent. Now Muse sees no code and nothing copied from it.
+- **Allowlist.** `explain.muse_facts()` rebuilds Muse's input from:
+  - numbers and the classifier's and placement's own enums;
+  - flags (`uses_gpu/data/network_libs`, `accepts_input`, `api_only`) and counts (files, lines, routes, remote hosts);
+  - routes by rank only;
+  - hints (users, traffic, and a schedule only if it's cron-shaped);
+  - assumption codes mapped from our own templates.
+- **Never sent:** source, file names, route paths, hostnames the app tried, or the app's own output (a failed run's stderr tail). Any assumption that isn't one of our templates is dropped.
+- **Rules unchanged.** The rule-based explanation is written locally and still uses the full facts. The user still sees all of it in their own result.
+- **Test.** A sentinel string placed in comments, strings, names, routes, a file name, an outbound host and stderr never appears in the Muse request body, for static, measured and failed runs.
+- **Prompt injection** is moot for code, since none is sent. A reply that tries to change the numbers still only changes text.
 
 ## 7. Demo
 
