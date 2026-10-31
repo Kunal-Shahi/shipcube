@@ -1346,10 +1346,10 @@ requires-dist = [
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "requests", specifier = ">=2.32" },
-    { name = "shipcube-classifier", marker = "extra == 'estimator'", git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=ml%2Fworkload-classifier&rev=fefbe7df1a5d3b686f40f5075a6754c68fe690ed" },
+    { name = "shipcube-classifier", marker = "extra == 'estimator'", git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=ml%2Fworkload-classifier&rev=d92d22fdc49f3c6f6e665fe5a460d57e79e4770a" },
     { name = "shipcube-data", extras = ["http", "duckdb", "postgres"], marker = "extra == 'data'", git = "https://github.com/Kunal-Shahi/shipcube-data?rev=217cf45c73e508059082a85ef618214b721c3032" },
-    { name = "shipcube-placement", marker = "extra == 'estimator'", git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=packages%2Fplacement&rev=fefbe7df1a5d3b686f40f5075a6754c68fe690ed" },
-    { name = "shipcube-profiler", marker = "extra == 'estimator'", git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=packages%2Fprofiler&rev=fefbe7df1a5d3b686f40f5075a6754c68fe690ed" },
+    { name = "shipcube-placement", marker = "extra == 'estimator'", git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=packages%2Fplacement&rev=d92d22fdc49f3c6f6e665fe5a460d57e79e4770a" },
+    { name = "shipcube-profiler", marker = "extra == 'estimator'", git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=packages%2Fprofiler&rev=d92d22fdc49f3c6f6e665fe5a460d57e79e4770a" },
     { name = "uvicorn", specifier = ">=0.30" },
 ]
 provides-extras = ["estimator", "data"]
@@ -1364,7 +1364,13 @@ dev = [
 [[package]]
 name = "shipcube-classifier"
 version = "0.1.0"
-source = { git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=ml%2Fworkload-classifier&rev=fefbe7df1a5d3b686f40f5075a6754c68fe690ed#fefbe7df1a5d3b686f40f5075a6754c68fe690ed" }
+source = { git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=ml%2Fworkload-classifier&rev=d92d22fdc49f3c6f6e665fe5a460d57e79e4770a#d92d22fdc49f3c6f6e665fe5a460d57e79e4770a" }
+
+[package.optional-dependencies]
+gcp = [
+    { name = "google-auth" },
+    { name = "requests" },
+]
 
 [[package]]
 name = "shipcube-data"
@@ -1435,7 +1441,7 @@ dev = [
 [[package]]
 name = "shipcube-placement"
 version = "0.1.0"
-source = { git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=packages%2Fplacement&rev=fefbe7df1a5d3b686f40f5075a6754c68fe690ed#fefbe7df1a5d3b686f40f5075a6754c68fe690ed" }
+source = { git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=packages%2Fplacement&rev=d92d22fdc49f3c6f6e665fe5a460d57e79e4770a#d92d22fdc49f3c6f6e665fe5a460d57e79e4770a" }
 dependencies = [
     { name = "openai" },
     { name = "pydantic" },
@@ -1447,10 +1453,10 @@ dependencies = [
 [[package]]
 name = "shipcube-profiler"
 version = "0.1.0"
-source = { git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=packages%2Fprofiler&rev=fefbe7df1a5d3b686f40f5075a6754c68fe690ed#fefbe7df1a5d3b686f40f5075a6754c68fe690ed" }
+source = { git = "https://github.com/Kunal-Shahi/shipcube?subdirectory=packages%2Fprofiler&rev=d92d22fdc49f3c6f6e665fe5a460d57e79e4770a#d92d22fdc49f3c6f6e665fe5a460d57e79e4770a" }
 dependencies = [
     { name = "psutil" },
-    { name = "shipcube-classifier" },
+    { name = "shipcube-classifier", extra = ["gcp"] },
 ]
 
 [[package]]

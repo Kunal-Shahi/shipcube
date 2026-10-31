@@ -254,6 +254,27 @@ The ledger and admission state live in the API database (platform-owned tables),
   - Fix: the agent prints the line with a per-run nonce passed in an env var only the agent reads and then removes from the app's environment. The runner accepts only the line carrying that nonce. It's cheap.
   - The remaining risk is a tenant misleading its own estimate. That's bounded: deploy-time caps are clamped and the user can always choose the tier.
 
+### Static pre-screen (added Oct 31)
+
+Before anything is built or run, `shipcube_profiler.prescreen` scans the upload's files and requirements for high-confidence abuse markers. The patterns are in one file, `prescreen_patterns.py`.
+
+- **Refuse** (`AbuseRefused`), for markers a legitimate internal app essentially never contains:
+  - `crypto_miner`: miner binaries (xmrig and similar), `stratum+tcp://` URLs, xmrig flags and configs;
+  - `attack_tool`: masscan, zmap, hping3 floods, slowloris and similar tools or packages;
+  - `phishing_kit`: a login page with a password field that sends credentials to an exfiltration endpoint (Telegram bot, Discord or Slack webhook, form relays), or impersonates a brand and posts off-site; or server code that forwards a submitted password to one of those endpoints.
+- **Flag only**, as a strike: `prescreen_mining_pool_reference` (dashboards query pool APIs), `prescreen_network_scanner` (nmap wrappers have admin uses), `prescreen_flood_script`, `prescreen_bulk_mail` (mail sent in a loop over a file or list), and `prescreen_phishing_suspect` (a brand login look-alike without exfiltration).
+- **Benign look-alikes stay clean,** and tests cover them:
+  - one contact-form email, and a short fixed notify list;
+  - a `requests` app;
+  - an own-backend login, and an external SSO login;
+  - a Slack alert;
+  - docs that mention DDoS;
+  - a webhook app that reads `request.json` next to Python's `pass`. That one was a false positive the security review found: forwarding a submitted password to a webhook is now a strike, not a refusal.
+- **Cost is bounded:**
+  - in-tag regex scans are bounded (unbounded `[^>]*` was quadratic: minutes for a crafted 1 MB page);
+  - text is scanned for at most 256 KB per file, 8 MB in total and 5 s, after which the verdict is marked `incomplete` and emits the low signal `prescreen_incomplete` (a strike, not a refusal), so padding past the budget can't hide a kit for free.
+- **Limits.** This isn't a security boundary: trivial obfuscation (concatenated strings, base64, renamed binaries, packed archives) gets past every rule. It catches careless abuse cheaply. The sandbox (§3–5) and run-time abuse signals (§8) are what hold against the rest.
+
 ## 9. What stays static-only
 
 These sources are never run. They get a static estimate with `profile.mode=static` and a machine-readable `reason`, so the agent and the user know why:

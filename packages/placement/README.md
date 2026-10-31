@@ -7,7 +7,7 @@
 4. sizes it
 5. prices it from Cloud Run / GKE list prices (`pricing.json`)
 6. recommends caps
-7. has Muse Spark explain the result, with timeouts and retries, and a rule-based fallback
+7. has Muse Spark explain the result, with timeouts and retries, and a rule-based fallback. Muse never sees user code, file names, route paths, hostnames or app output, only derived facts (`explain.muse_facts`); see docs/research/load-estimation.md §6
 
 ## Run
 

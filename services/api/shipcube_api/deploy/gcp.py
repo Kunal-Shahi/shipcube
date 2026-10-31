@@ -172,18 +172,23 @@ class GcpDeployer:
         if kind == "image":
             isolation.check_image(self.s, app.workspace_id, source["uri"], linked=app.target.kind == "linked")
             return {"image": source["uri"]}
-        if kind == "git":
-            return {"gitSource": {k: v for k, v in {"url": source["url"], "revision": source.get("ref") or "HEAD",
+        if kind == "git":  # a screened deploy pins the commit it screened (abuse_screen.screen)
+            revision = source.get("commit") or source.get("ref") or "HEAD"
+            return {"gitSource": {k: v for k, v in {"url": source["url"], "revision": revision,
                                                     "dir": source.get("subdir")}.items() if v}}
         bucket = self._bucket()
         if kind == "upload":
             name = self._object(app.workspace_id, source["upload_id"])
             blob = bucket.blob(name)
             if not blob.exists():
-                raise DeployError("invalid_argument", f"upload {source['upload_id']} was not found; PUT the tarball first")
+                raise DeployError("invalid_argument", f"upload {source['upload_id']} was not found; PUT the tarball first (uploads are deleted once a build uses them, or an hour after an estimate; create a new upload)")
             blob.reload()
             if (blob.size or 0) > UPLOAD_MAX_BYTES:
                 raise DeployError("invalid_argument", "upload is larger than 100 MB")
+            screened = source.get("generation")
+            if screened is not None and int(blob.generation or 0) != int(screened):
+                raise DeployError("invalid_argument", "the upload changed after it was screened; create a new upload")
+            generation = blob.generation
         else:  # inline
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w:gz") as tar:
@@ -193,8 +198,14 @@ class GcpDeployer:
                     info.size, info.mtime, info.mode = len(data), int(time.time()), 0o644
                     tar.addfile(info, io.BytesIO(data))
             name = isolation.inline_object(self.s, app.workspace_id, op_id)
-            bucket.blob(name).upload_from_string(buf.getvalue(), content_type="application/gzip")
-        return {"storageSource": {"bucket": self.s.upload_bucket, "object": name}}
+            blob = bucket.blob(name)
+            blob.upload_from_string(buf.getvalue(), content_type="application/gzip")  # only the worker writes inline/
+            generation = blob.generation
+        # Cloud Build fetches exactly this generation: an object replaced since can't be built in its place.
+        loc = {"bucket": self.s.upload_bucket, "object": name}
+        if generation is not None:
+            loc["generation"] = str(generation)
+        return {"storageSource": loc}
 
     # --- per-workspace builder (security's provision-workspace-builder.sh, in Python) ------
 
@@ -222,8 +233,13 @@ class GcpDeployer:
                               "cleanupPolicies": REPO_CLEANUP})
         if op.get("name") and not op.get("done"):
             self._wait_op(sess, AR, op)
-        self._grant(sess, f"{repo_url}:getIamPolicy", f"{repo_url}:setIamPolicy", "roles/artifactregistry.writer", member,
-                    get="GET")
+        # The worker reads it too: creating a profiler job from an image here needs the caller to hold
+        # downloadArtifacts on the repo (Cloud Run checks it; #69/#72 put profiler images here).
+        policy = self._retry_new(lambda: self._call(sess, "GET", f"{repo_url}:getIamPolicy"))
+        changed = _add_binding(policy, "roles/artifactregistry.writer", member)
+        changed |= _add_binding(policy, "roles/artifactregistry.reader", f"serviceAccount:{self.s.worker_sa}")
+        if changed:
+            self._retry_new(lambda: self._call(sess, "POST", f"{repo_url}:setIamPolicy", json={"policy": policy}))
         # c. its upload folder (a managed folder), readable by the builder only, and inside it the
         #    folder its build logs go to, which only the builder can write (no logWriter: #28)
         for name, role in ((folder, "roles/storage.objectViewer"),
@@ -233,11 +249,14 @@ class GcpDeployer:
             policy = self._retry_new(lambda u=folder_iam: self._call(sess, "GET", u))
             if _add_binding(policy, role, member):
                 self._call(sess, "PUT", folder_iam, json=policy)
-        # d. who may use the builder: the worker mints its tokens, the hosted deployer submits builds as it
+        # d. who may use the builder: the worker mints its tokens, the hosted deployer submits builds as it,
+        #    and the worker submits profiler builds as it (#69/#72). actAs adds nothing to tokenCreator,
+        #    which the worker already holds; Cloud Build checks actAs specifically.
         sa_url = f"{IAM}/projects/{project}/serviceAccounts/{sa}"
         policy = self._retry_new(lambda: self._call(sess, "POST", f"{sa_url}:getIamPolicy", json={}))
         changed = _add_binding(policy, "roles/iam.serviceAccountTokenCreator", f"serviceAccount:{self.s.worker_sa}")
-        changed |= _add_binding(policy, "roles/iam.serviceAccountUser", f"serviceAccount:{self.s.build_submitter_sa}")
+        for submitter in dict.fromkeys((self.s.build_submitter_sa, self.s.worker_sa)):
+            changed |= _add_binding(policy, "roles/iam.serviceAccountUser", f"serviceAccount:{submitter}")
         if changed:
             self._call(sess, "POST", f"{sa_url}:setIamPolicy", json={"policy": policy})
         # e. read on the profiler's package mirrors, so its offline profiler builds can fetch wheels and
@@ -514,8 +533,27 @@ class GcpDeployer:
                         json={"traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", "revision": revision, "percent": 100}]})
         self._wait_op(sess, RUN, op)
 
-    def download_upload(self, workspace_id: str, upload_id: str, dest: Any) -> Any:
-        blob = self._bucket().blob(self._object(workspace_id, upload_id))
+    def delete_objects(self, workspace_id: str, names: list[str]) -> None:
+        """Delete source objects from the workspace's uploads folder (never outside it); gone is fine."""
+        from google.api_core.exceptions import NotFound
+
+        bucket = self._bucket()
+        for name in names:
+            isolation.check_object(self.s, workspace_id, self.s.upload_bucket, name)
+            try:
+                bucket.blob(name).delete()
+            except NotFound:
+                pass
+
+    def upload_generation(self, workspace_id: str, upload_id: str) -> int:
+        blob = self._bucket().get_blob(self._object(workspace_id, upload_id))
+        if blob is None:
+            raise DeployError("invalid_argument", f"upload {upload_id} was not found")
+        return int(blob.generation)
+
+    def download_upload(self, workspace_id: str, upload_id: str, dest: Any, generation: int | None = None) -> Any:
+        """generation: exactly that version, or not found (it was replaced since)."""
+        blob = self._bucket().blob(self._object(workspace_id, upload_id), generation=generation)
         if not blob.exists():
             raise DeployError("invalid_argument", f"upload {upload_id} was not found")
         blob.download_to_filename(str(dest))

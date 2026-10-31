@@ -26,7 +26,15 @@ export function AuthCard({ intent, returnTo }: { intent: "sign-in" | "sign-up"; 
 
       <p className="mt-4 text-[12px] text-fg-muted">
         Your Google identity decides who can open your apps. ShipCube reads your name and email address only;
-        linking a GCP project is a separate, optional step.
+        linking a GCP project is a separate, optional step. See the{" "}
+        <Link href="/terms" className="underline underline-offset-2 hover:text-fg">
+          Terms
+        </Link>{" "}
+        and{" "}
+        <Link href="/privacy" className="underline underline-offset-2 hover:text-fg">
+          Privacy notice
+        </Link>
+        .
       </p>
 
       <div className="mt-8 border-t border-border pt-4 text-fg-muted">

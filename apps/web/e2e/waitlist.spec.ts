@@ -18,7 +18,7 @@ const REQUESTER = `waitlist-${Date.now()}@example.com`;
 
 test("the landing page is public, and the console isn't", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: /your agent ships the app/i })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: /your agent builds it/i })).toBeVisible();
   await expect(page.getByRole("link", { name: "Sign in" }).first()).toBeVisible();
   for (const path of ["/apps", "/admin/waitlist", "/waitlist"]) {
     await page.goto(path);
@@ -26,11 +26,26 @@ test("the landing page is public, and the console isn't", async ({ page }) => {
   }
 });
 
+test("the Terms and Privacy notice are public, and the form needs them agreed to", async ({ page }) => {
+  for (const [path, heading] of [["/terms", "Terms of use"], ["/privacy", "Privacy notice"]]) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
+  }
+  await page.goto("/");
+  await page.getByLabel("Work email").fill(`no-consent-${Date.now()}@example.com`);
+  await page.getByLabel("Name").fill("Ada");
+  await page.getByLabel("What will you build?").fill("A dashboard");
+  await page.getByRole("button", { name: "Request access" }).click();
+  await expect(page.getByText("Agree to the Terms and Privacy notice to request access.")).toBeVisible();
+  await expect(page.getByText("Thanks, you're on the list.")).toHaveCount(0);
+});
+
 test("a bot that fills the honeypot sees the same answer", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Work email").fill(`bot-${Date.now()}@example.com`);
   await page.getByLabel("Name").fill("Bot");
   await page.getByLabel("What will you build?").fill("Anything");
+  await page.getByLabel(/I agree to the/).check();
   // People can't reach the field (off-screen, aria-hidden, untabbable); a bot sets it directly.
   await page.locator('input[name="website"]').evaluate((el) => ((el as HTMLInputElement).value = "http://spam.example"));
   await page.getByRole("button", { name: "Request access" }).click();
@@ -54,6 +69,7 @@ test.describe("request, approve, sign in", () => {
     await page.getByLabel("Work email").fill(REQUESTER);
     await page.getByLabel("Name").fill("Wait Lister");
     await page.getByLabel("What will you build?").fill("A small dashboard, to test the waitlist.");
+    await page.getByLabel(/I agree to the/).check();
     await page.getByRole("button", { name: "Request access" }).click();
     await expect(page.getByText("Thanks, you're on the list.")).toBeVisible();
   });
@@ -74,6 +90,7 @@ test.describe("request, approve, sign in", () => {
     await expect(page).toHaveURL(/\/waitlist$/);
     await page.getByLabel("Name").fill("Walk In");
     await page.getByLabel("What will you build?").fill("A report our team checks every morning.");
+    await page.getByLabel(/I agree to the/).check();
     await page.getByRole("button", { name: "Request access" }).click();
     await expect(page.getByText("Thanks, you're on the list.")).toBeVisible();
     await page.reload();

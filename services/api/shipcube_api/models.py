@@ -503,13 +503,15 @@ class WaitlistRequest(_Model):
     name: str = Field(min_length=1, max_length=100)
     use_case: str = Field(min_length=1, max_length=500)
     website: str = Field("", max_length=200, description="Honeypot: always empty from the real form")
+    terms_version: str = Field(min_length=1, max_length=32,
+                               description="The Terms and Privacy notice version the person agreed to (the console's TERMS_VERSION)")
 
     @model_validator(mode="after")
     def _strip(self) -> WaitlistRequest:
         self.email = self.email.strip().lower() if self.email else None
-        self.name, self.use_case = self.name.strip(), self.use_case.strip()
-        if not self.name or not self.use_case:
-            raise ValueError("name and use_case can't be blank")
+        self.name, self.use_case, self.terms_version = self.name.strip(), self.use_case.strip(), self.terms_version.strip()
+        if not self.name or not self.use_case or not self.terms_version:
+            raise ValueError("name, use_case and terms_version can't be blank")
         return self
 
 
@@ -523,6 +525,8 @@ class WaitlistEntry(BaseModel):
     decided_at: str | None
     decided_by: str | None
     workspace_id: str | None
+    terms_version: str | None = Field(None, description="Null for entries from before consent was recorded")
+    terms_accepted_at: str | None = None
 
 
 class WaitlistCount(BaseModel):

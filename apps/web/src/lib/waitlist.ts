@@ -6,9 +6,12 @@ export const LIMITS = { name: 100, useCase: 500, email: 254 } as const;
 /** The honeypot's field name. People never see or fill it; form-filling bots usually do. */
 export const HONEYPOT = "website";
 
+import { TERMS_VERSION } from "./legal";
+
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export type AccessRequestFields = { email: string; name: string; useCase: string };
+/** `consent`: the person ticked "I agree to the Terms and Privacy notice". */
+export type AccessRequestFields = { email: string; name: string; useCase: string; consent: boolean };
 export type FieldErrors = Partial<Record<keyof AccessRequestFields, string>>;
 
 export function validateAccessRequest(f: AccessRequestFields): FieldErrors {
@@ -20,6 +23,7 @@ export function validateAccessRequest(f: AccessRequestFields): FieldErrors {
   else if (f.name.trim().length > LIMITS.name) e.name = `Keep it under ${LIMITS.name} characters.`;
   if (!f.useCase.trim()) e.useCase = "Say a little about what you'd deploy.";
   else if (f.useCase.trim().length > LIMITS.useCase) e.useCase = `Keep it under ${LIMITS.useCase} characters.`;
+  if (!f.consent) e.consent = "Agree to the Terms and Privacy notice to request access.";
   return e;
 }
 
@@ -40,7 +44,13 @@ export async function submitAccessRequest(
     res = await fetchImpl(`${apiBase}/v1/waitlist`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: f.email.trim(), name: f.name.trim(), use_case: f.useCase.trim(), [HONEYPOT]: f.honeypot }),
+      body: JSON.stringify({
+        email: f.email.trim(),
+        name: f.name.trim(),
+        use_case: f.useCase.trim(),
+        terms_version: TERMS_VERSION,
+        [HONEYPOT]: f.honeypot,
+      }),
       credentials: "omit",
     });
   } catch {

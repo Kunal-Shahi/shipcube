@@ -37,3 +37,5 @@ jobs:
           CONSOLE_ORIGINS: ${{ vars.SHIPCUBE_CONSOLE_ORIGINS }}
           # `terraform output -json profiler`; not secret, stored as a repository variable.
           PROFILER_ENV_JSON: ${{ vars.SHIPCUBE_PROFILER_ENV_JSON }}
+          # "0" deploys with the profiler off (static estimates only); unset or anything else, on.
+          PROFILER_ON: ${{ vars.SHIPCUBE_PROFILER_ON }}

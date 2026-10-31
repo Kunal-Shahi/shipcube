@@ -61,6 +61,9 @@ def main() -> None:
                     app_uid=_env_int("SHIPCUBE_APP_UID"))
     profile = LocalRunner(limits).run(app_dir, summary, hints)
     profile.runner = os.environ.get("SHIPCUBE_RUNNER_NAME", "gcp")
+    # What the app could use at most, so placement can judge load relative to the sandbox.
+    profile.cpu_limit_cores = float(os.environ.get("SHIPCUBE_AGENT_CPUS") or 1)
+    profile.mem_limit_gb = round(int(os.environ.get("SHIPCUBE_SANDBOX_MEMORY_MB") or 2048) / 1024, 3)
     # One line, prefixed, so the control plane can find it in the execution's logs.
     summary.excerpt = ""  # the control plane has the source; keep the log line small
     print(RESULT_PREFIX + json.dumps({"nonce": nonce, "summary": summary.to_dict(),
