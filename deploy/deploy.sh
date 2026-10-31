@@ -79,6 +79,18 @@ if want mcp || want worker; then
   fi
   if [ -n "$PROFILER_JOB" ]; then echo "profiler: on (job SA $PROFILER_JOB)" >&2; else echo "profiler: off" >&2; fi
   export PROFILER_JOB
+
+  # Mediated egress for hosted apps (red-team N-2, networking.md §5.5). The deployer attaches this
+  # VPC/subnet to every hosted app so only 443/80 leaves. Names come from Terraform
+  # (module.app_egress.env) and default to the module's defaults; set APP_EGRESS_NETWORK="" to deploy
+  # without a VPC (transition only — leaves open egress).
+  if [ -z "${APP_EGRESS_NETWORK+x}" ] || [ -z "${APP_EGRESS_SUBNET+x}" ]; then
+    EGRESS_ENV_JSON="$(terraform -chdir=infra/terraform output -json app_egress 2>/dev/null || echo '{}')"
+    APP_EGRESS_NETWORK="${APP_EGRESS_NETWORK-$(echo "$EGRESS_ENV_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("SHIPCUBE_APP_EGRESS_NETWORK","app-egress"))')}"
+    APP_EGRESS_SUBNET="${APP_EGRESS_SUBNET-$(echo "$EGRESS_ENV_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("SHIPCUBE_APP_EGRESS_SUBNET","app-egress"))')}"
+  fi
+  echo "app egress: ${APP_EGRESS_NETWORK:-<none>}/${APP_EGRESS_SUBNET:-<none>}" >&2
+  export APP_EGRESS_NETWORK APP_EGRESS_SUBNET
 fi
 
 if want mcp; then
