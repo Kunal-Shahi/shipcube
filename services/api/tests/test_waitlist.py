@@ -12,6 +12,7 @@ from shipcube_api import auth, db, waitlist
 from .conftest import new_workspace
 
 P = "test-idp-project"
+TERMS = "2026-10-31"
 ADMIN = f"admin-{uuid.uuid4().hex[:6]}@example.com"
 
 
@@ -43,7 +44,7 @@ def email() -> str:
 
 
 def join(client, addr, ip="203.0.113.7", **extra):
-    body = {"email": addr, "name": "Ada", "use_case": "internal dashboards", **extra}
+    body = {"email": addr, "name": "Ada", "use_case": "internal dashboards", "terms_version": TERMS, **extra}
     return client.post("/v1/waitlist", json=body, headers={"X-Forwarded-For": ip})
 
 
@@ -73,7 +74,7 @@ def test_bad_input_is_400(client, idp):
     assert join(client, "not-an-email").status_code == 400
     assert join(client, email(), use_case="x" * 501).status_code == 400
     assert join(client, email(), name="   ").status_code == 400
-    assert client.post("/v1/waitlist", json={"email": email(), "name": "a", "use_case": "b", "role": "owner"}).status_code == 400
+    assert client.post("/v1/waitlist", json={"email": email(), "name": "a", "use_case": "b", "terms_version": TERMS, "role": "owner"}).status_code == 400
 
 
 def test_rate_limit_per_ip(client, idp, monkeypatch):
@@ -141,7 +142,7 @@ def test_approve_then_first_sign_in_claims_the_workspace(client, idp):
     mine = client.get("/v1/waitlist/me", headers=idp(addr, sub)).json()
     assert mine == {"email": addr, "status": "none", "requested_at": None, "platform_admin": False}
     # Signed in, one click: the session's verified email is used, whatever the body says.
-    r = client.post("/v1/waitlist", json={"email": "someone-else@example.com", "name": "Ada", "use_case": "dashboards"},
+    r = client.post("/v1/waitlist", json={"email": "someone-else@example.com", "name": "Ada", "use_case": "dashboards", "terms_version": TERMS},
                     headers=idp(addr, sub))
     assert r.status_code == 202
     mine = client.get("/v1/waitlist/me", headers=idp(addr, sub)).json()
@@ -183,9 +184,9 @@ def test_waitlist_me_needs_a_verified_console_session(client, idp):
     assert client.get("/v1/waitlist/me", headers=idp(email(), verified=False)).status_code == 401
     assert client.get("/v1/waitlist/me", headers=new_workspace()["agent"]).status_code == 401
     # Signed-in sign-up likewise: no verified email, no entry.
-    r = client.post("/v1/waitlist", json={"name": "a", "use_case": "b"}, headers=idp(email(), verified=False))
+    r = client.post("/v1/waitlist", json={"name": "a", "use_case": "b", "terms_version": TERMS}, headers=idp(email(), verified=False))
     assert r.status_code == 401
-    assert client.post("/v1/waitlist", json={"name": "a", "use_case": "b"}).status_code == 400  # anonymous needs an email
+    assert client.post("/v1/waitlist", json={"name": "a", "use_case": "b", "terms_version": TERMS}).status_code == 400  # anonymous needs an email
 
 
 def test_dev_mode_accepts_auth_emulator_tokens(client, monkeypatch):
@@ -290,7 +291,7 @@ def test_signed_in_requests_have_their_own_buckets(client, idp, monkeypatch):
     set_waitlist(monkeypatch, platform_admins=frozenset({ADMIN}), waitlist_per_ip_per_hour=2, waitlist_per_hour=n,
                  waitlist_signed_in_per_hour=100000)
     assert join(client, email(), ip="192.0.2.77").json()["error"]["code"] == "waitlist_busy"  # the anonymous budget is spent
-    body = {"name": "Ada", "use_case": "dashboards"}
+    body = {"name": "Ada", "use_case": "dashboards", "terms_version": TERMS}
     addr = email()
     # Someone already signed in can still ask...
     assert client.post("/v1/waitlist", json=body, headers=idp(addr)).status_code == 202
@@ -308,7 +309,37 @@ def test_signed_in_total_is_capped(client, idp, monkeypatch):
                          " and window_start = %s", (datetime.now(UTC).replace(minute=0, second=0, microsecond=0),)).fetchone()["n"]
     set_waitlist(monkeypatch, platform_admins=frozenset({ADMIN}), waitlist_per_ip_per_hour=1000, waitlist_per_hour=100000,
                  waitlist_signed_in_per_hour=n + 1)
-    body = {"name": "Ada", "use_case": "dashboards"}
+    body = {"name": "Ada", "use_case": "dashboards", "terms_version": TERMS}
     assert client.post("/v1/waitlist", json=body, headers=idp(email())).status_code == 202
     assert client.post("/v1/waitlist", json=body, headers=idp(email())).status_code == 429
     assert join(client, email(), ip="192.0.2.78").status_code == 202  # anonymous sign-ups are unaffected
+
+
+def test_consent_is_required_and_recorded(client, idp):
+    addr = email()
+    for terms in ({}, {"terms_version": ""}, {"terms_version": "   "}, {"terms_version": "x" * 33}):
+        body = {"email": addr, "name": "Ada", "use_case": "dashboards", **terms}
+        r = client.post("/v1/waitlist", json=body, headers={"X-Forwarded-For": "203.0.113.200"})
+        assert r.status_code == 400 and r.json()["error"]["code"] == "invalid_argument", terms
+    assert row(addr) is None
+    assert join(client, addr).status_code == 202
+    entry = row(addr)
+    assert entry["terms_version"] == TERMS and entry["terms_accepted_at"] is not None
+    listed = next(i for i in client.get("/v1/admin/waitlist?status=all&limit=500", headers=idp(ADMIN)).json()["requests"]
+                  if i["email"] == addr)
+    assert listed["terms_version"] == TERMS and listed["terms_accepted_at"]
+    # Signed in: the same field, recorded the same way.
+    signed = email()
+    r = client.post("/v1/waitlist", json={"name": "Ada", "use_case": "dashboards", "terms_version": TERMS}, headers=idp(signed))
+    assert r.status_code == 202 and row(signed)["terms_version"] == TERMS
+    assert client.post("/v1/waitlist", json={"name": "Ada", "use_case": "dashboards"}, headers=idp(email())).status_code == 400
+
+
+def test_new_entries_must_record_consent_in_the_database(client):
+    """0009's check: even a direct insert without consent is refused (entries from before it are kept)."""
+    import psycopg
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with db.tx(role=db.APP, settings={"app.via": "waitlist"}) as conn:
+            conn.execute("insert into waitlist (id, email, name, use_case) values (%s, %s, 'a', 'b')",
+                         (uuid.uuid4(), email()))

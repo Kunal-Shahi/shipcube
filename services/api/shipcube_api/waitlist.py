@@ -37,7 +37,8 @@ _NS = uuid.UUID("0b8f5c2e-31d4-4f6a-9e7b-5a2c1d0e9f83")
 _GLOBAL = str(uuid.uuid5(_NS, "global"))
 _SIGNED_IN = str(uuid.uuid5(_NS, "signed-in"))
 _APPROVE_LOCK = 0x5C_57A1  # serialises approvals, so the workspace cap can't be passed by two at once
-_COLUMNS = "id, email, name, use_case, status, created_at, decided_at, decided_by, workspace_id"
+_COLUMNS = ("id, email, name, use_case, status, created_at, decided_at, decided_by, workspace_id, terms_version,"
+            " terms_accepted_at")
 
 
 class RateLimited(Exception):
@@ -88,7 +89,8 @@ def _count(conn, key: str, kind: str, window: datetime, limit: int) -> bool:
     return True
 
 
-def sign_up(email: str, name: str, use_case: str, honeypot: str, ip: str | None, now: datetime | None = None) -> None:
+def sign_up(email: str, name: str, use_case: str, honeypot: str, ip: str | None, terms_version: str,
+            now: datetime | None = None) -> None:
     """ip None: a verified console session asked. Signed-in requests have their own buckets (per account
     and in total), so an anonymous flood can't lock out people who are already signed in."""
     now = (now or datetime.now(UTC)).astimezone(UTC)
@@ -113,8 +115,10 @@ def sign_up(email: str, name: str, use_case: str, honeypot: str, ip: str | None,
         if honeypot:
             log.info("waitlist honeypot filled")
             return
-        conn.execute("insert into waitlist (id, email, name, use_case) values (%s, %s, %s, %s)"
-                     " on conflict do nothing", (uuid.uuid4(), email, name, use_case))  # no arbiter: one needs select under RLS
+        # Consent is recorded with the entry; the time is the API's, not the request's.
+        conn.execute("insert into waitlist (id, email, name, use_case, terms_version, terms_accepted_at)"
+                     " values (%s, %s, %s, %s, %s, now()) on conflict do nothing",
+                     (uuid.uuid4(), email, name, use_case, terms_version))  # no arbiter: one needs select under RLS
 
 
 def mine(email: str) -> dict[str, Any]:
@@ -133,6 +137,7 @@ def is_admin(email: str | None, verified: bool) -> bool:
 def _entry(row: dict[str, Any]) -> dict[str, Any]:
     return {**row, "id": str(row["id"]), "workspace_id": str(row["workspace_id"]) if row["workspace_id"] else None,
             "created_at": row["created_at"].isoformat(),
+            "terms_accepted_at": row["terms_accepted_at"].isoformat() if row["terms_accepted_at"] else None,
             "decided_at": row["decided_at"].isoformat() if row["decided_at"] else None}
 
 
