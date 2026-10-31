@@ -4,7 +4,7 @@ import { AppWindow, Cpu, Database, Gauge, Lock, Sparkles, UserCheck } from "luci
 import { useState } from "react";
 import { cn } from "@/lib/cn";
 
-type Job = { icon: typeof AppWindow; title: string; body: string; points: string[]; Art: () => React.ReactNode };
+type Job = { icon: typeof AppWindow; title: string; body: string; Art: () => React.ReactNode };
 
 // What one ShipCube workspace does, as jobs. Each picture is an illustration of the console, not a screenshot.
 const JOBS: Job[] = [
@@ -12,42 +12,36 @@ const JOBS: Job[] = [
     icon: AppWindow,
     title: "Run the apps your agent builds",
     body: "Dashboards, trackers and internal tools go live at a private URL, behind Google sign-in, without anyone writing a Dockerfile.",
-    points: ["Built and deployed from the conversation", "Private by default", "Shared with people and groups you name"],
     Art: AppArt,
   },
   {
     icon: Cpu,
     title: "Run heavy work in the cloud, not on your laptop",
     body: "Notebooks, scripts and models that need memory or a GPU run as Cloud Run jobs or on an NVIDIA L4, on a schedule, and stop when they're done.",
-    points: ["Scheduled jobs, billed only while they run", "GPU when the code needs one", "Nothing left running on your machine"],
     Art: JobsArt,
   },
   {
     icon: Gauge,
     title: "Know the cost before anything runs",
     body: "ShipCube profiles the code, classifies the workload and picks where it should run. The reasoning and a monthly cost range come back first.",
-    points: ["Workload class and confidence", "Tier, resources and a cost range", "Caps recommended up front"],
     Art: EstimateArt,
   },
   {
     icon: Database,
     title: "Connect your warehouse, safely",
     body: "Agents query your data through named measures and dimensions, not raw SQL. They can propose a model change; a person reviews the diff.",
-    points: ["One definition per metric", "Read through the semantic layer", "Model changes are only proposed"],
     Art: DataArt,
   },
   {
     icon: Sparkles,
     title: "Cap what AI costs",
     body: "Apps call models through ShipCube's gateway, with token and spend limits per app. Bring your own provider key, or use the default.",
-    points: ["Per-app token and spend caps", "Your key, kept in Secret Manager", "Usage visible per app"],
     Art: GatewayArt,
   },
   {
     icon: UserCheck,
     title: "Approve the risky parts",
     body: "First deploys to your project, cap raises, domain-wide sharing and deletes wait for a person. The agent can't approve its own requests.",
-    points: ["One click in the console", "The page says exactly what changes", "Everything else just happens"],
     Art: ApprovalArt,
   },
 ];
@@ -56,7 +50,7 @@ export function ControlPlane() {
   const [active, setActive] = useState(0);
   const job = JOBS[active];
   return (
-    <div className="grid gap-8 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-12">
+    <div className="grid gap-10 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-16">
       <ol className="flex flex-col" aria-label="What ShipCube does">
         {JOBS.map((j, i) => (
           <li key={j.title}>
@@ -66,7 +60,7 @@ export function ControlPlane() {
               onMouseEnter={() => setActive(i)}
               aria-pressed={i === active}
               className={cn(
-                "flex w-full items-center gap-3 border-l-2 py-3 pr-2 pl-4 text-left transition-colors",
+                "flex w-full items-center gap-3 border-l-2 py-3.5 pr-2 pl-4 text-left transition-colors",
                 i === active ? "border-accent text-fg" : "border-border text-fg-muted hover:text-fg",
               )}
             >
@@ -76,20 +70,11 @@ export function ControlPlane() {
           </li>
         ))}
       </ol>
-      <div className="flex flex-col gap-6" aria-live="polite">
-        <div className="tone-blue blueprint rounded-xl border border-border p-4 sm:p-6">
+      <div aria-live="polite">
+        <div className="tone-blue blueprint rounded-xl p-5 sm:p-7">
           <job.Art key={active} />
         </div>
-        <div>
-          <p className="max-w-[60ch] text-[15px] leading-6 text-fg-muted">{job.body}</p>
-          <ul className="mt-3 flex flex-wrap gap-2">
-            {job.points.map((p) => (
-              <li key={p} className="rounded-full border border-border px-3 py-1 text-[12.5px] text-fg-muted">
-                {p}
-              </li>
-            ))}
-          </ul>
-        </div>
+        <p className="mt-5 max-w-[60ch] text-[15px] leading-6 text-fg-muted">{job.body}</p>
       </div>
     </div>
   );

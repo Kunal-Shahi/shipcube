@@ -61,7 +61,10 @@ const SECURITY = [
   { icon: UserCheck, text: "A red team reviewed tokens, tenancy and the deploy path, and its findings were fixed before launch." },
 ];
 
-const H2 = "font-display text-[32px] leading-[1.1] font-extrabold tracking-[-0.025em] sm:text-[40px]";
+// One scale for every section: the same padding, heading, intro and gap to the content.
+const SECTION = "mx-auto max-w-[1180px] px-4 py-20 sm:px-6 lg:py-28";
+const H2 = "font-display text-[34px] leading-[1.05] font-extrabold tracking-[-0.025em] text-balance sm:text-[44px]";
+const INTRO = "mt-5 max-w-[56ch] text-[17px] leading-[28px] text-fg-muted";
 
 export default async function Landing() {
   const session = await auth.getSession().catch(() => null);
@@ -102,62 +105,54 @@ export default async function Landing() {
           </nav>
         </header>
 
-        <section className="mx-auto max-w-[1180px] px-4 pt-10 pb-16 sm:px-6 lg:pt-16 lg:pb-24">
-          <div className="grid gap-8 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] lg:items-end">
-            <h1 className="font-display text-[44px] leading-[0.95] font-extrabold tracking-[-0.03em] text-balance sm:text-[68px] lg:text-[88px]">
+        <section className="mx-auto max-w-[1180px] px-4 pt-8 pb-16 sm:px-6 lg:pt-12 lg:pb-24">
+          <HeroStage>
+            <h1 className="font-display text-[44px] leading-[0.96] font-extrabold tracking-[-0.03em] text-balance sm:text-[64px] lg:text-[80px]">
               Your agent builds it. The cloud runs it.
             </h1>
-            <div className="lg:pb-2">
-              <p className="max-w-[48ch] text-[16px] leading-[26px] text-fg-muted sm:text-[17px] sm:leading-[28px]">
-                ShipCube is one control plane for AI-built apps, jobs and data on Google Cloud. Ask in Muse, Claude Code or Cursor;
-                it estimates, deploys, schedules and caps the work. No heavy laptop, and anything risky waits for your yes.
-              </p>
-              <div className="mt-6 flex flex-wrap items-center gap-4">
-                <ButtonLink href="#request-access" variant="primary" className="h-11 px-5 text-[15px] font-semibold">
-                  Request access
-                </ButtonLink>
-                <Link href="/sign-in" className="text-fg-muted underline-offset-4 hover:text-fg hover:underline">
-                  Approved already? Sign in
-                </Link>
-              </div>
+            <p className="mt-6 max-w-[52ch] text-[17px] leading-[28px] text-fg-muted">
+              ShipCube is one control plane for AI-built apps, jobs and data on Google Cloud. Ask in Muse, Claude Code or Cursor;
+              it estimates, deploys, schedules and caps the work. No heavy laptop, and anything risky waits for your yes.
+            </p>
+            <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">
+              <ButtonLink href="#request-access" variant="primary" className="h-11 px-5 text-[15px] font-semibold">
+                Request access
+              </ButtonLink>
+              <Link href="/sign-in" className="text-fg-muted underline-offset-4 hover:text-fg hover:underline">
+                Approved already? Sign in
+              </Link>
             </div>
-          </div>
-          <div className="mt-12 lg:mt-16">
-            <HeroStage />
-          </div>
+          </HeroStage>
         </section>
       </div>
 
       <main id="main">
-        <section id="how-it-works" aria-labelledby="plane-heading" className="border-t border-border">
-          <div className="mx-auto max-w-[1180px] px-4 py-20 sm:px-6">
-            <h2 id="plane-heading" className={`max-w-[22ch] ${H2}`}>
+        <section id="how-it-works" aria-labelledby="plane-heading">
+          <div className={SECTION}>
+            <h2 id="plane-heading" className={`max-w-[20ch] ${H2}`}>
               One control plane for everything your agent builds
             </h2>
-            <p className="mt-4 max-w-[60ch] text-[16px] leading-[26px] text-fg-muted">
-              Apps, heavy jobs, data and AI spend, in one workspace your agent can drive and you can oversee. Pick a job to see
-              it.
-            </p>
-            <div className="mt-12">
+            <p className={INTRO}>Apps, heavy jobs, data and AI spend, in one workspace your agent can drive and you can oversee.</p>
+            <div className="mt-12 lg:mt-16">
               <ControlPlane />
             </div>
           </div>
         </section>
 
         <section aria-labelledby="compute-heading" className="tone-ink">
-          <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-20 sm:px-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+          <div className={`${SECTION} grid gap-12 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-16`}>
             <div>
               <h2 id="compute-heading" className={H2}>
                 Your laptop isn&apos;t a server
               </h2>
-              <p className="mt-4 max-w-[44ch] text-[16px] leading-[26px] text-fg-muted">
+              <p className={INTRO}>
                 Most heavy work runs once a day or once a week. You shouldn&apos;t need an expensive machine for it, or a
                 server that runs all month. ShipCube profiles each workload, puts it where it costs least, and stops billing
                 when it&apos;s done.
               </p>
             </div>
-            <div>
-              <div className="hidden pb-2 text-[12px] text-fg-subtle sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:gap-6" aria-hidden>
+            <div className="lg:pt-2">
+              <div className="hidden pb-3 text-[12px] text-fg-subtle sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:gap-6" aria-hidden>
                 <span />
                 <span className="flex justify-between">
                   <span>Midnight</span>
@@ -167,10 +162,10 @@ export default async function Landing() {
               </div>
               <ul className="flex flex-col">
                 {COMPUTE.map((c) => (
-                  <li key={c.work} className="grid gap-2 border-t border-border py-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:items-center sm:gap-6">
+                  <li key={c.work} className="grid gap-3 border-t border-border py-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:items-center sm:gap-6">
                     <div>
                       <p className="font-display text-[17px] font-semibold">{c.work}</p>
-                      <p className="text-[13px] text-fg-muted">{c.where}</p>
+                      <p className="mt-0.5 text-[14px] text-fg-muted">{c.where}</p>
                     </div>
                     <div className="grid grid-cols-24 gap-[3px]" role="img" aria-label={`Billed for ${c.hours.length} of 24 hours`}>
                       {Array.from({ length: 24 }, (_, h) => (
@@ -180,50 +175,56 @@ export default async function Landing() {
                   </li>
                 ))}
               </ul>
-              <p className="mt-2 text-[12px] text-fg-subtle">Lit hours are billed. An illustration of each billing model, not a measurement.</p>
+              <p className="border-t border-border pt-4 text-[12px] text-fg-subtle">
+                Lit hours are billed. An illustration of each billing model, not a measurement.
+              </p>
             </div>
           </div>
         </section>
 
-        <section aria-labelledby="flow-heading" className="border-t border-border bg-surface">
-          <div className="mx-auto max-w-[1180px] px-4 py-20 sm:px-6">
+        <section aria-labelledby="flow-heading" className="bg-surface">
+          <div className={SECTION}>
             <h2 id="flow-heading" className={H2}>
               How it fits together
             </h2>
-            <p className="mt-4 max-w-[60ch] text-[16px] leading-[26px] text-fg-muted">
-              Your agent talks to ShipCube; ShipCube talks to Google Cloud; you only hear about the steps that need you.
+            <p className={INTRO}>
+              Your agent talks to ShipCube, and ShipCube runs the work on Google Cloud. You only hear about the steps that need
+              you.
             </p>
-            <div className="mt-10">
+            <div className="mt-12 lg:mt-16">
               <FlowDiagram />
             </div>
-            <p className="mt-6 max-w-[64ch] text-[15px] leading-6 text-fg-muted">
-              Start on ShipCube&apos;s GCP project with nothing to set up. Link your own project with one script, and apps bill
-              to your account.
-            </p>
-            <div className="mt-10 max-w-[760px]">
+            <div className="mt-12 grid gap-6 lg:mt-16 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:items-center lg:gap-16">
+              <div>
+                <h3 className="font-display text-[22px] font-semibold">Connect in one command</h3>
+                <p className="mt-2 text-[15px] leading-6 text-fg-muted">
+                  Start on ShipCube&apos;s GCP project with nothing to set up. Link your own project with one script, and apps
+                  bill to your account.
+                </p>
+              </div>
               <CodeBlock
-                label="Connect your agent, in a terminal"
+                label="In a terminal"
                 code={`claude mcp add --transport http shipcube ${c.mcpUrl} \\\n  --header "Authorization: Bearer $SHIPCUBE_TOKEN"`}
               />
             </div>
           </div>
         </section>
 
-        <section id="security" aria-labelledby="security-heading" className="border-t border-border">
-          <div className="mx-auto grid max-w-[1180px] gap-10 px-4 py-20 sm:px-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+        <section id="security" aria-labelledby="security-heading">
+          <div className={`${SECTION} grid gap-12 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-16`}>
             <div>
               <h2 id="security-heading" className={H2}>
                 Built to be handed to an agent
               </h2>
-              <p className="mt-4 max-w-[44ch] text-[15px] leading-6 text-fg-muted">
+              <p className={INTRO}>
                 An agent with deploy rights is only useful if you can trust what it can reach. ShipCube draws those lines for you.
               </p>
             </div>
-            <ul className="grid gap-6 sm:grid-cols-2">
+            <ul className="grid gap-x-10 gap-y-8 sm:grid-cols-2 lg:pt-2">
               {SECURITY.map(({ icon: Icon, text }) => (
-                <li key={text} className="flex gap-3">
-                  <Icon className="mt-0.5 size-5 shrink-0 text-accent" aria-hidden />
-                  <p className="text-[15px] leading-6">{text}</p>
+                <li key={text}>
+                  <Icon className="size-5 text-accent" aria-hidden />
+                  <p className="mt-3 text-[15px] leading-6">{text}</p>
                 </li>
               ))}
             </ul>
@@ -231,17 +232,17 @@ export default async function Landing() {
         </section>
 
         <section id="request-access" aria-labelledby="request-heading" className="landing-hero tone-blue">
-          <div className="mx-auto grid max-w-[1180px] gap-10 px-4 py-20 sm:px-6 md:grid-cols-[minmax(0,1fr)_minmax(0,460px)] md:items-start">
+          <div className={`${SECTION} grid gap-12 md:grid-cols-[minmax(0,1fr)_minmax(0,440px)] md:items-start lg:gap-16`}>
             <div>
-              <h2 id="request-heading" className="font-display text-[40px] leading-[1.02] font-extrabold tracking-[-0.025em] sm:text-[56px]">
+              <h2 id="request-heading" className="font-display text-[40px] leading-[1] font-extrabold tracking-[-0.03em] text-balance sm:text-[56px]">
                 Ship your first app this week.
               </h2>
-              <p className="mt-4 max-w-[46ch] text-[16px] leading-[26px] text-fg-muted">
+              <p className={INTRO}>
                 ShipCube is in early access. Tell us what you&apos;ll build. A person reviews every request, and once yours is
                 approved, you sign in with the same Google account and your workspace is there.
               </p>
             </div>
-            <div className="rounded-xl border border-border bg-surface p-5 sm:p-6">
+            <div className="rounded-xl bg-surface p-6 sm:p-8">
               {formElsewhere ? (
                 <div className="flex flex-col items-start gap-3">
                   <p className="text-fg-muted">The request form opens on ShipCube&apos;s console.</p>

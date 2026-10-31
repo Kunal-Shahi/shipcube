@@ -58,8 +58,11 @@ const STEP_MS = 900;
 const WAIT_MS = 1800;
 const NEXT_MS = 5000;
 
-/** The hero: pick a request, watch the agent carry it out through ShipCube, and see the step a person approves. */
-export function HeroStage() {
+/**
+ * The hero. Row one: the intro (children) beside the cube. Row two: pick a request and watch the
+ * agent carry it out through ShipCube, including the step a person approves; the cube follows along.
+ */
+export function HeroStage({ children }: { children: React.ReactNode }) {
   const [active, setActive] = useState(0);
   const [shown, setShown] = useState(0);
   const [picked, setPicked] = useState(false);
@@ -102,9 +105,10 @@ export function HeroStage() {
   const mode: CubeMode = shown === 0 ? "idle" : done ? "done" : last?.tone === "wait" ? "wait" : "run";
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-stretch">
-      <div className="relative flex flex-col">
-        <div className="relative h-[300px] sm:h-[400px] lg:my-auto lg:h-[520px]">
+    <div>
+      <div className="grid items-center gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:gap-12">
+        <div>{children}</div>
+        <div className="relative h-[260px] sm:h-[340px] lg:h-[440px]">
           <CubeField mode={mode} className="absolute inset-0 size-full" />
           <div
             className={cn(
@@ -122,26 +126,30 @@ export function HeroStage() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-5">
-        <div role="group" aria-label="Pick a request to send to your agent" className="flex flex-col">
-          {REQUESTS.map((r, i) => (
-            <button
-              key={r.team}
-              type="button"
-              onClick={() => pick(i)}
-              aria-pressed={i === active}
-              className={cn(
-                "flex items-baseline gap-4 border-l-2 py-2 pr-2 pl-4 text-left transition-colors",
-                i === active ? "border-accent text-fg" : "border-fg-subtle/30 text-fg-muted hover:border-fg-subtle hover:text-fg",
-              )}
-            >
-              <span className={cn("w-16 shrink-0 text-[13px] font-medium", i === active ? "text-accent" : "text-fg-subtle")}>{r.team}</span>
-              <span className="text-[15px] leading-6">{r.ask}</span>
-            </button>
-          ))}
+      <div className="mt-14 grid items-start gap-8 lg:mt-20 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:gap-12">
+        <div>
+          <p className="font-display text-[20px] font-semibold">Try it: pick a request</p>
+          <p className="mt-1 text-[15px] leading-6 text-fg-muted">Watch your agent carry it out with ShipCube, and see what waits for you.</p>
+          <div role="group" aria-label="Pick a request to send to your agent" className="mt-6 flex flex-col">
+            {REQUESTS.map((r, i) => (
+              <button
+                key={r.team}
+                type="button"
+                onClick={() => pick(i)}
+                aria-pressed={i === active}
+                className={cn(
+                  "flex flex-col gap-0.5 border-l-2 py-2.5 pr-2 pl-4 text-left transition-colors",
+                  i === active ? "border-accent text-fg" : "border-fg-subtle/30 text-fg-muted hover:border-fg-subtle hover:text-fg",
+                )}
+              >
+                <span className={cn("text-[13px] font-medium", i === active ? "text-accent" : "text-fg-subtle")}>{r.team}</span>
+                <span className="text-[15px] leading-6">{r.ask}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
-        <figure className="flex min-h-[300px] flex-1 flex-col overflow-hidden rounded-xl term border border-border-strong">
+        <figure className="term flex min-h-[340px] flex-col overflow-hidden rounded-xl border border-border-strong">
           <figcaption className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5 text-[12px] text-fg-subtle">
             <span>Muse / Claude Code, with ShipCube connected</span>
             <button
@@ -182,7 +190,7 @@ export function HeroStage() {
               </li>
             )}
           </ol>
-          <p className="mt-auto px-4 pb-3 text-[11.5px] text-fg-subtle sm:px-5">Illustrated example. The tools are real; the apps are not.</p>
+          <p className="mt-auto px-4 pb-3 text-[12px] text-fg-subtle sm:px-5">Illustrated example. The tools are real; the apps are not.</p>
         </figure>
       </div>
     </div>
