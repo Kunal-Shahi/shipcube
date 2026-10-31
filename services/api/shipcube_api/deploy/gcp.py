@@ -221,8 +221,13 @@ class GcpDeployer:
                               "cleanupPolicies": REPO_CLEANUP})
         if op.get("name") and not op.get("done"):
             self._wait_op(sess, AR, op)
-        self._grant(sess, f"{repo_url}:getIamPolicy", f"{repo_url}:setIamPolicy", "roles/artifactregistry.writer", member,
-                    get="GET")
+        # The worker reads it too: creating a profiler job from an image here needs the caller to hold
+        # downloadArtifacts on the repo (Cloud Run checks it; #69/#72 put profiler images here).
+        policy = self._retry_new(lambda: self._call(sess, "GET", f"{repo_url}:getIamPolicy"))
+        changed = _add_binding(policy, "roles/artifactregistry.writer", member)
+        changed |= _add_binding(policy, "roles/artifactregistry.reader", f"serviceAccount:{self.s.worker_sa}")
+        if changed:
+            self._retry_new(lambda: self._call(sess, "POST", f"{repo_url}:setIamPolicy", json={"policy": policy}))
         # c. its upload folder (a managed folder), readable by the builder only, and inside it the
         #    folder its build logs go to, which only the builder can write (no logWriter: #28)
         for name, role in ((folder, "roles/storage.objectViewer"),
