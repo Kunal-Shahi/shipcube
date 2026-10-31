@@ -38,6 +38,8 @@ spec:
             - {name: SHIPCUBE_APPS_PROJECT, value: "${APPS_PROJECT}"}
             - {name: SHIPCUBE_REGION, value: "${REGION}"}
             - {name: SHIPCUBE_HOSTED_DEPLOYER_SA, value: "${SA_HOSTED_DEPLOYER}"}
+            - {name: SHIPCUBE_APP_EGRESS_NETWORK, value: "${APP_EGRESS_NETWORK}"}
+            - {name: SHIPCUBE_APP_EGRESS_SUBNET, value: "${APP_EGRESS_SUBNET}"}
             - {name: SHIPCUBE_CONSOLE_URL, value: "${CONSOLE_URL}"}
             # Returned to agents by ai_config; unset, it falls back to http://localhost:8090 (#41).
             - {name: SHIPCUBE_AI_GATEWAY_URL, value: "${GATEWAY_URL}"}
