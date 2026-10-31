@@ -57,8 +57,8 @@ export const STEPS: TourStep[] = [
   },
   {
     target: "nav-data",
-    title: "Your data",
-    body: "Connect a warehouse so agents query named measures, like revenue, instead of raw SQL. Changes to the model are proposed for your review.",
+    title: "Analyse your data",
+    body: "Connect your warehouse and your agent can pull your data and run analytics on it, like revenue by region last month. It uses your metric definitions, so the numbers match yours.",
   },
   {
     title: "You're all set",
