@@ -56,6 +56,37 @@ resource "google_storage_bucket_iam_member" "uploads_worker_profiler_janitor" {
   }
 }
 
+# The worker deletes a deploy's source once its build has used it (or the deploy finally failed), an
+# estimate's upload an hour after the estimate, and any leftovers at purge (worker._delete_sources).
+# Delete only, and only a workspace's uploads/ and inline/ objects: ws/<one segment>/uploads/... or
+# ws/<one segment>/inline/..., the same one-segment extract() check as the profiler janitor above.
+# Never bucket-wide; the one-day lifecycle rule stays as the backstop.
+resource "google_project_iam_custom_role" "source_cleanup" {
+  project     = var.apps_project_id
+  role_id     = "shipcubeSourceCleanup"
+  title       = "ShipCube source cleanup"
+  description = "Delete used source tarballs (granted on the uploads bucket under a ws/*/uploads|inline/ condition)."
+  permissions = ["storage.objects.delete"]
+}
+
+resource "google_storage_bucket_iam_member" "uploads_worker_source_cleanup" {
+  bucket = google_storage_bucket.uploads.name
+  role   = google_project_iam_custom_role.source_cleanup.id
+  member = google_service_account.worker.member
+  condition {
+    title       = "workspace sources only"
+    description = "ws/<one segment>/uploads/ and ws/<one segment>/inline/ objects"
+    expression  = <<-EOT
+      resource.name.startsWith("${local.uploads_objects}/ws/") && (
+        (resource.name.extract("${local.uploads_objects}/ws/{ws}/uploads/") != "" &&
+         resource.name.extract("${local.uploads_objects}/ws/{ws}/uploads/") == resource.name.extract("${local.uploads_objects}/ws/{ws}/")) ||
+        (resource.name.extract("${local.uploads_objects}/ws/{ws}/inline/") != "" &&
+         resource.name.extract("${local.uploads_objects}/ws/{ws}/inline/") == resource.name.extract("${local.uploads_objects}/ws/{ws}/"))
+      )
+    EOT
+  }
+}
+
 locals {
   uploads_objects = "projects/_/buckets/${google_storage_bucket.uploads.name}/objects"
 }

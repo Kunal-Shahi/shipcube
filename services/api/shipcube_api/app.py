@@ -327,9 +327,9 @@ def join_waitlist(body: WaitlistRequest, request: Request,
     # Signed in (the console's one-click request), the email is the session's verified one, not the body's.
     if authorization:
         ident = _verified_console(authorization)
-        waitlist.sign_up(ident.email, body.name, body.use_case, body.website, None)
+        waitlist.sign_up(ident.email, body.name, body.use_case, body.website, None, body.terms_version)
     elif body.email:
-        waitlist.sign_up(body.email, body.name, body.use_case, body.website, _client_ip(request))
+        waitlist.sign_up(body.email, body.name, body.use_case, body.website, _client_ip(request), body.terms_version)
     else:
         raise ApiError(400, "invalid_argument", "email: required")
     return {"status": "received"}
