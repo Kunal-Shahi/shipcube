@@ -105,7 +105,7 @@ export interface ConsoleData {
   // Early access. Requests come from the landing page's form, which posts from the browser
   // straight to the API (POST /v1/waitlist); the console reads status and decides.
   /** Signed in without a workspace: request access for the session's own (verified) email. */
-  requestAccessSignedIn(input: { name: string; useCase: string }): Promise<void>;
+  requestAccessSignedIn(input: { name: string; useCase: string; termsVersion: string }): Promise<void>;
   /** Member, or where the signed-in person's access request stands. Throws only when the API fails. */
   accountStatus(): Promise<AccountStatus>;
   listWaitlist(status: WaitlistState | "all"): Promise<WaitlistPage>;

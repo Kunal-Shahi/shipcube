@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .deploy.base import Deployer, DeployError
-from . import upload_guard
+from . import abuse_screen, upload_guard
 from .deploy import isolation
 from .settings import settings
 
@@ -63,9 +63,16 @@ class PlacementEstimator:
                                        service_account=settings.profiler_job, **self.workspace_build(workspace_id))
         else:
             runner = StaticRunner()
+        # Strikes are counted per source (abuse_screen): key them from the bytes this run actually read and
+        # screened, never from the source's state afterwards. Git: no key (the clone's commit isn't exposed),
+        # so its strikes count per operation.
+        key: dict[str, str | None] = {"source_key": abuse_screen.source_key(None, workspace_id, source)
+                                      if source.get("kind") == "inline" else None}
+
         def fetch_upload(upload_id: str) -> Path:
             tarball = self.d.download_upload(workspace_id, upload_id, tmp / f"{upload_id}.tgz")
             upload_guard.check_tarball(tarball)  # before tarfile sees it: bounded memory and CPU
+            key["source_key"] = "files:" + abuse_screen.tarball_digest(tarball)
             return tarball
 
         # /tmp is memory on Cloud Run, shared with the deploy lane: limit how many sources are on disk
@@ -75,10 +82,14 @@ class PlacementEstimator:
             try:
                 res = estimate(source, {k: v for k, v in hints.items() if v is not None}, runner=runner,
                                fetch_upload=fetch_upload)
+            except Exception as e:
+                e.source_key = key["source_key"]  # type: ignore[attr-defined] — for AbuseRefused's strikes
+                raise
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
         out = res.model_dump(mode="json") if hasattr(res, "model_dump") else dict(res.__dict__)
         out.setdefault("estimate_id", f"est_{op_id.replace('-', '')[:12]}")
+        out["source_key"] = key["source_key"]
         return out
 
 
@@ -124,7 +135,10 @@ class DevEstimator:
         }
         if static_reason:
             classified["profile"] = {**classified["profile"], "measurements": {"mode": "static", "abuse_signals": []}}
-        return with_static_reason({**classified, **explain(classified).model_dump(mode="json"), "dev_mode": True}, static_reason)
+        out = with_static_reason({**classified, **explain(classified).model_dump(mode="json"), "dev_mode": True}, static_reason)
+        # Like PlacementEstimator: inline sources key exactly; nothing is fetched here, so others don't.
+        out["source_key"] = abuse_screen.source_key(None, workspace_id, source) if source.get("kind") == "inline" else None
+        return out
 
 
 def measurements(result: dict[str, Any] | None) -> dict[str, Any]:

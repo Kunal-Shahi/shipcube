@@ -45,7 +45,7 @@ class CodeSummary:
     uses_data_libs: bool = False
     uses_network_libs: bool = False
     writes_outputs: list[str] = field(default_factory=list)  # file suffixes the code writes
-    excerpt: str = ""                    # first lines of the entrypoint (untrusted text)
+    excerpt: str = ""                    # unused by default (excerpt_lines=0): code never goes to Muse
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -93,7 +93,7 @@ def _has_main_guard(tree: ast.AST) -> bool:
     return False
 
 
-def summarize(root: Path, excerpt_lines: int = 60) -> CodeSummary:
+def summarize(root: Path, excerpt_lines: int = 0) -> CodeSummary:
     s = CodeSummary()
     files = _py_files(root)
     s.files = len(files)

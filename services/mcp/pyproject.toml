@@ -28,9 +28,9 @@ dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 [tool.uv.sources]
 shipcube-api = { path = "../api", editable = true }
 shipcube-data = { git = "https://github.com/Kunal-Shahi/shipcube-data", rev = "217cf45c73e508059082a85ef618214b721c3032" }  # main after PRs #9 and #10 (issue #8)
-shipcube-placement = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "packages/placement" }
-shipcube-profiler = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "packages/profiler" }
-shipcube-classifier = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "fefbe7df1a5d3b686f40f5075a6754c68fe690ed", subdirectory = "ml/workload-classifier" }
+shipcube-placement = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "d92d22fdc49f3c6f6e665fe5a460d57e79e4770a", subdirectory = "packages/placement" }
+shipcube-profiler = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "d92d22fdc49f3c6f6e665fe5a460d57e79e4770a", subdirectory = "packages/profiler" }
+shipcube-classifier = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "d92d22fdc49f3c6f6e665fe5a460d57e79e4770a", subdirectory = "ml/workload-classifier" }
 
 [build-system]
 requires = ["hatchling"]

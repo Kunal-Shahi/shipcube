@@ -118,7 +118,8 @@ def check(root: Path) -> list[str]:
 
 
 # The worker on the uploads bucket: read and create, plus delete only for profiler sources
-# (uploads.tf, profiler_source_janitor). Never bucket-wide delete or overwrite.
+# (uploads.tf, profiler_source_janitor) and for used deploy sources (source_cleanup: ws/<ws>/uploads/ and
+# ws/<ws>/inline/). Never bucket-wide delete or overwrite.
 WORKER_UPLOAD_ROLES = {"roles/storage.objectViewer", "roles/storage.objectCreator"}
 JANITOR_ROLE = "google_project_iam_custom_role.profiler_source_janitor.id"
 # One ws/ segment, then profiler/: the text between ws/ and /profiler/ equals the first segment
@@ -127,6 +128,18 @@ _OBJ = "${local.uploads_objects}"
 JANITOR_CONDITION = (f'resource.name.startsWith("{_OBJ}/ws/") && '
                      f'resource.name.extract("{_OBJ}/ws/{{ws}}/profiler/") != "" && '
                      f'resource.name.extract("{_OBJ}/ws/{{ws}}/profiler/") == resource.name.extract("{_OBJ}/ws/{{ws}}/")')
+SOURCE_CLEANUP_ROLE = "google_project_iam_custom_role.source_cleanup.id"
+
+
+def _one_segment(folder: str) -> str:
+    return (f'(resource.name.extract("{_OBJ}/ws/{{ws}}/{folder}/") != "" && '
+            f'resource.name.extract("{_OBJ}/ws/{{ws}}/{folder}/") == resource.name.extract("{_OBJ}/ws/{{ws}}/"))')
+
+
+SOURCE_CLEANUP_CONDITION = (f'resource.name.startsWith("{_OBJ}/ws/") && ( {_one_segment("uploads")} || '
+                            f'{_one_segment("inline")} )')
+# Each delete-only custom role on the uploads bucket, with the one condition it may be granted under.
+DELETE_ROLES = {JANITOR_ROLE: JANITOR_CONDITION, SOURCE_CLEANUP_ROLE: SOURCE_CLEANUP_CONDITION}
 UPLOADS_OBJECTS = 'uploads_objects = "projects/_/buckets/${google_storage_bucket.uploads.name}/objects"'
 
 
@@ -146,7 +159,8 @@ def _uploads_worker_problems(resources) -> list[str]:
     problems = []
     for f, t, n, body in resources:
         where = f"{f}: {t}.{n}"
-        if (t, n) == ("google_project_iam_custom_role", "profiler_source_janitor"):
+        if (t, n) in (("google_project_iam_custom_role", "profiler_source_janitor"),
+                      ("google_project_iam_custom_role", "source_cleanup")):
             perms = re.search(r"permissions\s*=\s*\[(.*?)\]", body, re.S)
             if not perms or set(re.findall(r'"([^"]+)"', perms[1])) != {"storage.objects.delete"}:
                 problems.append(f"{where} must hold storage.objects.delete and nothing else")
@@ -154,17 +168,18 @@ def _uploads_worker_problems(resources) -> list[str]:
                 or "google_service_account.worker.member" not in body:
             continue
         roles = set(re.findall(r'"(roles/[^"]+)"', body))
-        if JANITOR_ROLE in body:
+        if delete_role := next((r for r in DELETE_ROLES if r in body), None):
+            want = DELETE_ROLES[delete_role]
             expr = _condition_expression(body)
             if expr is None:
                 problems.append(f"{where} must have a condition")
             elif re.search(r"\.(?:matches|contains)\s*\(", expr):
                 problems.append(f"{where} uses matches()/contains(), which IAM conditions can't compile")
-            elif " ".join(expr.split()) != JANITOR_CONDITION:
-                problems.append(f"{where} condition must be exactly: {JANITOR_CONDITION}")
+            elif " ".join(expr.split()) != want:
+                problems.append(f"{where} condition must be exactly: {want}")
         elif not roles or not roles <= WORKER_UPLOAD_ROLES:
             problems.append(f"{where} gives the worker {sorted(roles - WORKER_UPLOAD_ROLES) or 'a non-literal role'} "
-                            f"on the uploads bucket; only viewer, creator and the conditioned janitor role")
+                            f"on the uploads bucket; only viewer, creator and the conditioned delete-only roles")
     if not any((t, n) == ("google_storage_bucket_iam_member", "uploads_worker_profiler_janitor")
                for _, t, n, _ in resources):
         problems.append("missing google_storage_bucket_iam_member.uploads_worker_profiler_janitor")

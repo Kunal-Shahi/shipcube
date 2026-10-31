@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { TERMS_VERSION } from "./legal";
 import { LIMITS, submitAccessRequest, validateAccessRequest } from "./waitlist";
 
-const ok = { email: "ada@example.com", name: "Ada", useCase: "A cost dashboard for ops." };
+const ok = { email: "ada@example.com", name: "Ada", useCase: "A cost dashboard for ops.", consent: true };
 
 describe("validateAccessRequest", () => {
   it("accepts a complete request", () => {
@@ -9,12 +10,17 @@ describe("validateAccessRequest", () => {
   });
 
   it("names each missing or malformed field", () => {
-    expect(validateAccessRequest({ email: "", name: " ", useCase: "" })).toEqual({
+    expect(validateAccessRequest({ email: "", name: " ", useCase: "", consent: false })).toEqual({
       email: "Enter your work email.",
       name: "Enter your name.",
       useCase: "Say a little about what you'd deploy.",
+      consent: "Agree to the Terms and Privacy notice to request access.",
     });
     expect(validateAccessRequest({ ...ok, email: "ada@example" }).email).toMatch(/email address/);
+  });
+
+  it("needs the Terms and Privacy notice agreed to", () => {
+    expect(validateAccessRequest({ ...ok, consent: false })).toEqual({ consent: "Agree to the Terms and Privacy notice to request access." });
   });
 
   it("enforces the length limits the API also enforces", () => {
@@ -28,13 +34,13 @@ describe("submitAccessRequest", () => {
     vi.fn(async () => new Response(JSON.stringify(body), { status, headers }));
   const fields = { ...ok, honeypot: "" };
 
-  it("posts the API's field names, without cookies, and treats 202 as done", async () => {
+  it("posts the API's field names and the terms version, without cookies, and treats 202 as done", async () => {
     const f = reply(202, { status: "received" });
     expect(await submitAccessRequest("https://api.example", fields, f)).toEqual({ ok: true });
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://api.example/v1/waitlist");
     expect(init.credentials).toBe("omit");
-    expect(JSON.parse(String(init.body))).toEqual({ email: ok.email, name: ok.name, use_case: ok.useCase, website: "" });
+    expect(JSON.parse(String(init.body))).toEqual({ email: ok.email, name: ok.name, use_case: ok.useCase, terms_version: TERMS_VERSION, website: "" });
   });
 
   it("passes a filled honeypot through for the API to drop quietly", async () => {
