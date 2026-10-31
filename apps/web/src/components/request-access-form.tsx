@@ -1,6 +1,7 @@
 "use client";
 
 import { CheckCircle2 } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 import { requestAccessSignedInAction } from "@/app/(auth)/actions";
 import { cn } from "@/lib/cn";
@@ -42,6 +43,7 @@ export function RequestAccessForm({ apiBase, accountEmail }: { apiBase: string |
       name: String(f.get("name") ?? ""),
       useCase: String(f.get("useCase") ?? ""),
       honeypot: String(f.get(HONEYPOT) ?? ""),
+      consent: f.get("consent") === "on",
     };
   };
 
@@ -66,7 +68,7 @@ export function RequestAccessForm({ apiBase, accountEmail }: { apiBase: string |
     }
     setPending(true);
     const r = accountEmail
-      ? await requestAccessSignedInAction({ name: fields.name, useCase: fields.useCase }).catch(() => ({ ok: false as const, message: "Couldn't reach the console server. Try again." }))
+      ? await requestAccessSignedInAction({ name: fields.name, useCase: fields.useCase, consent: fields.consent }).catch(() => ({ ok: false as const, message: "Couldn't reach the console server. Try again." }))
       : apiBase
         ? await submitAccessRequest(apiBase, fields)
         : await new Promise<{ ok: true }>((ok) => setTimeout(() => ok({ ok: true }), 400));
@@ -103,6 +105,36 @@ export function RequestAccessForm({ apiBase, accountEmail }: { apiBase: string |
           className={cn(inputClass, "h-auto min-h-[76px] resize-y py-2")}
         />
       </Field>
+      <div>
+        <label htmlFor="ra-consent" className="flex items-start gap-2.5 text-[13px] leading-5">
+          <input
+            id="ra-consent"
+            name="consent"
+            type="checkbox"
+            required
+            aria-invalid={errors.consent ? true : undefined}
+            aria-describedby={errors.consent ? "ra-consent-error" : undefined}
+            onChange={(e) => e.currentTarget.checked && setErrors((prev) => ({ ...prev, consent: undefined }))}
+            className="mt-0.5 size-4 shrink-0 accent-[var(--accent)]"
+          />
+          <span>
+            I agree to the{" "}
+            <Link href="/terms" target="_blank" className="text-accent underline-offset-2 hover:underline">
+              Terms
+            </Link>{" "}
+            and{" "}
+            <Link href="/privacy" target="_blank" className="text-accent underline-offset-2 hover:underline">
+              Privacy notice
+            </Link>
+            .
+          </span>
+        </label>
+        {errors.consent && (
+          <p id="ra-consent-error" className="mt-1 text-[12px] text-critical">
+            {errors.consent}
+          </p>
+        )}
+      </div>
       {/* Honeypot: hidden from people and assistive tech. The API quietly drops requests that fill it. */}
       <div aria-hidden="true" className="absolute -left-[9999px] h-px w-px overflow-hidden">
         <label htmlFor="ra-hp">Website</label>

@@ -26,7 +26,7 @@ describe("csp()", () => {
 
 describe("which routes need a session", () => {
   it("leaves only the landing page, sign-in and the auth endpoints public", () => {
-    for (const p of ["/", "/opengraph-image", "/sign-in", "/sign-up", "/api/auth/session", "/api/healthz"]) expect(isPublic(p), p).toBe(true);
+    for (const p of ["/", "/opengraph-image", "/terms", "/privacy", "/sign-in", "/sign-up", "/api/auth/session", "/api/healthz"]) expect(isPublic(p), p).toBe(true);
   });
 
   it("protects every console route, the waitlist page and the admin page", () => {

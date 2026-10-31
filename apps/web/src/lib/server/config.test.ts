@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEV_MCP_URL, config, mockDataEnabled, resetConfig } from "./config";
 
 function withEnv(env: Record<string, string>) {
-  for (const k of ["DEV_MODE", "AUTH_PROVIDER", "K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB", "SHIPCUBE_DEV_MODE", "SHIPCUBE_DEV_API_SESSION", "SHIPCUBE_API_URL", "IDENTITY_PLATFORM_PROJECT", "NEXT_PUBLIC_FIREBASE_PROJECT_ID", "SHIPCUBE_MCP_URL", "FIREBASE_AUTH_EMULATOR_HOST", "SHIPCUBE_CONSOLE_ORIGINS", "SHIPCUBE_CONSOLE_URL"]) vi.stubEnv(k, "");
+  for (const k of ["DEV_MODE", "AUTH_PROVIDER", "K_SERVICE", "K_REVISION", "CLOUD_RUN_JOB", "SHIPCUBE_DEV_MODE", "SHIPCUBE_DEV_API_SESSION", "SHIPCUBE_API_URL", "IDENTITY_PLATFORM_PROJECT", "NEXT_PUBLIC_FIREBASE_PROJECT_ID", "SHIPCUBE_MCP_URL", "FIREBASE_AUTH_EMULATOR_HOST", "SHIPCUBE_CONSOLE_ORIGINS", "SHIPCUBE_CONSOLE_URL", "SHIPCUBE_CONTACT_EMAIL"]) vi.stubEnv(k, "");
   for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
   resetConfig();
 }
@@ -31,6 +31,15 @@ describe("config()", () => {
     expect(() => config()).toThrow(/must use https/);
     withEnv({ ...prod, SHIPCUBE_MCP_URL: "not a url" });
     expect(() => config()).toThrow(/isn't a URL/);
+  });
+
+  it("reads the contact email, and ignores one that isn't an address", () => {
+    withEnv({ DEV_MODE: "1" });
+    expect(config().contactEmail).toBeNull();
+    withEnv({ DEV_MODE: "1", SHIPCUBE_CONTACT_EMAIL: " support@example.com " });
+    expect(config().contactEmail).toBe("support@example.com");
+    withEnv({ DEV_MODE: "1", SHIPCUBE_CONTACT_EMAIL: "support at example" });
+    expect(config().contactEmail).toBeNull();
   });
 
   it("defaults the MCP URL to the local server in DEV_MODE", () => {

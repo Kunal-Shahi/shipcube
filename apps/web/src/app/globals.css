@@ -254,3 +254,37 @@ h3 {
     opacity: 1;
   }
 }
+
+/* /terms and /privacy: plain text, readable line length, quiet headings. */
+.legal {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--fg-muted);
+}
+.legal h2 {
+  margin-top: 2rem;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.legal p,
+.legal ul {
+  margin-top: 0.6rem;
+}
+.legal ul {
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+.legal li + li {
+  margin-top: 0.3rem;
+}
+.legal strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+.legal a {
+  color: var(--accent);
+}
+.legal a:hover {
+  text-decoration: underline;
+}
