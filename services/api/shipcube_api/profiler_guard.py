@@ -199,7 +199,7 @@ def _charge(conn, workspace_id: Any, lim: Limits) -> dict[str, Any]:
 STRIKES_TO_SUSPEND = 3
 STRIKE_WINDOW_H = 24
 SUSPEND_H = 24
-HUMAN_ONLY = {"mining_pool"}  # suspended until a person clears it
+HUMAN_ONLY = {"mining_pool", "prescreen_crypto_miner"}  # suspended until a person clears it (abuse_screen.py)
 
 
 def record_abuse(conn, op: dict[str, Any], signals: list[str]) -> str | None:

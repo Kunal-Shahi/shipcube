@@ -36,7 +36,7 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from . import db, obs, profiler_guard, profiler_janitor
+from . import abuse_screen, db, obs, profiler_guard, profiler_janitor
 from .deploy import isolation
 from .deploy.base import AppRef, Deployer, DeployError
 from .estimator import Estimator, make_estimator, measurements
@@ -258,9 +258,19 @@ class Worker:
                         state.update(profiler_guard.start_run(conn, op))
 
             def place() -> dict[str, Any]:
-                res = self.estimator.estimate(inp["source"], {k: inp.get(k) for k in HINTS},
-                                              workspace_id=str(op["workspace_id"]), op_id=str(op["id"]),
-                                              static_reason=state.get("static_reason"))
+                try:
+                    res = self.estimator.estimate(inp["source"], {k: inp.get(k) for k in HINTS},
+                                                  workspace_id=str(op["workspace_id"]), op_id=str(op["id"]),
+                                                  static_reason=state.get("static_reason"))
+                except Exception as e:
+                    # The pre-screen blocked the source before profiling (shipcube_profiler.AbuseRefused):
+                    # a typed refusal and strikes, never an internal failure.
+                    if type(e).__name__ != "AbuseRefused":
+                        raise
+                    verdict = getattr(e, "verdict", None)
+                    verdict = verdict.to_dict() if hasattr(verdict, "to_dict") else verdict
+                    abuse_screen.enforce(op, verdict or {"verdict": "blocked", "reasons": list(getattr(e, "codes", []) or [])})
+                    raise  # enforce raised the typed refusal; this is only reached if the verdict wasn't blocked
                 if signals := measurements(res).get("abuse_signals"):
                     with db.worker_tx() as conn:
                         profiler_guard.record_abuse(conn, op, list(signals))
@@ -275,6 +285,12 @@ class Worker:
             dep_id = inp["deployment_id"]
 
             def validate() -> None:
+                if "prescreen" not in state:  # before staging or any build; refuses a blocked source
+                    verdict = abuse_screen.screen(self.d, str(op["workspace_id"]), inp["source"]) \
+                        if getattr(self.d, "screens_sources", True) else None
+                    if verdict is not None:
+                        abuse_screen.enforce(op, verdict)
+                    state["prescreen"] = (verdict or {}).get("verdict", "skipped")
                 if "staged" not in state:
                     state["staged"] = self.d.stage_source(ref, inp["source"], str(op["id"]))
                 with db.worker_tx() as conn:
