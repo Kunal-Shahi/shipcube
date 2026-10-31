@@ -156,3 +156,74 @@ def test_janitor_condition_allows_exactly_one_ws_segment_then_profiler(obj, allo
     if not allowed:                                            # never broader under the other reading
         assert _janitor_allows(name, shortest=False) is False, obj
     assert _janitor_allows(name.replace("shipcube-uploads-ks", "other-bucket")) is False
+
+
+# --- the worker's used-source cleanup: ws/<one segment>/uploads/ and inline/ only (uploads.tf) ---------
+
+SOURCE_BREAKS = {
+    "condition dropped": None,
+    "uploads segment check dropped": (
+        ' &&\n         resource.name.extract("${local.uploads_objects}/ws/{ws}/uploads/") == '
+        'resource.name.extract("${local.uploads_objects}/ws/{ws}/")', ""),
+    "inline segment check dropped": (
+        ' &&\n         resource.name.extract("${local.uploads_objects}/ws/{ws}/inline/") == '
+        'resource.name.extract("${local.uploads_objects}/ws/{ws}/")', ""),
+    "another folder": ('/ws/{ws}/inline/") != ""', '/ws/{ws}/") != ""'),
+    "extra permission": ('description = "Delete used source tarballs (granted on the uploads bucket under a ws/*/uploads|inline/ condition)."\n'
+                         '  permissions = ["storage.objects.delete"]',
+                         'description = "Delete used source tarballs (granted on the uploads bucket under a ws/*/uploads|inline/ condition)."\n'
+                         '  permissions = ["storage.objects.delete", "storage.objects.update"]'),
+}
+
+
+@pytest.mark.parametrize("name", SOURCE_BREAKS)
+def test_worker_source_cleanup_stays_on_workspace_sources(tmp_path, name):
+    root = tmp_path / "terraform"
+    shutil.copytree(TF, root, ignore=shutil.ignore_patterns(".terraform*"))
+    up = root / "uploads.tf"
+    text = up.read_text()
+    head, tail = text.split('"uploads_worker_source_cleanup"', 1)
+    if SOURCE_BREAKS[name] is None:   # the cleanup grant without its condition block
+        broken = head + '"uploads_worker_source_cleanup"' + re.sub(r"\n  condition \{.*?\n  \}", "", tail, count=1, flags=re.S)
+    else:
+        old, new = SOURCE_BREAKS[name]
+        broken = text.replace(old, new)
+    assert broken != text, name
+    up.write_text(broken)
+    assert chk.check(root), name
+
+
+def _source_allows(name: str, bucket: str = "shipcube-uploads-ks", shortest: bool = True) -> bool:
+    o = f"projects/_/buckets/{bucket}/objects"
+    first = _extract(name, f"{o}/ws/{{ws}}/", shortest)
+
+    def under(folder: str) -> bool:
+        seg = _extract(name, f"{o}/ws/{{ws}}/{folder}/", shortest)
+        return seg != "" and seg == first
+
+    return name.startswith(f"{o}/ws/") and (under("uploads") or under("inline"))
+
+
+def test_source_cleanup_condition_text_is_the_one_modelled():
+    expr = chk._condition_expression((TF / "uploads.tf").read_text().split("uploads_worker_source_cleanup", 1)[1])
+    assert " ".join(expr.split()) == chk.SOURCE_CLEANUP_CONDITION
+
+
+@pytest.mark.parametrize("obj,allowed", [
+    ("ws/3c1d5e2a-7b4f-4e8a-9c6d-1234567890ab/uploads/upl_1a2b3c.tgz", True),
+    ("ws/3c1d/inline/0b5c-op.tgz", True),
+    ("ws/3c1d/profiler/est-1.tar.gz", False),                   # the profiler janitor's, not this role's
+    ("ws/3c1d/build-logs/log.txt", False),
+    ("ws/a/b/uploads/x.tgz", False),                            # two segments before uploads/
+    ("ws//uploads/x.tgz", False),                               # empty segment
+    ("ws/3c1d/uploadsX/y", False),
+    ("ws/3c1d/uploads", False),
+    ("other/3c1d/uploads/x", False),
+    ("uploads/x.tgz", False),
+])
+def test_source_cleanup_allows_exactly_one_ws_segment_then_uploads_or_inline(obj, allowed):
+    name = f"projects/_/buckets/shipcube-uploads-ks/objects/{obj}"
+    assert _source_allows(name) is allowed, obj
+    if not allowed:
+        assert _source_allows(name, shortest=False) is False, obj
+    assert _source_allows(name.replace("shipcube-uploads-ks", "other-bucket")) is False

@@ -118,6 +118,17 @@ class LocalDeployer:
         return {"upload_id": upload_id, "method": "PUT", "url": url, "headers": {"Content-Type": content_type},
                 "max_bytes": UPLOAD_MAX_BYTES, "expires_at": expires}
 
+    def delete_objects(self, workspace_id: str, names: list[str]) -> None:
+        from google.api_core.exceptions import NotFound
+
+        bucket = self._bucket()
+        for name in names:
+            isolation.check_object(self.s, workspace_id, self.s.upload_bucket, name)
+            try:
+                bucket.blob(name).delete()
+            except NotFound:
+                pass
+
     def download_upload(self, workspace_id: str, upload_id: str, dest: Any) -> Any:
         blob = self._bucket().blob(isolation.upload_object(self.s, workspace_id, upload_id))
         if not blob.exists():
@@ -138,7 +149,7 @@ class LocalDeployer:
             name = isolation.upload_object(self.s, app.workspace_id, source["upload_id"])
             blob = bucket.blob(name)
             if not blob.exists():
-                raise DeployError("invalid_argument", f"upload {source['upload_id']} was not found; PUT the tarball first")
+                raise DeployError("invalid_argument", f"upload {source['upload_id']} was not found; PUT the tarball first (uploads are deleted once a build uses them, or an hour after an estimate; create a new upload)")
             blob.reload()
             if (blob.size or 0) > UPLOAD_MAX_BYTES:
                 raise DeployError("invalid_argument", "upload is larger than 100 MB")
