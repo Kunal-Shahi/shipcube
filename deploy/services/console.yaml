@@ -34,6 +34,7 @@ spec:
             - {name: SHIPCUBE_MCP_URL, value: "${MCP_URL}/mcp"}
             - {name: IDENTITY_PLATFORM_PROJECT, value: "${PROJECT}"}
             - {name: FIREBASE_WEB_API_KEY, value: "${FIREBASE_WEB_API_KEY}"}
+            - {name: FIREBASE_AUTH_DOMAIN, value: "${FIREBASE_AUTH_DOMAIN}"}
             - {name: GOOGLE_CLOUD_PROJECT, value: "${PROJECT}"}
           startupProbe:
             httpGet: {path: /api/healthz, port: 8080}
