@@ -117,7 +117,7 @@ function AppArt() {
         {[62, 80, 45].map((v, i) => (
           <div key={i} className="rounded-md border border-border bg-surface p-3">
             <div className="h-1.5 w-10 rounded bg-border-strong" />
-            <div className="mt-6 h-1.5 rounded bg-accent" style={{ width: `${v}%` }} />
+            <div className="mt-6 h-1.5 rounded bg-mark" style={{ width: `${v}%` }} />
           </div>
         ))}
       </div>
@@ -149,7 +149,7 @@ function JobsArt() {
           {/* A day in hours: lit cells are when it runs, and the only time it bills. */}
           <div className="mt-2 grid grid-cols-24 gap-[3px]" aria-hidden>
             {Array.from({ length: 24 }, (_, h) => (
-              <div key={h} className={cn("h-3 rounded-[2px]", j.runs.includes(h) ? "bg-accent" : "bg-surface-2")} />
+              <div key={h} className={cn("h-3 rounded-[2px]", j.runs.includes(h) ? "bg-mark" : "bg-surface-2")} />
             ))}
           </div>
         </div>
@@ -168,7 +168,7 @@ function EstimateArt() {
       </div>
       <div className="mt-1 font-display text-[40px] leading-none font-semibold tracking-[-0.02em]">$4 to $11</div>
       <div className="relative mt-4 h-2 rounded-full bg-surface-2" aria-hidden>
-        <div className="absolute inset-y-0 left-[18%] w-[34%] rounded-full bg-accent/60" />
+        <div className="absolute inset-y-0 left-[18%] w-[34%] rounded-full bg-mark/60" />
         <div className="absolute -top-1 left-[30%] h-4 w-0.5 bg-fg" />
       </div>
       <div className="mt-4">
@@ -224,7 +224,7 @@ function GatewayArt() {
             </span>
           </div>
           <div className="mt-2 h-2 rounded-full bg-surface-2" aria-hidden>
-            <div className="h-full rounded-full bg-accent" style={{ width: `${m.used}%` }} />
+            <div className="h-full rounded-full bg-mark" style={{ width: `${m.used}%` }} />
           </div>
         </div>
       ))}

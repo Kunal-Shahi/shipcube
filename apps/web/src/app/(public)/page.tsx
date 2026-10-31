@@ -174,7 +174,7 @@ export default async function Landing() {
                     </div>
                     <div className="grid grid-cols-24 gap-[3px]" role="img" aria-label={`Billed for ${c.hours.length} of 24 hours`}>
                       {Array.from({ length: 24 }, (_, h) => (
-                        <span key={h} className={`h-5 rounded-[2px] ${c.hours.includes(h) ? "bg-accent" : "bg-surface-2"}`} />
+                        <span key={h} className={`h-5 rounded-[2px] ${c.hours.includes(h) ? "bg-mark" : "bg-surface-2"}`} />
                       ))}
                     </div>
                   </li>

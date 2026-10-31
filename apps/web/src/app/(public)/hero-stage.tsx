@@ -162,7 +162,7 @@ export function HeroStage() {
             </li>
             {req.steps.slice(0, shown).map((s, i) => (
               <li key={`${active}-${i}`} className="stage-line flex flex-wrap gap-x-2">
-                <span className={s.tone === "wait" ? "text-[var(--approve)]" : s.tone === "ok" ? "text-good" : "text-accent"}>
+                <span className={cn("font-semibold", s.tone === "wait" ? "text-[var(--approve)]" : s.tone === "ok" ? "text-good" : "text-accent")}>
                   {s.tool === "approved" ? "you approved" : `shipcube.${s.tool}`}
                 </span>
                 <span className="text-fg-muted">

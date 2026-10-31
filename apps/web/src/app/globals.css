@@ -91,6 +91,8 @@
   --color-accent-fg: var(--accent-fg);
   --color-accent-soft: var(--accent-soft);
   /* Primary buttons. The console uses its accent; the landing page sets its own --cta. */
+  /* Bars, strips and lines on the landing page; text never uses it. */
+  --color-mark: var(--mark, var(--accent));
   --color-cta: var(--cta, var(--accent));
   --color-cta-hover: var(--cta-hover, var(--accent-hover));
   --color-cta-fg: var(--cta-fg, var(--accent-fg));
@@ -188,6 +190,7 @@ h3 {
   --accent-hover: #1f2779;
   --accent-fg: #fffffa;
   --accent-soft: #e4e6f7;
+  --mark: #29339b;
   --cta: #29339b;
   --cta-hover: #1f2779;
   --cta-fg: #fffffa;
@@ -214,14 +217,16 @@ h3 {
   --fg: #fffffa;
   --fg-muted: #d5d8f2;
   --fg-subtle: #b9bee8;
-  --accent: #34cfcb;
-  --accent-hover: #6fe0dd;
+  /* Text accents are off-white: teal text on blue vibrates. Teal stays for marks and the cube. */
+  --accent: #fffffa;
+  --accent-hover: #ffffff;
   --accent-fg: #1f1300;
   --accent-soft: #1a2270;
+  --mark: #17bebb;
   --cta: #ffd23f;
   --cta-hover: #ffe17a;
   --cta-fg: #1f1300;
-  --good: #7ff0d9;
+  --good: #a7f3b5;
   --good-soft: #163a6e;
   --warning: #ff9b6a;
   --warning-soft: #3d2f6e;
@@ -245,14 +250,15 @@ h3 {
   --fg: #fffffa;
   --fg-muted: #cfc8b8;
   --fg-subtle: #ada48f;
-  --accent: #17bebb;
-  --accent-hover: #4fd6d3;
+  --accent: #fffffa;
+  --accent-hover: #ffffff;
   --accent-fg: #1f1300;
   --accent-soft: #0e3633;
+  --mark: #17bebb;
   --cta: #ffd23f;
   --cta-hover: #ffe17a;
   --cta-fg: #1f1300;
-  --good: #5fe0c4;
+  --good: #95e8a6;
   --good-soft: #10302a;
   --warning: #ff9b6a;
   --warning-soft: #3a1f0c;
