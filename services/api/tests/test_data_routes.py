@@ -30,12 +30,12 @@ def agent_caller(w):
 def test_data_page_reads(client, seeded):
     h = seeded["human"]
     w = client.get("/v1/data/warehouse", headers=h).json()
-    assert w["connected"] and w["model_version"] == 5
+    assert w["connected"] and w["model_version"] == 6  # the Olist demo ends at 0006
     cubes = client.get("/v1/data/cubes", headers=h).json()
     assert {c["name"] for c in cubes} == {"customers", "states", "orders", "products", "order_items"}
     assert client.get("/v1/data/cubes/orders", headers=h).json()["schema"] == "tenant_acme"
     migrations = client.get("/v1/data/migrations", headers=h).json()
-    assert len(migrations) == 5 and {m["status"] for m in migrations} == {"applied"}
+    assert len(migrations) == 6 and {m["status"] for m in migrations} == {"applied"}
     # A PAT with data:read reads too.
     assert client.get("/v1/data/cubes", headers=seeded["agent"]).status_code == 200
 

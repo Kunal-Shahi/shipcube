@@ -37,7 +37,7 @@ packages = ["shipcube_api"]
 testpaths = ["tests"]
 
 [tool.uv.sources]
-shipcube-data = { git = "https://github.com/Kunal-Shahi/shipcube-data", rev = "217cf45c73e508059082a85ef618214b721c3032" }  # main after PRs #9 and #10 (issue #8)
+shipcube-data = { git = "https://github.com/Kunal-Shahi/shipcube-data", rev = "358bf2274e031db555a3f02d569a591141ef221f" }  # main after PRs #11-#13 (week/quarter, L2 stages, governed SQL, pre-aggregations)n after PRs #9 and #10 (issue #8)
 shipcube-placement = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "d92d22fdc49f3c6f6e665fe5a460d57e79e4770a", subdirectory = "packages/placement" }
 shipcube-profiler = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "d92d22fdc49f3c6f6e665fe5a460d57e79e4770a", subdirectory = "packages/profiler" }
 shipcube-classifier = { git = "https://github.com/Kunal-Shahi/shipcube", rev = "d92d22fdc49f3c6f6e665fe5a460d57e79e4770a", subdirectory = "ml/workload-classifier" }
