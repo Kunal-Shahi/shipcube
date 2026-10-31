@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque } from "next/font/google";
 import { headers } from "next/headers";
-import { Building2, Database, Gauge, KeyRound, ShieldCheck, Sparkles, UserCheck } from "lucide-react";
+import { ArrowRight, Building2, KeyRound, ShieldCheck, UserCheck } from "lucide-react";
 import Link from "next/link";
 import { CodeBlock } from "@/components/copy-button";
 import { Wordmark } from "@/components/logo";
@@ -9,12 +9,14 @@ import { RequestAccessForm } from "@/components/request-access-form";
 import { ButtonLink } from "@/components/ui";
 import { auth } from "@/lib/auth";
 import { config } from "@/lib/server/config";
+import { ControlPlane } from "./control-plane";
+import { HeroStage } from "./hero-stage";
 
 const display = Bricolage_Grotesque({ subsets: ["latin"], variable: "--font-display", weight: ["600", "800"] });
 
-const TITLE = "ShipCube: your agent ships the app, you approve what matters";
+const TITLE = "ShipCube: your agent builds it, the cloud runs it";
 const DESCRIPTION =
-  "An MCP server for Claude Code, Cursor and other agents. Estimate, deploy, share and cap internal apps on Google Cloud, with a person's approval for anything risky.";
+  "One control plane for AI-built apps, jobs and data on Google Cloud. Claude Code, Cursor and other agents estimate, deploy, schedule and cap work from the conversation, and a person approves anything risky.";
 
 /** src/app/opengraph-image.tsx, made absolute with the request's host below. */
 const OG_IMAGE = { url: "/opengraph-image", width: 1200, height: 630, alt: TITLE };
@@ -41,31 +43,20 @@ export async function generateMetadata(): Promise<Metadata> {
 // Public: the only page besides sign-in that needs no session (src/middleware.ts).
 export const dynamic = "force-dynamic";
 
-type Line = { kind: "you"; text: string } | { kind: "call"; tool: string; result: string; tone?: "wait" | "ok" };
-
-// The hero: one request, followed through. Values are an illustration, not a measurement.
-const TRANSCRIPT: Line[] = [
-  { kind: "you", text: "Deploy this revenue tracker to our GCP project. Share it with finance, and keep it under $20 a month." },
-  { kind: "call", tool: "estimate_load", result: "bursty, interactive: T1 serverless, scales to zero, about $7 a month" },
-  { kind: "call", tool: "deploy_app", result: "first deploy to acme-prod waits for your approval", tone: "wait" },
-  { kind: "call", tool: "approval", result: "in the console, with one click; the deploy goes ahead", tone: "ok" },
-  { kind: "call", tool: "set_caps", result: "spend capped at $20 a month, AI tokens capped per day" },
-  { kind: "call", tool: "set_access", result: "finance-team@example.com can open it; nobody else can" },
-  { kind: "call", tool: "deploy_app", result: "live: private URL behind Google sign-in", tone: "ok" },
+// Where each kind of work lands (packages/placement), and the hours of a day it's billed for.
+// The hours are a picture of the billing model, not a measurement.
+const COMPUTE = [
+  { work: "A report that changes once a day", where: "Static snapshot, refreshed on a schedule", hours: [5] },
+  { work: "A dashboard your team opens", where: "Serverless, scales to zero between visits", hours: [9, 10, 13, 14, 15, 17] },
+  { work: "A notebook or script that runs nightly", where: "Cloud Run job on a schedule, billed while it runs", hours: [2, 3] },
+  { work: "A model that needs a GPU", where: "NVIDIA L4, billed while it works", hours: [11, 12, 13] },
+  { work: "An API that can't wait", where: "Always on, for steady latency", hours: Array.from({ length: 24 }, (_, h) => h) },
 ];
 
-const STEPS = [
-  { title: "Connect your agent", body: "Create a token in the console and add ShipCube to Claude Code, Cursor or any MCP client. One command." },
-  { title: "Ask for what you want", body: "“Ship this and share it with finance.” The agent estimates the load, picks a tier and deploys it." },
-  { title: "Approve what's risky", body: "First deploys to your project, cap raises, domain-wide sharing and deletes wait for you. Everything else just happens." },
-];
-
-const FEATURES = [
-  { icon: Gauge, title: "A cost estimate before every deploy", body: "ShipCube profiles the app, classifies the workload and picks serverless, batch or always-on. The reasoning and the expected monthly cost come back before anything runs." },
-  { icon: UserCheck, title: "A person approves the risky parts", body: "The agent asks; you decide in the console. It can't approve its own requests, and the approval page says exactly what changes." },
-  { icon: Sparkles, title: "Spend caps on AI", body: "Deployed apps call models through ShipCube's gateway, with per-app token and spend limits. Bring your own provider key, or use the default." },
-  { icon: Database, title: "A governed data layer", body: "Agents query your warehouse through named measures and dimensions, not raw SQL. They can propose model changes; a person reviews the diff and applies it." },
-  { icon: Building2, title: "Your GCP project, or ours", body: "Start on ShipCube's project with nothing to set up. Link your own project with one script, and apps bill to your account." },
+const FLOW = [
+  { title: "Your agent", items: ["Claude Code", "Cursor", "Any MCP client"] },
+  { title: "ShipCube", items: ["Load estimator", "Approval gate", "AI gateway", "Semantic data layer"] },
+  { title: "Google Cloud", items: ["Cloud Run services and jobs", "GPUs", "BigQuery and your warehouse"] },
 ];
 
 const SECURITY = [
@@ -116,70 +107,123 @@ export default async function Landing() {
           </nav>
         </header>
 
-        <section className="mx-auto grid max-w-[1180px] gap-12 px-4 pt-10 pb-20 sm:px-6 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] lg:items-center lg:pt-16 lg:pb-28">
-          <div>
-            <h1 className="font-display text-[44px] leading-[0.98] font-extrabold tracking-[-0.025em] text-balance sm:text-[64px] lg:text-[76px]">
-              Your agent ships the app. You approve what matters.
+        <section className="mx-auto max-w-[1180px] px-4 pt-10 pb-16 sm:px-6 lg:pt-16 lg:pb-24">
+          <div className="grid gap-8 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)] lg:items-end">
+            <h1 className="font-display text-[44px] leading-[0.95] font-extrabold tracking-[-0.03em] text-balance sm:text-[68px] lg:text-[88px]">
+              Your agent builds it. The cloud runs it.
             </h1>
-            <p className="mt-6 max-w-[54ch] text-[16px] leading-[26px] text-fg-muted sm:text-[17px] sm:leading-[28px]">
-              ShipCube is an MCP server for Claude Code, Cursor and other agents. They estimate, deploy, share and cap internal
-              apps on Google Cloud from the conversation you&apos;re already in. Anything risky waits for your yes.
-            </p>
-            <div className="mt-8 flex flex-wrap items-center gap-4">
-              <ButtonLink href="#request-access" variant="primary" className="h-11 px-5 text-[15px]">
-                Request access
-              </ButtonLink>
-              <Link href="/sign-in" className="text-fg-muted underline-offset-4 hover:text-fg hover:underline">
-                Approved already? Sign in
-              </Link>
+            <div className="lg:pb-2">
+              <p className="max-w-[48ch] text-[16px] leading-[26px] text-fg-muted sm:text-[17px] sm:leading-[28px]">
+                ShipCube is one control plane for AI-built apps, jobs and data on Google Cloud. Ask in Claude Code or Cursor;
+                it estimates, deploys, schedules and caps the work. No heavy laptop, and anything risky waits for your yes.
+              </p>
+              <div className="mt-6 flex flex-wrap items-center gap-4">
+                <ButtonLink href="#request-access" variant="primary" className="h-11 px-5 text-[15px]">
+                  Request access
+                </ButtonLink>
+                <Link href="/sign-in" className="text-fg-muted underline-offset-4 hover:text-fg hover:underline">
+                  Approved already? Sign in
+                </Link>
+              </div>
             </div>
-            <p className="mt-6 text-[13px] text-fg-subtle">Early access. A person reviews every request.</p>
           </div>
-
-          <Transcript />
+          <div className="mt-12 lg:mt-16">
+            <HeroStage />
+          </div>
         </section>
       </div>
 
       <main id="main">
-        <section id="how-it-works" aria-labelledby="how-heading" className="border-t border-border">
+        <section id="how-it-works" aria-labelledby="plane-heading" className="border-t border-border bg-surface">
           <div className="mx-auto max-w-[1180px] px-4 py-20 sm:px-6">
-            <h2 id="how-heading" className={H2}>
-              Three steps, then it&apos;s just a conversation
+            <h2 id="plane-heading" className={`max-w-[22ch] ${H2}`}>
+              One control plane for everything your agent builds
             </h2>
-            <ol className="mt-12 grid gap-10 md:grid-cols-3 md:gap-8">
-              {STEPS.map((s, i) => (
-                <li key={s.title}>
-                  <span className="num font-display text-[56px] leading-none font-extrabold text-accent" aria-hidden>
-                    {i + 1}
-                  </span>
-                  <h3 className="mt-3 text-[17px] font-semibold">{s.title}</h3>
-                  <p className="mt-1.5 max-w-[40ch] text-[15px] leading-6 text-fg-muted">{s.body}</p>
-                </li>
-              ))}
-            </ol>
-            <div className="mt-12 max-w-[760px]">
-              <CodeBlock
-                label="Step 1, in a terminal"
-                code={`claude mcp add --transport http shipcube ${c.mcpUrl} \\\n  --header "Authorization: Bearer $SHIPCUBE_TOKEN"`}
-              />
+            <p className="mt-4 max-w-[60ch] text-[16px] leading-[26px] text-fg-muted">
+              Apps, heavy jobs, data and AI spend, in one workspace your agent can drive and you can oversee. Pick a job to see
+              it.
+            </p>
+            <div className="mt-12">
+              <ControlPlane />
             </div>
           </div>
         </section>
 
-        <section aria-labelledby="features-heading" className="border-t border-border bg-surface">
+        <section aria-labelledby="compute-heading" className="border-t border-border">
+          <div className="mx-auto grid max-w-[1180px] gap-12 px-4 py-20 sm:px-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+            <div>
+              <h2 id="compute-heading" className={H2}>
+                Your laptop isn&apos;t a server
+              </h2>
+              <p className="mt-4 max-w-[44ch] text-[16px] leading-[26px] text-fg-muted">
+                Most heavy work runs once a day or once a week. You shouldn&apos;t need an expensive machine for it, or a
+                server that runs all month. ShipCube profiles each workload, puts it where it costs least, and stops billing
+                when it&apos;s done.
+              </p>
+            </div>
+            <div>
+              <div className="hidden pb-2 text-[12px] text-fg-subtle sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:gap-6" aria-hidden>
+                <span />
+                <span className="flex justify-between">
+                  <span>Midnight</span>
+                  <span>Noon</span>
+                  <span>Midnight</span>
+                </span>
+              </div>
+              <ul className="flex flex-col">
+                {COMPUTE.map((c) => (
+                  <li key={c.work} className="grid gap-2 border-t border-border py-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:items-center sm:gap-6">
+                    <div>
+                      <p className="text-[15px] font-medium">{c.work}</p>
+                      <p className="text-[13px] text-fg-muted">{c.where}</p>
+                    </div>
+                    <div className="grid grid-cols-24 gap-[3px]" role="img" aria-label={`Billed for ${c.hours.length} of 24 hours`}>
+                      {Array.from({ length: 24 }, (_, h) => (
+                        <span key={h} className={`h-5 rounded-[2px] ${c.hours.includes(h) ? "bg-accent" : "bg-surface-2"}`} />
+                      ))}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-[12px] text-fg-subtle">Lit hours are billed. An illustration of each billing model, not a measurement.</p>
+            </div>
+          </div>
+        </section>
+
+        <section aria-labelledby="flow-heading" className="border-t border-border bg-surface">
           <div className="mx-auto max-w-[1180px] px-4 py-20 sm:px-6">
-            <h2 id="features-heading" className={`max-w-[20ch] ${H2}`}>
-              What your agent gets, and where it stops
+            <h2 id="flow-heading" className={H2}>
+              How it fits together
             </h2>
-            <ul className="mt-12 grid gap-px overflow-hidden rounded-xl border border-border bg-border md:grid-cols-6">
-              {FEATURES.map(({ icon: Icon, title, body }, i) => (
-                <li key={title} className={`bg-surface p-6 sm:p-8 ${i < 2 ? "md:col-span-3" : "md:col-span-2"}`}>
-                  <Icon className="size-5 text-accent" aria-hidden />
-                  <h3 className="mt-4 text-[17px] font-semibold">{title}</h3>
-                  <p className="mt-2 text-[15px] leading-6 text-fg-muted">{body}</p>
+            <ol className="mt-12 grid items-stretch gap-3 md:grid-cols-[1fr_auto_1.2fr_auto_1fr]">
+              {FLOW.map((f, i) => (
+                <li key={f.title} className="contents">
+                  {i > 0 && (
+                    <ArrowRight className="size-5 rotate-90 self-center justify-self-center text-fg-subtle md:rotate-0" aria-hidden />
+                  )}
+                  <div
+                    className={`rounded-xl border p-5 ${f.title === "ShipCube" ? "border-accent bg-accent-soft" : "border-border bg-bg"}`}
+                  >
+                    <h3 className="text-[15px] font-semibold">{f.title}</h3>
+                    <ul className="mt-3 flex flex-col gap-1.5 text-[14px] text-fg-muted">
+                      {f.items.map((it) => (
+                        <li key={it}>{it}</li>
+                      ))}
+                    </ul>
+                  </div>
                 </li>
               ))}
-            </ul>
+            </ol>
+            <p className="mt-6 max-w-[64ch] text-[15px] leading-6 text-fg-muted">
+              Start on ShipCube&apos;s GCP project with nothing to set up. Link your own project with one script, and apps bill
+              to your account.
+            </p>
+            <div className="mt-10 max-w-[760px]">
+              <CodeBlock
+                label="Connect your agent, in a terminal"
+                code={`claude mcp add --transport http shipcube ${c.mcpUrl} \\\n  --header "Authorization: Bearer $SHIPCUBE_TOKEN"`}
+              />
+            </div>
           </div>
         </section>
 
@@ -241,54 +285,5 @@ export default async function Landing() {
         </div>
       </footer>
     </div>
-  );
-}
-
-/** The hero's moment: a request followed through to a live app, with the one step that waited for a person. */
-function Transcript() {
-  return (
-    <figure className="relative overflow-hidden rounded-xl border border-border-strong bg-[#0a0f24]/90 shadow-[0_30px_80px_-30px_rgb(123_140_255/0.45)]">
-      <figcaption className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-[12px] text-fg-subtle">
-        <span className="flex gap-1.5" aria-hidden>
-          <span className="size-2.5 rounded-full bg-border-strong" />
-          <span className="size-2.5 rounded-full bg-border-strong" />
-          <span className="size-2.5 rounded-full bg-border-strong" />
-        </span>
-        <span className="ml-2">Claude Code, with ShipCube connected</span>
-      </figcaption>
-      <ol className="flex flex-col gap-2.5 p-4 font-mono text-[12.5px] leading-[20px] sm:p-5" aria-label="Example: a deploy request followed through">
-        {TRANSCRIPT.map((l, i) => (
-          <li key={i} className="term-line" style={{ "--i": i } as React.CSSProperties}>
-            {l.kind === "you" ? (
-              <p className="font-sans text-[14px] leading-[22px] text-fg">
-                <span className="mr-2 text-accent" aria-hidden>
-                  &gt;
-                </span>
-                {l.text}
-              </p>
-            ) : (
-              <p className="flex flex-wrap gap-x-2">
-                <span className={l.tone === "wait" ? "text-[var(--approve)]" : l.tone === "ok" ? "text-good" : "text-accent"}>
-                  {l.tool === "approval" ? "you approved" : `shipcube.${l.tool}`}
-                </span>
-                <span className="text-fg-muted">
-                  {l.tone === "wait" && (
-                    <span
-                      className="term-wait-dot mr-1.5 inline-block size-2 rounded-full bg-[var(--approve)] align-middle"
-                      style={{ "--i": i } as React.CSSProperties}
-                      aria-hidden
-                    />
-                  )}
-                  {l.result}
-                </span>
-              </p>
-            )}
-          </li>
-        ))}
-        <li className="term-line" style={{ "--i": TRANSCRIPT.length } as React.CSSProperties} aria-hidden>
-          <span className="text-accent">&gt;</span> <span className="term-caret inline-block h-4 w-2 translate-y-0.5 bg-fg-muted" />
-        </li>
-      </ol>
-    </figure>
   );
 }
