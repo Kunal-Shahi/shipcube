@@ -53,7 +53,7 @@ TEXT_HIGH = {
 
 TEXT_LOW = {
     MINING_POOL_REFERENCE: [
-        ("pool_host", r"\b(?:[a-z0-9-]+\.)*(?:supportxmr\.com|moneroocean\.stream|minexmr\.com|nanopool\.org|"
+        ("pool_host", r"\b(?:supportxmr\.com|moneroocean\.stream|minexmr\.com|nanopool\.org|"
                       r"2miners\.com|f2pool\.com|hashvault\.pro|herominers\.com|xmrpool\.eu|c3pool\.com|"
                       r"unmineable\.com|nicehash\.com|ethermine\.org|viabtc\.com|antpool\.com|kryptex\.network)\b"),
     ],
@@ -68,7 +68,9 @@ TEXT_LOW = {
 }
 
 # --- phishing (HTML files) ------------------------------------------------------------------
-PASSWORD_FIELD = r"""<input[^>]*type\s*=\s*["']?password"""
+# Scans inside a tag are bounded ({0,400}): an unbounded [^>]* is quadratic on a page of
+# unclosed tags (a 1 MB "<input <input ..." took minutes).
+PASSWORD_FIELD = r"""<input\b[^>]{0,400}?type\s*=\s*["']?password"""
 BRAND_LOGIN = (r"sign in to (?:your )?(?:microsoft|outlook|office ?365|google|apple|icloud|paypal|amazon|"
                r"facebook|instagram|netflix|linkedin|dropbox|docusign|adobe|chase|wells ?fargo|bank of america|"
                r"citibank|hsbc|coinbase|binance)|(?:microsoft|office ?365|paypal|apple id|google account|netflix|"
@@ -77,5 +79,12 @@ BRAND_LOGIN = (r"sign in to (?:your )?(?:microsoft|outlook|office ?365|google|ap
 CREDENTIAL_EXFIL = (r"api\.telegram\.org/bot|discord(?:app)?\.com/api/webhooks|hooks\.slack\.com/services|"
                     r"formsubmit\.co|getform\.io|webhook\.site|requestbin|ngrok(?:-free)?\.(?:io|app)")
 
-# Files bigger than this aren't text-scanned (file names are still checked).
-MAX_TEXT_BYTES = 1_000_000
+# Budgets: files bigger than MAX_TEXT_BYTES aren't text-scanned (file names still are); the text
+# scan stops after MAX_TOTAL_TEXT_BYTES or MAX_SECONDS in all, and the verdict says it's incomplete.
+MAX_TEXT_BYTES = 256_000
+MAX_TOTAL_TEXT_BYTES = 8_000_000
+MAX_SECONDS = 5.0
+
+# Not a security boundary: trivial obfuscation (string concatenation, base64, renamed binaries,
+# packed archives) gets past every rule. This catches careless abuse cheaply; the sandbox's own
+# limits and run-time abuse signals are what hold for the rest.

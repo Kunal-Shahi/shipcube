@@ -725,4 +725,5 @@ def test_low_confidence_abuse_is_a_signal_on_the_result():
 
 
 def test_clean_apps_carry_an_ok_verdict(batch_rules):
-    assert batch_rules.profile["prescreen"] == {"verdict": "ok", "reasons": [], "signals": [], "hits": []}
+    assert batch_rules.profile["prescreen"] == {"verdict": "ok", "reasons": [], "signals": [], "hits": [],
+                                                "incomplete": False}

@@ -73,6 +73,11 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
 - **High confidence** (`crypto_miner`, `attack_tool`, `phishing_kit`): `estimate()` raises `AbuseRefused` (`.codes`, `.verdict`). Platform enforces the same verdict at deploy.
 - **Low confidence** (`mining_pool_reference`, `network_scanner`, `flood_script`, `bulk_mail`, `phishing_suspect`): allowed, added to `profile.measurements.abuse_signals` as `prescreen_<code>` (strikes).
 - The verdict is in `profile.prescreen`. Hits name the rule and the file, never the matched text.
+- **Bounded cost:**
+  - every in-tag regex scan is bounded;
+  - text is scanned for at most 256 KB per file, 8 MB in total and 5 s, after which the verdict says `incomplete` (file names are still checked);
+  - a pathological 1 MB page finishes in well under a second.
+- **Not a security boundary.** Trivial obfuscation (string concatenation, base64, renamed binaries, packed archives) gets past every rule. It catches careless abuse cheaply; the sandbox's limits and run-time abuse signals cover the rest.
 
 ## Configure
 
