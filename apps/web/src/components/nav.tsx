@@ -48,6 +48,7 @@ export function Nav({ pendingApprovals = 0, platformAdmin = false }: { pendingAp
                 key={href}
                 href={href}
                 aria-current={active ? "page" : undefined}
+                data-tour={`nav-${href.split("/").filter(Boolean).pop()}`}
                 className={cn(
                   "flex h-8 shrink-0 items-center gap-2 rounded-md px-2 text-[13px]",
                   active ? "bg-surface-2 font-medium text-fg" : "text-fg-muted hover:bg-surface-2 hover:text-fg",

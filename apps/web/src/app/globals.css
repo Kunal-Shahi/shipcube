@@ -428,3 +428,26 @@ h3 {
 .legal a:hover {
   text-decoration: underline;
 }
+
+/* The console tour (components/tour.tsx): everything outside the spotlight is dimmed. */
+.tour-spotlight {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 0 9999px rgb(10 8 0 / 0.55);
+  transition:
+    left 0.25s ease,
+    top 0.25s ease,
+    width 0.25s ease,
+    height 0.25s ease;
+}
+.tour-dim {
+  background: rgb(10 8 0 / 0.55);
+}
+.tour-card {
+  animation: term-in 0.2s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-spotlight {
+    transition: none;
+  }
+}
