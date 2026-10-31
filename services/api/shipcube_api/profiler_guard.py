@@ -202,16 +202,17 @@ SUSPEND_H = 24
 HUMAN_ONLY = {"mining_pool", "prescreen_crypto_miner"}  # suspended until a person clears it (abuse_screen.py)
 
 
-def record_abuse(conn, op: dict[str, Any], signals: list[str]) -> str | None:
+def record_abuse(conn, op: dict[str, Any], signals: list[str], source_key: str | None = None) -> str | None:
     """Record each abuse signal of a run as a strike, and suspend the workspace when the policy says
-    so. Idempotent per (operation, signal), so a retried step doesn't add strikes. Returns the
-    suspension's reason if this run caused one."""
+    so. Idempotent per (operation, signal), so a retried step doesn't add strikes, and with a
+    source_key per (workspace, source, signal): the same source estimated and deployed again is one
+    strike (0010). Returns the suspension's reason if this run caused one."""
     if not signals:
         return None
     ws = op["workspace_id"]
     for s in sorted(set(signals)):
-        conn.execute("insert into profiler_strikes (workspace_id, operation_id, signal) values (%s, %s, %s)"
-                     " on conflict (operation_id, signal) do nothing", (ws, op["id"], s))
+        conn.execute("insert into profiler_strikes (workspace_id, operation_id, signal, source_key) values (%s, %s, %s, %s)"
+                     " on conflict do nothing", (ws, op["id"], s, source_key))
     log.error("profiler abuse signals; strike recorded", extra={"workspace_id": str(ws), "signals": sorted(set(signals))})
     if human := sorted(HUMAN_ONLY & set(signals)):
         reason = f"{human[0]} in operation {op['id']}"

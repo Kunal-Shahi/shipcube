@@ -269,11 +269,13 @@ class Worker:
                         raise
                     verdict = getattr(e, "verdict", None)
                     verdict = verdict.to_dict() if hasattr(verdict, "to_dict") else verdict
-                    abuse_screen.enforce(op, verdict or {"verdict": "blocked", "reasons": list(getattr(e, "codes", []) or [])})
+                    abuse_screen.enforce(op, verdict or {"verdict": "blocked", "reasons": list(getattr(e, "codes", []) or [])},
+                                         abuse_screen.source_key(self.d, str(op["workspace_id"]), inp["source"]))
                     raise  # enforce raised the typed refusal; this is only reached if the verdict wasn't blocked
                 if signals := measurements(res).get("abuse_signals"):
+                    key = abuse_screen.source_key(self.d, str(op["workspace_id"]), inp["source"])
                     with db.worker_tx() as conn:
-                        profiler_guard.record_abuse(conn, op, list(signals))
+                        profiler_guard.record_abuse(conn, op, list(signals), key)
                 return res
 
             return {"profile": profile, "place": place}
@@ -290,7 +292,9 @@ class Worker:
                         if getattr(self.d, "screens_sources", True) else None
                     verdict, pins = screened or (None, {})
                     if verdict is not None:
-                        abuse_screen.enforce(op, verdict)
+                        key = abuse_screen.source_key(self.d, str(op["workspace_id"]), inp["source"], pins) \
+                            if abuse_screen.strikes(verdict) else None  # keyed only when there's a strike to count
+                        abuse_screen.enforce(op, verdict, key)
                     state["prescreen"] = (verdict or {}).get("verdict", "skipped")
                     # Build exactly what was screened: the upload generation or git commit it read.
                     state["source"] = {**inp["source"], **pins}

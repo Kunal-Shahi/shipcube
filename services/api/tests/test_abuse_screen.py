@@ -287,3 +287,67 @@ def test_the_worker_stages_the_pinned_source(client, ws, monkeypatch):
                         ({"verdict": "ok", "reasons": [], "signals": []}, {"commit": "b" * 40}))
     assert _deploy(client, ws, "pinned")["status"] == "succeeded"
     assert seen["source"]["url"] == GIT["url"] and seen["source"]["commit"] == "b" * 40
+
+
+# --- strikes count once per source, not per operation (Kunal, #97) ---------------------------------------
+
+import io  # noqa: E402
+import tarfile  # noqa: E402
+
+
+def _flagged_inline(text: str) -> dict:
+    return {"kind": "inline", "files": [{"path": "scan.py", "content": text}]}
+
+
+def test_one_flagged_source_estimated_and_deployed_twice_is_one_strike(client, ws, verdict, monkeypatch):
+    from shipcube_api import estimator as est_mod
+
+    src = _flagged_inline("import socket  # a port scanner, say\n")
+    verdict["v"] = {"verdict": "flagged", "reasons": [], "signals": ["prescreen_network_scanner"], "hits": []}
+    real = est_mod.DevEstimator.estimate
+
+    def flagged_estimate(self, *a, **kw):
+        res = real(self, *a, **kw)
+        res.setdefault("profile", {}).setdefault("measurements", {})["abuse_signals"] = ["prescreen_network_scanner"]
+        return res
+
+    monkeypatch.setattr(est_mod.DevEstimator, "estimate", flagged_estimate)
+    r = client.post("/v1/estimates", json={"source": src}, headers=ws["agent"])
+    assert wait_op(client, ws["agent"], r.json()["id"])["status"] == "succeeded"
+    assert _deploy(client, ws, "same-src", src)["status"] == "succeeded"
+    assert _deploy(client, ws, "same-src", src)["status"] == "succeeded"
+    assert _strikes(ws) == ["prescreen_network_scanner"]  # one source, one signal: one strike
+    assert _suspension(ws) is None
+
+
+def test_three_distinct_flagged_sources_still_suspend(client, ws, verdict):
+    verdict["v"] = {"verdict": "flagged", "reasons": [], "signals": ["prescreen_network_scanner"], "hits": []}
+    for i in range(3):
+        assert _deploy(client, ws, f"scan-{i}", _flagged_inline(f"# scanner variant {i}\n"))["status"] == "succeeded"
+    assert len(_strikes(ws)) == 3
+    s = _suspension(ws)
+    assert s is not None and s["until"] is not None  # 3 strikes in 24 h: profiling paused for a day
+
+
+def _tgz(files: dict[str, str], mtime: int) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name, text in files.items():
+            info = tarfile.TarInfo(name)
+            info.size, info.mtime = len(text), mtime
+            tar.addfile(info, io.BytesIO(text.encode()))
+    return buf.getvalue()
+
+
+def test_the_source_key_is_the_content_not_the_packing(tmp_path):
+    files = {"app.py": "print('hi')\n", "requirements.txt": "flask\n"}
+    a, b = tmp_path / "a.tgz", tmp_path / "b.tgz"
+    a.write_bytes(_tgz(files, 1))
+    b.write_bytes(_tgz(dict(reversed(files.items())), 999))  # repacked later, other order
+    assert a.read_bytes() != b.read_bytes()
+    assert abuse_screen.tarball_digest(a) == abuse_screen.tarball_digest(b)
+    inline = {"kind": "inline", "files": [{"path": k, "content": v} for k, v in files.items()]}
+    assert abuse_screen.source_key(None, "ws", inline) == "files:" + abuse_screen.tarball_digest(a)
+    other = {"kind": "inline", "files": [{"path": "app.py", "content": "print('bye')\n"}]}
+    assert abuse_screen.source_key(None, "ws", other) != abuse_screen.source_key(None, "ws", inline)
+    assert abuse_screen.source_key(None, "ws", GIT, {"commit": "c" * 40}) == "git:" + "c" * 40

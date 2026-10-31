@@ -106,3 +106,15 @@ def head(repo: Path) -> str:
     if out.returncode != 0:
         raise DeployError("invalid_argument", "couldn't read the cloned commit")
     return out.stdout.strip()
+
+
+def resolve(url: str, ref: str | None, timeout_s: float = 30) -> str | None:
+    """The commit a ref (or HEAD) points at now, without cloning; None if it can't be resolved."""
+    if not url.startswith("https://"):
+        return None
+    out = subprocess.run(["git", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "ls-remote", "--",
+                          url, ref or "HEAD"], capture_output=True, text=True, timeout=timeout_s,
+                         env={"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "GIT_TERMINAL_PROMPT": "0",
+                              "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_ASKPASS": "/bin/false"})
+    first = out.stdout.split()[:1] if out.returncode == 0 else []
+    return first[0] if first and len(first[0]) == 40 else None

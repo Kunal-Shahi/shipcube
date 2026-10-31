@@ -12,8 +12,11 @@ Image sources have no files and are skipped. The verdict's hits never contain th
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import shutil
+import tarfile
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -46,15 +49,62 @@ def refusal(reasons: list[str]) -> DeployError:
                                 f"{', '.join(sorted(reasons))}. If this is a mistake, contact ShipCube.")
 
 
-def enforce(op: dict[str, Any], verdict: dict[str, Any]) -> None:
-    """Record the verdict's strikes, then refuse a blocked source."""
+def enforce(op: dict[str, Any], verdict: dict[str, Any], source_key: str | None = None) -> None:
+    """Record the verdict's strikes (once per source when source_key is given), then refuse a blocked source."""
     if s := strikes(verdict):
         with db.worker_tx() as conn:
-            profiler_guard.record_abuse(conn, op, s)
+            profiler_guard.record_abuse(conn, op, s, source_key)
     if verdict.get("verdict") == "blocked":
         log.error("abuse pre-screen refused a source", extra={"workspace_id": str(op["workspace_id"]),
                                                               "reasons": verdict.get("reasons")})
         raise refusal(list(verdict.get("reasons") or []))
+
+
+def _digest(files: list[tuple[str, bytes]]) -> str:
+    """A content hash over file names and contents, independent of how they were packed."""
+    h = hashlib.sha256()
+    for name, data in sorted(files):
+        h.update(name.lstrip("./").encode() + b"\0" + hashlib.sha256(data).digest())
+    return h.hexdigest()
+
+
+def tarball_digest(path: Path) -> str:
+    """_digest of a (guarded) tarball's regular files: the same code uploaded twice has the same key,
+    whatever the archive's timestamps."""
+    files = []
+    with tarfile.open(path) as tar:
+        for m in tar:
+            if m.isfile():
+                f = tar.extractfile(m)
+                files.append((m.name, f.read() if f else b""))
+    return _digest(files)
+
+
+def source_key(deployer: Any, workspace_id: str, source: dict[str, Any], pins: dict[str, Any] | None = None) -> str | None:
+    """What strikes are counted against: the source's content, so an estimate and the deploys that reuse
+    a source share one key. Git: the commit (screened, or the ref's current one). Uploads: a hash of
+    their files (the screened generation). Inline: a hash of its files. None when it can't be keyed."""
+    pins, kind = pins or {}, (source or {}).get("kind")
+    try:
+        if kind == "git":
+            sha = pins.get("commit") or git_source.resolve(source["url"], source.get("ref"))
+            return f"git:{sha}" if sha else None
+        if kind == "inline":
+            return "files:" + _digest([(f["path"], base64.b64decode(f["content"]) if f.get("encoding") == "base64"
+                                        else f["content"].encode()) for f in source.get("files") or []])
+        if kind == "upload":
+            with upload_guard.source_slot(source):
+                tmp = Path(tempfile.mkdtemp(prefix="shipcube-key-"))
+                try:
+                    tarball = deployer.download_upload(workspace_id, source["upload_id"], tmp / "src.tgz",
+                                                       generation=pins.get("generation"))
+                    upload_guard.check_tarball(tarball)
+                    return "files:" + tarball_digest(tarball)
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
+    except Exception:  # noqa: BLE001 — unkeyed strikes still count, per operation
+        log.warning("couldn't key a source for its strikes; counting them per operation", exc_info=True)
+    return None
 
 
 def screen(deployer: Any, workspace_id: str, source: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
