@@ -2,13 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Boxes, Cable, CreditCard, Cloud, Database, Inbox, KeyRound, Sparkles, UserCheck } from "lucide-react";
+import { Boxes, Cable, CreditCard, Cloud, Database, Inbox, KeyRound, LayoutDashboard, Sparkles, UserCheck } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 const SECTIONS = [
   {
     label: null,
     items: [
+      { href: "/overview", label: "Overview", icon: LayoutDashboard },
       { href: "/apps", label: "Apps", icon: Boxes },
       { href: "/approvals", label: "Approvals", icon: Inbox, badge: "approvals" as const },
       { href: "/data", label: "Data", icon: Database },

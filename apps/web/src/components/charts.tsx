@@ -105,14 +105,14 @@ export function LatencyChart({ data }: { data: { t: string; p50: number; p95: nu
                 {hourFmt(data[i].t)}
               </text>
             ))}
-            <path d={area} fill="var(--accent)" opacity={0.08} />
+            <path d={area} fill="var(--mark, var(--accent))" opacity={0.08} />
             <path d={path("p50")} fill="none" stroke="var(--fg-subtle)" strokeWidth={2} strokeLinejoin="round" />
-            <path d={path("p95")} fill="none" stroke="var(--accent)" strokeWidth={2} strokeLinejoin="round" />
-            <circle cx={x(last)} cy={y(data[last].p95)} r={4} fill="var(--accent)" stroke="var(--surface)" strokeWidth={2} />
+            <path d={path("p95")} fill="none" stroke="var(--mark, var(--accent))" strokeWidth={2} strokeLinejoin="round" />
+            <circle cx={x(last)} cy={y(data[last].p95)} r={4} fill="var(--mark, var(--accent))" stroke="var(--surface)" strokeWidth={2} />
             {hover !== null && (
               <g>
                 <line x1={x(hover)} x2={x(hover)} y1={M.top} y2={M.top + innerH} stroke="var(--border-strong)" strokeWidth={1} />
-                <circle cx={x(hover)} cy={y(data[hover].p95)} r={4} fill="var(--accent)" stroke="var(--surface)" strokeWidth={2} />
+                <circle cx={x(hover)} cy={y(data[hover].p95)} r={4} fill="var(--mark, var(--accent))" stroke="var(--surface)" strokeWidth={2} />
                 <circle cx={x(hover)} cy={y(data[hover].p50)} r={4} fill="var(--fg-subtle)" stroke="var(--surface)" strokeWidth={2} />
               </g>
             )}
@@ -126,17 +126,19 @@ export function LatencyChart({ data }: { data: { t: string; p50: number; p95: nu
           </Tooltip>
         )}
       </div>
-      <table className="sr-only">
-        <caption>p50 and p95 latency by hour, UTC</caption>
-        <thead>
-          <tr><th scope="col">Hour</th><th scope="col">p50 (ms)</th><th scope="col">p95 (ms)</th></tr>
-        </thead>
-        <tbody>
-          {data.map((d) => (
-            <tr key={d.t}><th scope="row">{hourFmt(d.t)}</th><td>{d.p50}</td><td>{d.p95}</td></tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="sr-only">
+        <table>
+          <caption>p50 and p95 latency by hour, UTC</caption>
+          <thead>
+            <tr><th scope="col">Hour</th><th scope="col">p50 (ms)</th><th scope="col">p95 (ms)</th></tr>
+          </thead>
+          <tbody>
+            {data.map((d) => (
+              <tr key={d.t}><th scope="row">{hourFmt(d.t)}</th><td>{d.p50}</td><td>{d.p95}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </figure>
   );
 }
@@ -170,7 +172,7 @@ export function CostChart({ data }: { data: { t: string; value: number }[] }) {
                   <rect x={M.left + i * band} y={M.top} width={band} height={innerH} fill="transparent" />
                   <path
                     d={`M${bx},${by + h}V${by + rr}Q${bx},${by} ${bx + rr},${by}H${bx + barW - rr}Q${bx + barW},${by} ${bx + barW},${by + rr}V${by + h}Z`}
-                    fill="var(--accent)"
+                    fill="var(--mark, var(--accent))"
                     opacity={hover === null || hover === i ? 1 : 0.45}
                   />
                 </g>
@@ -190,17 +192,19 @@ export function CostChart({ data }: { data: { t: string; value: number }[] }) {
           </Tooltip>
         )}
       </div>
-      <table className="sr-only">
-        <caption>Cost by day, US dollars</caption>
-        <thead>
-          <tr><th scope="col">Day</th><th scope="col">Cost</th></tr>
-        </thead>
-        <tbody>
-          {data.map((d) => (
-            <tr key={d.t}><th scope="row">{dayFmt(d.t)}</th><td>${d.value.toFixed(2)}</td></tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="sr-only">
+        <table>
+          <caption>Cost by day, US dollars</caption>
+          <thead>
+            <tr><th scope="col">Day</th><th scope="col">Cost</th></tr>
+          </thead>
+          <tbody>
+            {data.map((d) => (
+              <tr key={d.t}><th scope="row">{dayFmt(d.t)}</th><td>${d.value.toFixed(2)}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </figure>
   );
 }

@@ -57,10 +57,10 @@ async function attemptSignIn(page: Page, email: string) {
       await p.getByLabel(/email/i).fill(email);
       await p.getByRole("button", { name: /sign in with google\.com/i }).click();
     }
-    await page.waitForURL(/\/(apps|onboarding|setup|waitlist)/, { timeout: 15_000 }).catch((e) => {
+    await page.waitForURL(/\/(overview|apps|onboarding|setup|waitlist)/, { timeout: 15_000 }).catch((e) => {
       throw alert ? new Error(`Auth emulator: ${alert}`) : e;
     });
     return;
   }
-  await page.waitForURL(/\/(apps|onboarding|setup)/, { timeout: 15_000 });
+  await page.waitForURL(/\/(overview|apps|onboarding|setup)/, { timeout: 15_000 });
 }

@@ -22,7 +22,7 @@ export default async function WaitlistPage({ searchParams }: { searchParams: Pro
   // DEV_MODE's mock user is a member; ?preview=<state> shows each state of this page.
   const forced = mockDataEnabled() && PREVIEW.includes(preview as WaitlistState) ? (preview as WaitlistState) : null;
   const account: AccountStatus = forced ? { member: false, platformAdmin: false, waitlist: forced } : await accountStatus();
-  if (account.member) redirect("/apps");
+  if (account.member) redirect("/overview");
   const state = account.waitlist ?? "none";
 
   return (

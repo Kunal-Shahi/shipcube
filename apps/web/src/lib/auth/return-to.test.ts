@@ -14,11 +14,11 @@ describe("safeReturnTo", () => {
     "/.//evil.example", "/x/..//evil.example", "/%2e//evil.example", "/.\\/evil.example",
     "https://evil.example", "javascript:alert(1)", "evil.example", "", "\\\\evil.example",
   ])("refuses %s", (to) => {
-    expect(safeReturnTo(to, O)).toBe("/apps");
+    expect(safeReturnTo(to, O)).toBe("/overview");
   });
 
   it("falls back when missing", () => {
-    expect(safeReturnTo(undefined, O)).toBe("/apps");
+    expect(safeReturnTo(undefined, O)).toBe("/overview");
     expect(safeReturnTo(null, O, "/onboarding")).toBe("/onboarding");
   });
 });

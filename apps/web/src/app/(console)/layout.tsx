@@ -28,9 +28,10 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
       <a href="#main" className="sr-only-focusable rounded-md bg-accent px-3 py-1.5 font-medium text-accent-fg">
         Skip to content
       </a>
-      <aside className="sticky top-0 z-20 flex flex-col gap-3 border-b border-border bg-bg px-4 py-3 md:h-dvh md:gap-6 md:border-r md:border-b-0 md:px-3 md:py-4">
+      {/* The sidebar is blueprint paper, as on the landing page, in both themes. */}
+      <aside className="console-rail blueprint sticky top-0 z-20 flex flex-col gap-3 px-4 py-3 md:h-dvh md:gap-6 md:px-3 md:py-4">
         <div className="flex items-center justify-between md:px-2">
-          <Link href="/apps" aria-label="ShipCube home">
+          <Link href="/overview" aria-label="ShipCube home">
             <Wordmark />
           </Link>
           <div className="md:hidden">

@@ -27,7 +27,7 @@ test.afterAll(async () => {
 
 test("signs in", async () => {
   await signIn(page, EMAIL);
-  await expect(page.getByRole("heading", { name: "Apps", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Overview", level: 1 })).toBeVisible();
   const me = await page.request.get("/api/healthz");
   expect(me.ok()).toBe(true);
 });
