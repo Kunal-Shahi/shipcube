@@ -420,3 +420,39 @@ def test_a_mining_pool_signal_suspends_until_a_person_clears_it(client):
         assert [x["workspace_id"] for x in profiler_guard.status(conn)["suspended"]] == [ws["workspace_id"]]
         assert profiler_guard.unsuspend(conn, ws["workspace_id"])
         assert not profiler_guard.suspended(conn, ws["workspace_id"])
+
+
+
+def test_janitor_skips_a_bucket_it_cannot_list():
+    """One unlistable bucket (the legacy profiler-src/ in the ML bucket, 403 live) used to abort the
+    whole sweep, the brake check included; now it's skipped and the uploads bucket is still swept."""
+    import requests
+    from shipcube_api.profiler_janitor import GcpProfilerCloud
+
+    class Resp:
+        def __init__(self, status, body):
+            self.status_code, self._body = status, body
+
+        def json(self):
+            return self._body
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests.HTTPError(f"{self.status_code}", response=self)
+
+    class Sess:
+        def get(self, url, params=None, timeout=None):
+            if "/b/ml/" in url:
+                return Resp(403, {})
+            return Resp(200, {"items": [{"name": "ws/a/profiler/r.tar.gz", "timeCreated": "2026-10-31T00:00:00Z"}]})
+
+    cloud = GcpProfilerCloud.__new__(GcpProfilerCloud)
+    cloud.sess, cloud.bucket, cloud.uploads_bucket = Sess(), "ml", "uploads"
+    assert [(o["bucket"], o["name"]) for o in cloud.objects()] == [("uploads", "ws/a/profiler/r.tar.gz")]
+
+    class Broken(Sess):
+        def get(self, url, params=None, timeout=None):
+            return Resp(500, {})
+    cloud.sess = Broken()
+    with pytest.raises(requests.HTTPError):   # other errors still surface
+        cloud.objects()

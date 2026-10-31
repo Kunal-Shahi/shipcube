@@ -77,7 +77,7 @@ if want mcp || want worker; then
   if [ "${PROFILER_ON:-1}" != 0 ]; then
     PROFILER_JOB="$(echo "$PROFILER_ENV_JSON" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("SHIPCUBE_PROFILER_SERVICE_ACCOUNT", ""))')"
   fi
-  echo "profiler: ${PROFILER_JOB:+on (job SA ${PROFILER_JOB})}${PROFILER_JOB:-off}" >&2
+  if [ -n "$PROFILER_JOB" ]; then echo "profiler: on (job SA $PROFILER_JOB)" >&2; else echo "profiler: off" >&2; fi
   export PROFILER_JOB
 fi
 

@@ -134,6 +134,10 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
     sa_set = next(c for c in calls if c[1].endswith(f"serviceAccounts/{sa}:setIamPolicy"))
     assert sa_set[2]["policy"]["etag"] == "e" and sorted(b["role"] for b in sa_set[2]["policy"]["bindings"]) == [
         "roles/iam.serviceAccountTokenCreator", "roles/iam.serviceAccountUser"]
+    # The worker submits profiler builds as the builder (#69/#72), so it needs actAs as well as the
+    # hosted deployer; Cloud Build refused it with 403 without this.
+    users = next(b["members"] for b in sa_set[2]["policy"]["bindings"] if b["role"] == "roles/iam.serviceAccountUser")
+    assert sorted(users) == sorted({f"serviceAccount:{deployer.s.build_submitter_sa}", f"serviceAccount:{deployer.s.worker_sa}"})
     assert len(prov.calls) == 18  # SA, repo + IAM get/set, 2 folders + IAM get/put each, SA IAM get/set, 2 mirrors x describe + IAM get/set
     # A hosted build provisions first, as the provisioner, never with the deployer's own identity.
     assert all("managedFolders" not in u and "repositories?" not in u for _, u, _, _ in deployer._sessions.get(None, FakeSession({})).calls)

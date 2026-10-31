@@ -27,6 +27,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 from urllib.parse import quote
 
+import requests
+
 from . import db, profiler_guard
 from .settings import settings
 
@@ -124,8 +126,20 @@ class GcpProfilerCloud:
         found = [(self.bucket, {"prefix": SRC_PREFIX})]
         if self.uploads_bucket:  # per-workspace profiler sources (#69)
             found.append((self.uploads_bucket, {"prefix": "ws/", "matchGlob": WS_SRC_GLOB}))
-        return [{"name": o["name"], "created": _ts(o["timeCreated"]), "bucket": b}
-                for b, params in found for o in self._pages(f"{self.STORAGE}/b/{b}/o", "items", params)]
+        out = []
+        for b, params in found:
+            try:
+                items = self._pages(f"{self.STORAGE}/b/{b}/o", "items", params)
+            except requests.HTTPError as e:
+                # A bucket the worker can't list (the legacy profiler-src/ in the ML bucket) is skipped,
+                # not fatal: one failure here used to abort the whole sweep, the brake check included.
+                if e.response is None or e.response.status_code not in (403, 404):
+                    raise
+                log.warning("profiler janitor can't list a bucket; skipping it",
+                            extra={"bucket": b, "status": e.response.status_code})
+                continue
+            out += [{"name": o["name"], "created": _ts(o["timeCreated"]), "bucket": b} for o in items]
+        return out
 
     def delete_object(self, name: str, bucket: str | None = None) -> None:
         r = self.sess.delete(f"{self.STORAGE}/b/{bucket or self.bucket}/o/{quote(name, safe='')}", timeout=30)
