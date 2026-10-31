@@ -18,8 +18,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from . import db, profiler_guard, upload_guard
+from . import db, git_source, profiler_guard, upload_guard
 from .deploy.base import DeployError
+from .settings import on_cloud_run
 
 log = logging.getLogger("shipcube.abuse_screen")
 REFUSED = "abuse_refused"
@@ -56,26 +57,38 @@ def enforce(op: dict[str, Any], verdict: dict[str, Any]) -> None:
         raise refusal(list(verdict.get("reasons") or []))
 
 
-def screen(deployer: Any, workspace_id: str, source: dict[str, Any]) -> dict[str, Any] | None:
+def screen(deployer: Any, workspace_id: str, source: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Materialize the source (like the estimator, under the same upload guard and slot) and pre-screen it.
-    None when there is nothing to screen (an image) or the pre-screen isn't installed yet."""
+    Returns (verdict, pins): pins name exactly what was screened, so the build uses the same bytes:
+    {"generation": n} for an upload (the object generation read), {"commit": sha} for git (the resolved
+    ref). None when there is nothing to screen (an image). On Cloud Run a missing pre-screen refuses the
+    deploy: production never deploys unscreened."""
     if (source or {}).get("kind") not in ("upload", "inline", "git"):
         return None
     prescreen = _prescreen()
     if prescreen is None:
+        if on_cloud_run():
+            raise DeployError("screen_unavailable", "the abuse pre-screen isn't available, so ShipCube can't "
+                                                    "deploy this source right now; try again later")
         log.warning("abuse pre-screen unavailable (shipcube_profiler too old); deploy not screened")
         return None
     from shipcube_profiler import materialize
 
+    pins: dict[str, Any] = {}
     with upload_guard.source_slot(source):
         tmp = Path(tempfile.mkdtemp(prefix="shipcube-screen-"))
         try:
             def fetch_upload(upload_id: str) -> Path:
-                tarball = deployer.download_upload(workspace_id, upload_id, tmp / f"{upload_id}.tgz")
+                pins["generation"] = deployer.upload_generation(workspace_id, upload_id)
+                tarball = deployer.download_upload(workspace_id, upload_id, tmp / f"{upload_id}.tgz",
+                                                   generation=pins["generation"])
                 upload_guard.check_tarball(tarball)  # before tarfile sees it: bounded memory and CPU
                 return tarball
 
             app_dir = materialize(source, tmp / "src", fetch_upload=fetch_upload)
-            return prescreen(app_dir).to_dict()
+            if source["kind"] == "git":
+                pins["commit"] = git_source.head(tmp / "src" / "repo")  # the build fetches exactly this
+            return prescreen(app_dir).to_dict(), pins
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+

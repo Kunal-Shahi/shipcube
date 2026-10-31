@@ -70,7 +70,10 @@ class MockDeployer:
     def route_traffic(self, app: AppRef, revision: str) -> None:
         self._sleep(1)
 
-    def download_upload(self, workspace_id: str, upload_id: str, dest: Any) -> Any:
+    def upload_generation(self, workspace_id: str, upload_id: str) -> int:
+        return 1
+
+    def download_upload(self, workspace_id: str, upload_id: str, dest: Any, generation: int | None = None) -> Any:
         raise NotImplementedError("the mock deployer stores no uploads")
 
     def set_access(self, app: AppRef, principals: list[str]) -> None:

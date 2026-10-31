@@ -286,13 +286,16 @@ class Worker:
 
             def validate() -> None:
                 if "prescreen" not in state:  # before staging or any build; refuses a blocked source
-                    verdict = abuse_screen.screen(self.d, str(op["workspace_id"]), inp["source"]) \
+                    screened = abuse_screen.screen(self.d, str(op["workspace_id"]), inp["source"]) \
                         if getattr(self.d, "screens_sources", True) else None
+                    verdict, pins = screened or (None, {})
                     if verdict is not None:
                         abuse_screen.enforce(op, verdict)
                     state["prescreen"] = (verdict or {}).get("verdict", "skipped")
+                    # Build exactly what was screened: the upload generation or git commit it read.
+                    state["source"] = {**inp["source"], **pins}
                 if "staged" not in state:
-                    state["staged"] = self.d.stage_source(ref, inp["source"], str(op["id"]))
+                    state["staged"] = self.d.stage_source(ref, state.get("source") or inp["source"], str(op["id"]))
                 with db.worker_tx() as conn:
                     conn.execute("update apps set status = 'deploying' where id = %s", (app_id,))
                     conn.execute("update deployments set status = 'building' where id = %s", (dep_id,))

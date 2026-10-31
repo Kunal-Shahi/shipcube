@@ -96,3 +96,13 @@ def clone(url: str, ref: str | None, target: Path, *, allow_file: bool = False,
         shutil.rmtree(target, ignore_errors=True)
         raise DeployError("invalid_argument", why)
     return target
+
+
+def head(repo: Path) -> str:
+    """The commit a clone checked out."""
+    out = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30,
+                         env={"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "GIT_CONFIG_NOSYSTEM": "1",
+                              "GIT_CONFIG_GLOBAL": os.devnull})
+    if out.returncode != 0:
+        raise DeployError("invalid_argument", "couldn't read the cloned commit")
+    return out.stdout.strip()

@@ -118,8 +118,14 @@ class LocalDeployer:
         return {"upload_id": upload_id, "method": "PUT", "url": url, "headers": {"Content-Type": content_type},
                 "max_bytes": UPLOAD_MAX_BYTES, "expires_at": expires}
 
-    def download_upload(self, workspace_id: str, upload_id: str, dest: Any) -> Any:
-        blob = self._bucket().blob(isolation.upload_object(self.s, workspace_id, upload_id))
+    def upload_generation(self, workspace_id: str, upload_id: str) -> int:
+        blob = self._bucket().get_blob(isolation.upload_object(self.s, workspace_id, upload_id))
+        if blob is None:
+            raise DeployError("invalid_argument", f"upload {upload_id} was not found")
+        return int(blob.generation)
+
+    def download_upload(self, workspace_id: str, upload_id: str, dest: Any, generation: int | None = None) -> Any:
+        blob = self._bucket().blob(isolation.upload_object(self.s, workspace_id, upload_id), generation=generation)
         if not blob.exists():
             raise DeployError("invalid_argument", f"upload {upload_id} was not found")
         blob.download_to_filename(str(dest))
@@ -131,7 +137,7 @@ class LocalDeployer:
             self.check_image(app, source["uri"])
             return {"image": source["uri"]}
         if kind == "git":
-            return {"git": {k: v for k, v in {"url": source["url"], "ref": source.get("ref"),
+            return {"git": {k: v for k, v in {"url": source["url"], "ref": source.get("ref"), "commit": source.get("commit"),
                                               "subdir": source.get("subdir")}.items() if v}}
         bucket = self._bucket()
         if kind == "upload":
@@ -142,6 +148,9 @@ class LocalDeployer:
             blob.reload()
             if (blob.size or 0) > UPLOAD_MAX_BYTES:
                 raise DeployError("invalid_argument", "upload is larger than 100 MB")
+            if source.get("generation") is not None and int(blob.generation or 0) != int(source["generation"]):
+                raise DeployError("invalid_argument", "the upload changed after it was screened; create a new upload")
+            return {"storageSource": {"bucket": self.s.upload_bucket, "object": name, "generation": str(blob.generation)}}
         else:  # inline
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w:gz") as tar:
@@ -208,12 +217,18 @@ class LocalDeployer:
         if "git" in staged:  # https only, shallow, size and time capped (git_source.py)
             g = staged["git"]
             git_source.clone(g["url"], g.get("ref"), src)
+            if g.get("commit") and git_source.head(src) != g["commit"]:  # the ref moved since it was screened
+                raise DeployError("invalid_argument", "the git ref changed after it was screened; deploy again")
             return src / g["subdir"] if g.get("subdir") else src
         src.mkdir()
         loc = staged["storageSource"]
         isolation.check_object(self.s, app.workspace_id, loc["bucket"], loc["object"])
         archive = work / "source.tgz"
-        self._bucket().blob(loc["object"]).download_to_filename(str(archive))
+        generation = int(loc["generation"]) if loc.get("generation") else None
+        blob = self._bucket().blob(loc["object"], generation=generation)  # exactly the staged (screened) version
+        if not blob.exists():
+            raise DeployError("invalid_argument", "the source changed after it was staged; create a new upload")
+        blob.download_to_filename(str(archive))
         with tarfile.open(archive) as tar:
             tar.extractall(src, filter="data")  # no absolute paths, .., devices or links out of src
         return src
