@@ -232,11 +232,14 @@ class GcpDeployer:
             policy = self._retry_new(lambda u=folder_iam: self._call(sess, "GET", u))
             if _add_binding(policy, role, member):
                 self._call(sess, "PUT", folder_iam, json=policy)
-        # d. who may use the builder: the worker mints its tokens, the hosted deployer submits builds as it
+        # d. who may use the builder: the worker mints its tokens, the hosted deployer submits builds as it,
+        #    and the worker submits profiler builds as it (#69/#72). actAs adds nothing to tokenCreator,
+        #    which the worker already holds; Cloud Build checks actAs specifically.
         sa_url = f"{IAM}/projects/{project}/serviceAccounts/{sa}"
         policy = self._retry_new(lambda: self._call(sess, "POST", f"{sa_url}:getIamPolicy", json={}))
         changed = _add_binding(policy, "roles/iam.serviceAccountTokenCreator", f"serviceAccount:{self.s.worker_sa}")
-        changed |= _add_binding(policy, "roles/iam.serviceAccountUser", f"serviceAccount:{self.s.build_submitter_sa}")
+        for submitter in dict.fromkeys((self.s.build_submitter_sa, self.s.worker_sa)):
+            changed |= _add_binding(policy, "roles/iam.serviceAccountUser", f"serviceAccount:{submitter}")
         if changed:
             self._call(sess, "POST", f"{sa_url}:setIamPolicy", json={"policy": policy})
         # e. read on the profiler's package mirrors, so its offline profiler builds can fetch wheels and
