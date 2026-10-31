@@ -123,10 +123,7 @@ export default async function Landing() {
             <h2 id="plane-heading" className={`max-w-[20ch] ${H2}`}>
               One control plane for everything your agent builds
             </h2>
-            <p className={INTRO}>
-              Six things your agent can ask ShipCube to do, from the conversation it&apos;s already in. Each is a tool on the
-              MCP server; the risky ones wait for you.
-            </p>
+            <p className={INTRO}>Apps, heavy jobs, data and AI spend, in one workspace your agent can drive and you can oversee.</p>
             <div className="mt-12 lg:mt-16">
               <ControlPlane />
             </div>
