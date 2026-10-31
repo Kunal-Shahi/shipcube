@@ -112,27 +112,29 @@ export function StackedBars({
           </li>
         ))}
       </ul>
-      <table className="sr-only">
-        <caption>{caption}</caption>
-        <thead>
-          <tr>
-            <th scope="col">Name</th>
-            {parts.map((p) => (
-              <th key={p.label} scope="col">{p.label}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.label}>
-              <th scope="row">{r.label}</th>
-              {r.values.map((v, i) => (
-                <td key={i}>{format(v)}</td>
+      <div className="sr-only">
+        <table>
+          <caption>{caption}</caption>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              {parts.map((p) => (
+                <th key={p.label} scope="col">{p.label}</th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.label}>
+                <th scope="row">{r.label}</th>
+                {r.values.map((v, i) => (
+                  <td key={i}>{format(v)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </figure>
   );
 }

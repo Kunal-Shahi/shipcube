@@ -324,6 +324,11 @@ h3 {
   position: relative;
   isolation: isolate;
 }
+/* The console's sidebar is blueprint paper too, but it must stay pinned while the page scrolls.
+   (This rule isn't in a layer, so it would otherwise beat the sidebar's `sticky` utility.) */
+.console-rail.blueprint {
+  position: sticky;
+}
 /* Blueprint sections, and the console's sidebar, sit a shade deeper than the tone's own blue. */
 .landing .landing-hero,
 .console-rail {
