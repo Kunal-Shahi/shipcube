@@ -1,13 +1,20 @@
 import type { Metadata } from "next";
-import { Bricolage_Grotesque, Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import { headers } from "next/headers";
 import { themeScript } from "@/components/theme-toggle";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
-// Headings on the landing page and in the console.
-const display = Bricolage_Grotesque({ variable: "--font-display", subsets: ["latin"], weight: ["600", "800"] });
+// Headings on the landing page and in the console. Self-hosted (src/app/fonts): CI builds failed
+// while downloading it from Google Fonts.
+const display = localFont({
+  src: "./fonts/bricolage-grotesque-latin.woff2",
+  variable: "--font-display",
+  weight: "200 800",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: { default: "ShipCube", template: "%s · ShipCube" },
