@@ -12,6 +12,23 @@ describe("csp()", () => {
     expect(p).toContain("upgrade-insecure-requests");
   });
 
+  it("frames only the exact sign-in hosts, never a wildcard Firebase domain", () => {
+    vi.stubEnv("AUTH_PROVIDER", "");
+    vi.stubEnv("FIREBASE_AUTH_DOMAIN", "shipcube.web.app");
+    vi.stubEnv("IDENTITY_PLATFORM_PROJECT", "shipcube-control-ks");
+    const frames = csp("n", false).split("; ").find((d) => d.startsWith("frame-src "));
+    expect(frames).toBe("frame-src https://shipcube.web.app https://shipcube-control-ks.firebaseapp.com https://accounts.google.com");
+    expect(frames).not.toContain("*");
+  });
+
+  it("ignores a malformed auth domain or project rather than widening frame-src", () => {
+    vi.stubEnv("AUTH_PROVIDER", "");
+    vi.stubEnv("FIREBASE_AUTH_DOMAIN", "x.web.app https://evil.example");
+    vi.stubEnv("IDENTITY_PLATFORM_PROJECT", "");
+    const frames = csp("n", false).split("; ").find((d) => d.startsWith("frame-src "));
+    expect(frames).toBe("frame-src https://accounts.google.com");
+  });
+
   it("allows the browser-facing auth emulator when it's the provider", () => {
     vi.stubEnv("AUTH_PROVIDER", "firebase-emulator");
     vi.stubEnv("FIREBASE_AUTH_EMULATOR_HOST", "auth-emulator:9099");

@@ -28,7 +28,17 @@ export function csp(nonce: string, dev: boolean) {
       return null;
     }
   })();
-  const frames = ["https://*.firebaseapp.com", "https://*.web.app", "https://accounts.google.com", authDomain && `https://${authDomain}`, emulator]
+  // Sign-in frames, by exact host only (no *.web.app or *.firebaseapp.com, which any Firebase customer can
+  // serve from): the auth domain (shipcube.web.app, FIREBASE_AUTH_DOMAIN), the project's own
+  // firebaseapp.com (Firebase's default auth host), Google's account chooser, and the local emulator.
+  const project = process.env.IDENTITY_PLATFORM_PROJECT || process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+  const hostOk = (h: string | undefined) => !!h && /^[a-z0-9.-]+$/i.test(h);
+  const frames = [
+    hostOk(authDomain) && `https://${authDomain}`,
+    hostOk(project) && `https://${project}.firebaseapp.com`,
+    "https://accounts.google.com",
+    emulator,
+  ]
     .filter(Boolean)
     .join(" ");
   return [
