@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Bricolage_Grotesque } from "next/font/google";
 import { headers } from "next/headers";
-import { ArrowRight, Building2, KeyRound, ShieldCheck, UserCheck } from "lucide-react";
+import { Building2, KeyRound, ShieldCheck, UserCheck } from "lucide-react";
 import Link from "next/link";
 import { CodeBlock } from "@/components/copy-button";
 import { Wordmark } from "@/components/logo";
@@ -10,6 +10,7 @@ import { ButtonLink } from "@/components/ui";
 import { auth } from "@/lib/auth";
 import { config } from "@/lib/server/config";
 import { ControlPlane } from "./control-plane";
+import { FlowDiagram } from "./flow-diagram";
 import { HeroStage } from "./hero-stage";
 
 const display = Bricolage_Grotesque({ subsets: ["latin"], variable: "--font-display", weight: ["600", "800"] });
@@ -53,12 +54,6 @@ const COMPUTE = [
   { work: "An API that can't wait", where: "Always on, for steady latency", hours: Array.from({ length: 24 }, (_, h) => h) },
 ];
 
-const FLOW = [
-  { title: "Your agent", items: ["Muse", "Claude Code", "Cursor", "Any MCP client"] },
-  { title: "ShipCube", items: ["Load estimator", "Approval gate", "AI gateway", "Semantic data layer"] },
-  { title: "Google Cloud", items: ["Cloud Run services and jobs", "GPUs", "BigQuery and your warehouse"] },
-];
-
 const SECURITY = [
   { icon: Building2, text: "Every workspace builds and runs apps under its own service accounts, isolated from every other workspace." },
   { icon: ShieldCheck, text: "Apps are private by default, behind Google sign-in. Only the people and groups you share with can open them." },
@@ -79,7 +74,7 @@ export default async function Landing() {
 
   return (
     <div className={`landing ${display.variable} min-h-dvh`}>
-      <a href="#main" className="sr-only-focusable rounded-md bg-accent px-3 py-1.5 font-medium text-accent-fg">
+      <a href="#main" className="sr-only-focusable rounded-md bg-cta px-3 py-1.5 font-medium text-cta-fg">
         Skip to content
       </a>
 
@@ -174,7 +169,7 @@ export default async function Landing() {
                 {COMPUTE.map((c) => (
                   <li key={c.work} className="grid gap-2 border-t border-border py-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:items-center sm:gap-6">
                     <div>
-                      <p className="text-[15px] font-medium">{c.work}</p>
+                      <p className="font-display text-[17px] font-semibold">{c.work}</p>
                       <p className="text-[13px] text-fg-muted">{c.where}</p>
                     </div>
                     <div className="grid grid-cols-24 gap-[3px]" role="img" aria-label={`Billed for ${c.hours.length} of 24 hours`}>
@@ -195,25 +190,12 @@ export default async function Landing() {
             <h2 id="flow-heading" className={H2}>
               How it fits together
             </h2>
-            <ol className="mt-12 grid items-stretch gap-3 md:grid-cols-[1fr_auto_1.2fr_auto_1fr]">
-              {FLOW.map((f, i) => (
-                <li key={f.title} className="contents">
-                  {i > 0 && (
-                    <ArrowRight className="size-5 rotate-90 self-center justify-self-center text-fg-subtle md:rotate-0" aria-hidden />
-                  )}
-                  <div
-                    className={`rounded-xl border p-5 ${f.title === "ShipCube" ? "tone-blue blueprint border-border" : "border-border bg-bg"}`}
-                  >
-                    <h3 className="text-[15px] font-semibold">{f.title}</h3>
-                    <ul className="mt-3 flex flex-col gap-1.5 text-[14px] text-fg-muted">
-                      {f.items.map((it) => (
-                        <li key={it}>{it}</li>
-                      ))}
-                    </ul>
-                  </div>
-                </li>
-              ))}
-            </ol>
+            <p className="mt-4 max-w-[60ch] text-[16px] leading-[26px] text-fg-muted">
+              Your agent talks to ShipCube; ShipCube talks to Google Cloud; you only hear about the steps that need you.
+            </p>
+            <div className="mt-10">
+              <FlowDiagram />
+            </div>
             <p className="mt-6 max-w-[64ch] text-[15px] leading-6 text-fg-muted">
               Start on ShipCube&apos;s GCP project with nothing to set up. Link your own project with one script, and apps bill
               to your account.
@@ -251,7 +233,7 @@ export default async function Landing() {
         <section id="request-access" aria-labelledby="request-heading" className="landing-hero tone-blue">
           <div className="mx-auto grid max-w-[1180px] gap-10 px-4 py-20 sm:px-6 md:grid-cols-[minmax(0,1fr)_minmax(0,460px)] md:items-start">
             <div>
-              <h2 id="request-heading" className="font-display text-[40px] leading-[1.02] font-extrabold tracking-[-0.03em] sm:text-[56px]">
+              <h2 id="request-heading" className="font-display text-[40px] leading-[1.02] font-extrabold tracking-[-0.025em] sm:text-[56px]">
                 Ship your first app this week.
               </h2>
               <p className="mt-4 max-w-[46ch] text-[16px] leading-[26px] text-fg-muted">

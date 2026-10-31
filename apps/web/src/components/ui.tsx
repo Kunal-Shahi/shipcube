@@ -11,7 +11,7 @@ type Size = "sm" | "md";
 const base =
   "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md font-medium transition-colors disabled:pointer-events-none disabled:opacity-50";
 const variants: Record<Variant, string> = {
-  primary: "bg-accent text-accent-fg hover:bg-accent-hover",
+  primary: "bg-cta text-cta-fg hover:bg-cta-hover",
   secondary: "border border-input-border bg-surface text-fg hover:bg-surface-2",
   ghost: "text-fg-muted hover:bg-surface-2 hover:text-fg",
   danger: "border border-input-border bg-surface text-critical hover:bg-critical-soft",

@@ -90,6 +90,10 @@
   --color-accent-hover: var(--accent-hover);
   --color-accent-fg: var(--accent-fg);
   --color-accent-soft: var(--accent-soft);
+  /* Primary buttons. The console uses its accent; the landing page sets its own --cta. */
+  --color-cta: var(--cta, var(--accent));
+  --color-cta-hover: var(--cta-hover, var(--accent-hover));
+  --color-cta-fg: var(--cta-fg, var(--accent-fg));
   --color-good: var(--good);
   --color-good-soft: var(--good-soft);
   --color-warning: var(--warning);
@@ -167,8 +171,8 @@ h3 {
 /* Landing page (src/app/(public)). Its own palette whatever the console theme: the same token names,
    redefined, so shared components follow. Four colours: royal blue #29339b, teal #17bebb, ink
    #1f1300 and paper #fffffa. The page is paper; a section opts into blue or ink with .tone-blue or
-   .tone-ink (the agent transcript, .term, is always ink). Amber means "waits for a person" and
-   nothing else. --cube is the hero cube's dots; --glow lights the hero. */
+   .tone-ink (the agent transcript, .term, is always ink). Yellow is the main call to action; orange means
+   "waits for a person" and nothing else. --cube is the hero cube's dots; --glow lights the hero. */
 .landing {
   --bg: #fffffa;
   --surface: #f5f4ec;
@@ -184,13 +188,16 @@ h3 {
   --accent-hover: #1f2779;
   --accent-fg: #fffffa;
   --accent-soft: #e4e6f7;
+  --cta: #29339b;
+  --cta-hover: #1f2779;
+  --cta-fg: #fffffa;
   --good: #0b7a77;
   --good-soft: #dcf4f3;
-  --warning: #8a5300;
-  --warning-soft: #fbefd9;
+  --warning: #b54708;
+  --warning-soft: #fdebdf;
   --critical: #b3261e;
   --critical-soft: #fbe5e2;
-  --approve: #9a5d00;
+  --approve: #b54708;
   --cube: #29339b;
   --glow: rgb(23 190 187 / 0.18);
   color-scheme: light;
@@ -211,13 +218,16 @@ h3 {
   --accent-hover: #6fe0dd;
   --accent-fg: #1f1300;
   --accent-soft: #1a2270;
+  --cta: #ffd23f;
+  --cta-hover: #ffe17a;
+  --cta-fg: #1f1300;
   --good: #7ff0d9;
   --good-soft: #163a6e;
-  --warning: #ffc46b;
-  --warning-soft: #3a3170;
+  --warning: #ff9b6a;
+  --warning-soft: #3d2f6e;
   --critical: #ffb3b3;
   --critical-soft: #4a2a6e;
-  --approve: #ffc46b;
+  --approve: #ff9b6a;
   --cube: #17bebb;
   --glow: rgb(23 190 187 / 0.28);
   color-scheme: dark;
@@ -239,13 +249,16 @@ h3 {
   --accent-hover: #4fd6d3;
   --accent-fg: #1f1300;
   --accent-soft: #0e3633;
+  --cta: #ffd23f;
+  --cta-hover: #ffe17a;
+  --cta-fg: #1f1300;
   --good: #5fe0c4;
   --good-soft: #10302a;
-  --warning: #ffc46b;
-  --warning-soft: #3a2a0c;
+  --warning: #ff9b6a;
+  --warning-soft: #3a1f0c;
   --critical: #ff9d9d;
   --critical-soft: #3a1612;
-  --approve: #ffc46b;
+  --approve: #ff9b6a;
   --cube: #17bebb;
   color-scheme: dark;
   background-color: var(--bg);

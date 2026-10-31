@@ -166,7 +166,7 @@ function EstimateArt() {
         <span className="text-[13px] text-fg-muted">Expected monthly cost</span>
         <span className="text-[12px] text-fg-subtle">82% confidence</span>
       </div>
-      <div className="mt-1 font-display text-[40px] leading-none font-extrabold tracking-[-0.02em]">$4 to $11</div>
+      <div className="mt-1 font-display text-[40px] leading-none font-semibold tracking-[-0.02em]">$4 to $11</div>
       <div className="relative mt-4 h-2 rounded-full bg-surface-2" aria-hidden>
         <div className="absolute inset-y-0 left-[18%] w-[34%] rounded-full bg-accent/60" />
         <div className="absolute -top-1 left-[30%] h-4 w-0.5 bg-fg" />
@@ -243,14 +243,14 @@ function ApprovalArt() {
         <span className="stage-wait inline-block size-2 rounded-full bg-warning" aria-hidden />
         Your agent is asking
       </div>
-      <p className="mt-2 text-[17px] font-semibold">Delete old-dashboard</p>
+      <p className="mt-2 font-display text-[20px] font-semibold">Delete old-dashboard</p>
       <div className="mt-3">
         <Row label="What changes" value="The app stops serving" />
         <Row label="Data" value="Kept, restorable from the console" />
         <Row label="Asked by" value="Muse / Claude Code, with your token" />
       </div>
       <div className="mt-4 flex gap-2" aria-hidden>
-        <span className="rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg">Delete app</span>
+        <span className="rounded-md bg-cta px-3 py-1.5 text-[13px] font-medium text-cta-fg">Delete app</span>
         <span className="rounded-md border border-border px-3 py-1.5 text-[13px] text-fg-muted">Decline</span>
       </div>
     </div>

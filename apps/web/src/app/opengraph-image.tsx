@@ -56,8 +56,8 @@ export default async function OpenGraphImage() {
             One control plane for AI-built apps, jobs and data on Google Cloud, driven from Muse, Claude Code, Cursor and other agents.
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 26, color: "#ffc46b" }}>
-          <div style={{ width: 14, height: 14, borderRadius: 7, background: "#ffc46b" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 26, color: "#ff9b6a" }}>
+          <div style={{ width: 14, height: 14, borderRadius: 7, background: "#ff9b6a" }} />
           Anything risky waits for a person
         </div>
       </div>
