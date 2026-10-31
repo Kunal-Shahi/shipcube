@@ -28,7 +28,7 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from shipcube_classifier import obs
-from shipcube_profiler import STATIC_REASONS
+from shipcube_profiler import STATIC_REASONS, runs_per_day
 
 from .types import Alternative, Caps
 
@@ -153,7 +153,30 @@ def _claims_measurement(text: str) -> bool:
 _MEASURED_NUMBERS = ("wall_s", "cpu_mean_cores", "cpu_p95_cores", "mem_peak_gb", "latency_mean_s", "net_calls",
                      "net_blocked")
 _ENUM = re.compile(r"^[A-Za-z0-9_]{1,40}$")
-_CRON = re.compile(r"^[0-9*/,\- @a-z]{1,40}$", re.I)
+# Strict cron: five fields of numbers, *, ranges, steps and lists, or a standard @macro. No names,
+# no free text (security review of #91: a loose charset let 40 characters of text through).
+_CRON_FIELD = re.compile(r"^(?:\*|\d{1,2}(?:-\d{1,2})?)(?:/\d{1,2})?(?:,(?:\*|\d{1,2}(?:-\d{1,2})?)(?:/\d{1,2})?)*$")
+_CRON_MACROS = {"@yearly", "@annually", "@monthly", "@weekly", "@daily", "@midnight", "@hourly"}
+_CRON_LIMITS = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
+
+
+def _strict_cron(v) -> str | None:
+    """The schedule hint if it's strict cron that parses, normalised; otherwise None (not sent)."""
+    if not isinstance(v, str):
+        return None
+    fields = v.lower().split()
+    if len(fields) == 1 and fields[0] in _CRON_MACROS:
+        return fields[0]
+    if len(fields) != 5 or not all(_CRON_FIELD.match(f) for f in fields):
+        return None
+    for f, (lo, hi) in zip(fields, _CRON_LIMITS):
+        if any(not lo <= int(n) <= hi for n in re.findall(r"(?<![/\d])\d+", f)):
+            return None
+    try:
+        runs_per_day(" ".join(fields))
+    except (ValueError, KeyError, IndexError):
+        return None
+    return " ".join(fields)
 # Our own assumption templates -> codes. Anything else (e.g. a note quoting the app's stderr) is dropped.
 _ASSUMPTION_CODES = (
     (re.compile(r"^traffic model: office hours"), "traffic_office_hours"),
@@ -212,8 +235,7 @@ def muse_facts(facts: dict) -> dict:
                  "route_count": len(code.get("routes") or []),
                  **{k: bool(code.get(k)) for k in ("uses_data_libs", "uses_gpu_libs", "uses_network_libs", "accepts_input")}},
         "hints": {"expected_users": _num(hints.get("expected_users")), "traffic": _enum(hints.get("traffic")),
-                  "schedule": hints.get("schedule") if isinstance(hints.get("schedule"), str)
-                  and _CRON.match(hints["schedule"]) else None},
+                  "schedule": _strict_cron(hints.get("schedule"))},
         "candidate_alternatives": [{"tier": _enum(a.get("tier")), "target": a.get("target") if a.get("target") in TARGETS else None,
                                     "monthly_cost_usd": a.get("monthly_cost_usd")}
                                    for a in facts.get("candidate_alternatives") or []],

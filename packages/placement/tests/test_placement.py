@@ -787,3 +787,15 @@ def test_mixed_route_app_measured_in_the_docker_sandbox(monkeypatch):
     assert top["path"] == "/api/cpu" and top["cpu_mean_cores"] > routes["/api/io"]["cpu_mean_cores"] + 0.3
     assert r.workload_class == "compute_heavy", (m["cpu_mean_cores"], top, r.profile["assumptions"])
     assert any("/api/cpu" in a for a in r.profile["assumptions"])
+
+
+@pytest.mark.parametrize("schedule,sent", [
+    ("0 2 * * *", "0 2 * * *"), ("*/15 * * * *", "*/15 * * * *"), ("0 9 * * 1-5", "0 9 * * 1-5"),
+    ("0 0,12 * * *", "0 0,12 * * *"), ("@Daily", "@daily"), ("  0   2 * * *  ", "0 2 * * *"),
+    ("0 2 * * *; rm -rf /", None), ("every day at 2am", None), ("0 2 * * MON", None),
+    ("0 2 * * * extra", None), ("0 2 * *", None), ("@reboot", None), ("99 99 * * *", None),
+    ("a b c d e", None), ("0 2 * * * # acme-billing-prod", None), (None, None), (5, None),
+])
+def test_schedule_hint_reaches_muse_only_as_strict_cron(schedule, sent):
+    from shipcube_placement.explain import muse_facts
+    assert muse_facts({"hints": {"schedule": schedule}})["hints"]["schedule"] == sent
