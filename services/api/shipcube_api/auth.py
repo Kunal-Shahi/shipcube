@@ -145,7 +145,10 @@ class _CertCachingRequest:
     any work (a session cookie fails the ID-token keys first, then fetches the cookie keys).
     This keeps successful key fetches for their Cache-Control max-age (1 hour by default).
     Google publishes new keys well before signing with them; an unknown key id clears the cache
-    and retries once (console_identity)."""
+    and retries once (console_identity), at most once per REFRESH_INTERVAL_S, so tokens with a
+    made-up key id can't force a refetch on every request or flush the cache for everyone."""
+
+    REFRESH_INTERVAL_S = 60
 
     def __init__(self) -> None:
         from google.auth.transport.requests import Request
@@ -153,6 +156,7 @@ class _CertCachingRequest:
         self._inner = Request()
         self._cache: dict[str, tuple[float, Any]] = {}
         self._lock = threading.Lock()
+        self._last_refresh = float("-inf")
 
     def __call__(self, url: str, method: str = "GET", **kwargs: Any) -> Any:
         if method != "GET":
@@ -169,19 +173,28 @@ class _CertCachingRequest:
                 self._cache[url] = (now + min(int(m[1]) if m else 3600, 6 * 3600), resp)
         return resp
 
-    def clear(self) -> None:
+    def refresh(self) -> bool:
+        """Drop the cached keys so the next verify refetches them; False (and nothing dropped) if
+        that already happened within REFRESH_INTERVAL_S."""
+        now = time.monotonic()
         with self._lock:
+            if now - self._last_refresh < self.REFRESH_INTERVAL_S:
+                return False
+            self._last_refresh = now
             self._cache.clear()
+            return True
 
 
 _cert_request: _CertCachingRequest | None = None
+_cert_request_lock = threading.Lock()
 
 
 def _certs_request() -> _CertCachingRequest:
     global _cert_request
-    if _cert_request is None:
-        _cert_request = _CertCachingRequest()
-    return _cert_request
+    with _cert_request_lock:
+        if _cert_request is None:
+            _cert_request = _CertCachingRequest()
+        return _cert_request
 
 
 def _verify_console_jwt(token: str, project: str, id_token: Any, request: Any) -> dict[str, Any]:
@@ -261,9 +274,10 @@ def console_identity(token: str) -> ConsoleIdentity | None:
             try:
                 claims = _verify_console_jwt(token, settings.idp_project, id_token, request)
             except ValueError as e:
-                if "not found" not in str(e).lower():  # only a key id we haven't fetched yet is worth a retry
+                # Only a key id we haven't fetched yet is worth a retry, and only if the keys
+                # weren't just refetched: a made-up kid is never found.
+                if "not found" not in str(e).lower() or not request.refresh():
                     raise
-                request.clear()
                 claims = _verify_console_jwt(token, settings.idp_project, id_token, request)
     except ValueError as e:
         log.info("console token rejected", extra={"reason": str(e)[:200]})

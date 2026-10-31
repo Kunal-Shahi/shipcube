@@ -139,3 +139,26 @@ def test_an_unknown_key_id_refetches_the_keys_once(monkeypatch, client):
     monkeypatch.setattr(auth, "_verify_console_jwt", verify)
     ident = auth.console_identity("cookie")
     assert ident is not None and ident.user_id is None and len(attempts) == 2 and attempts[1] == {}
+
+
+def test_repeated_bogus_key_ids_cant_flush_the_cache(monkeypatch, client):
+    """Red-team M-1 (#102): a made-up kid is never found; refetches are rate-limited per process."""
+    monkeypatch.setattr(auth, "settings", dataclasses.replace(auth.settings, idp_project=P))
+    req = auth._CertCachingRequest()
+    monkeypatch.setattr(auth, "_cert_request", req)
+    attempts = []
+
+    def verify(token, project, id_token, request):
+        attempts.append(1)
+        request._cache.setdefault("https://keys", (auth.time.monotonic() + 3600, _Resp(200)))
+        raise ValueError("Certificate for key id bogus not found.")
+
+    monkeypatch.setattr(auth, "_verify_console_jwt", verify)
+    assert auth.console_identity("forged-1") is None and len(attempts) == 2  # the first: one refetch
+    for i in range(20):
+        assert auth.console_identity(f"forged-{i + 2}") is None
+    assert len(attempts) == 22 and "https://keys" in req._cache  # no more refetches; real users keep the cache
+    now = auth.time.monotonic()
+    monkeypatch.setattr(auth.time, "monotonic", lambda: now + req.REFRESH_INTERVAL_S + 1)
+    auth.console_identity("forged-late")
+    assert len(attempts) == 24  # at most one refetch per interval
