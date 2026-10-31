@@ -25,6 +25,10 @@ CONSOLE_RUN_URL="$(run_url shipcube-console)"
 : "${CONSOLE_URL:=https://shipcube.web.app}"
 # Where the landing page is served (CORS for its waitlist form): the public address and the run.app URL.
 : "${CONSOLE_ORIGINS:=$CONSOLE_URL,$CONSOLE_RUN_URL}"
+# Where Firebase finishes Google sign-in: the console's Firebase Hosting domain, which serves /__/auth/handler
+# (and is in the OAuth client's redirect URIs). On the default firebaseapp.com domain the redirect fallback
+# never completes when the popup is blocked: the browser keeps the two sites' storage apart.
+: "${FIREBASE_AUTH_DOMAIN:=shipcube.web.app}"
 MCP_URL="$(run_url shipcube-mcp)"
 GATEWAY_URL="$(run_url shipcube-gateway)"
 WORKER_URL="$(run_url shipcube-worker)"

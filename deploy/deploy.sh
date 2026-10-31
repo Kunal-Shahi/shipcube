@@ -141,7 +141,7 @@ if want console; then
   # The Identity Platform web API key is public by design (it identifies the project to the browser).
   KEY_ID="$(gcloud services api-keys list --project "$PROJECT" --filter 'displayName~"Browser key"' --format 'value(name)' | head -1)"
   FIREBASE_WEB_API_KEY="$(gcloud services api-keys get-key-string "$KEY_ID" --format 'value(keyString)')"
-  export FIREBASE_WEB_API_KEY
+  export FIREBASE_WEB_API_KEY FIREBASE_AUTH_DOMAIN
   apply console
   public shipcube-console
   python3 deploy/identity_platform.py --project "$PROJECT" --add-domain "${CONSOLE_URL#https://}"
