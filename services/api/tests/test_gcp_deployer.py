@@ -324,6 +324,45 @@ def test_service_body_skips_egress_vpc_when_unconfigured(monkeypatch):
     assert "vpcAccess" not in body["template"]
 
 
+def test_deploy_refuses_a_hosted_app_without_mediated_egress_in_production(monkeypatch):
+    """N-2/E-1: fail closed. On Cloud Run, a hosted deploy with no egress VPC = open egress, so refuse."""
+    monkeypatch.setattr(gcp.google.auth, "default", lambda scopes: (object(), "p"))
+    monkeypatch.setattr(gcp, "on_cloud_run", lambda env=None: True)
+    monkeypatch.setenv("SHIPCUBE_APP_EGRESS_NETWORK", "")
+    d = gcp.GcpDeployer(Settings())
+    d._sessions[None] = sess = FakeSession({})
+    with pytest.raises(DeployError) as e:
+        d.deploy(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {})
+    assert e.value.code == "invalid_argument" and "egress" in str(e.value).lower()
+    assert sess.calls == []  # Cloud Run was never touched
+
+
+def test_deploy_without_egress_is_still_allowed_off_cloud_run_and_for_linked(monkeypatch):
+    """The escape hatch stays for local/dev; and a linked app (its own project) is never guarded."""
+    monkeypatch.setattr(gcp.google.auth, "default", lambda scopes: (object(), "p"))
+    monkeypatch.setenv("SHIPCUBE_APP_EGRESS_NETWORK", "")
+    # Off Cloud Run: the guard does not fire (deploy proceeds to the real Cloud Run calls).
+    monkeypatch.setattr(gcp, "on_cloud_run", lambda env=None: False)
+    d = gcp.GcpDeployer(Settings())
+    d._project_numbers["shipcube-apps-ks"] = "330999971585"
+    d._iap_agents["shipcube-apps-ks"] = "service-330999971585@gcp-sa-iap.iam.gserviceaccount.com"
+    d._sessions[None] = FakeSession({
+        ("PATCH", "/services/"): (200, {"name": "operations/1", "done": True, "response": {"uri": "https://x.run.app"}}),
+        ("GET", ":getIamPolicy"): (200, {"bindings": []})})
+    d._sessions[d.s.provisioner_sa] = FakeSession({})
+    d.deploy(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {})  # no DeployError
+    # On Cloud Run, a linked app is exempt (the guard is hosted-only).
+    monkeypatch.setattr(gcp, "on_cloud_run", lambda env=None: True)
+    linked = AppRef("tracker", WS, Target("l1", "linked", "user-proj", deployer_sa="ws-d@c.iam.gserviceaccount.com",
+                                          shared_runtime_sa="shipcube-apps@user-proj.iam.gserviceaccount.com"), "asia-south1")
+    d._project_numbers["user-proj"] = "42"
+    d._iap_agents["user-proj"] = "service-42@gcp-sa-iap.iam.gserviceaccount.com"
+    d._sessions["ws-d@c.iam.gserviceaccount.com"] = FakeSession({
+        ("PATCH", "/services/"): (200, {"name": "operations/2", "done": True, "response": {"uri": "https://y.run.app"}}),
+        ("GET", ":getIamPolicy"): (200, {"bindings": []})})
+    d.deploy(linked, "europe-docker.pkg.dev/user-proj/r/app" + PIN, {}, {})  # no DeployError
+
+
 def test_set_access_replaces_iap_accessors_only(deployer):
     sess = FakeSession({("POST", ":getIamPolicy"): (200, {"etag": "e", "bindings": [
         {"role": "roles/iap.httpsResourceAccessor", "members": ["user:old@x.com"]},

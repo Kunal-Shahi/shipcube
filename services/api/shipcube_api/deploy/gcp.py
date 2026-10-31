@@ -30,7 +30,7 @@ from google.auth import impersonated_credentials
 from google.oauth2 import credentials as user_credentials
 from google.auth.transport.requests import AuthorizedSession, Request
 
-from ..settings import Settings
+from ..settings import Settings, on_cloud_run
 from . import isolation
 from .base import AppRef, Deployed, DeployError, ShouldStop, normalize_caps
 
@@ -453,6 +453,15 @@ class GcpDeployer:
 
     def deploy(self, app: AppRef, image: str, caps: dict[str, Any], env: dict[str, str]) -> Deployed:
         isolation.check_image(self.s, app.workspace_id, image, linked=app.target.kind == "linked")
+        # Fail closed in production (red-team N-2/E-1): a hosted app with no egress VPC configured would
+        # deploy with full open internet egress, silently defeating the control. In production (on Cloud
+        # Run) that is a misconfiguration, not an option. Local/dev keeps the escape hatch for testing.
+        if (app.target.kind == "shipcube" and on_cloud_run()
+                and not (self.s.app_egress_network and self.s.app_egress_subnet)):
+            raise DeployError("invalid_argument",
+                              "mediated egress is not configured (SHIPCUBE_APP_EGRESS_NETWORK/SUBNET are empty): a hosted "
+                              "app would deploy with open outbound internet. Set them to the app_egress VPC/subnet "
+                              "(infra/terraform/modules/app_egress) before deploying hosted apps.")
         sess = self._for(app)
         sa = self._ensure_runtime_sa(sess, app)
         body = self._service_body(app, image, caps, env, sa)
