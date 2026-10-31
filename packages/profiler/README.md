@@ -75,7 +75,7 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
 - The verdict is in `profile.prescreen`. Hits name the rule and the file, never the matched text.
 - **Bounded cost:**
   - every in-tag regex scan is bounded;
-  - text is scanned for at most 256 KB per file, 8 MB in total and 5 s, after which the verdict says `incomplete` (file names are still checked);
+  - text is scanned for at most 256 KB per file, 8 MB in total and 5 s, after which the verdict says `incomplete` and carries the low signal `prescreen_incomplete`, a strike, not a refusal (file names are still checked);
   - a pathological 1 MB page finishes in well under a second.
 - **Not a security boundary.** Trivial obfuscation (string concatenation, base64, renamed binaries, packed archives) gets past every rule. It catches careless abuse cheaply; the sandbox's limits and run-time abuse signals cover the rest.
 

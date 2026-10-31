@@ -71,10 +71,13 @@ class Verdict:
 
     @property
     def signals(self) -> list[str]:
-        return sorted({f"prescreen_{h.code}" for h in self.hits if h.confidence == "low"})
+        # A scan cut short by a budget is a strike too: padding past the budget mustn't hide a kit.
+        low = {f"prescreen_{h.code}" for h in self.hits if h.confidence == "low"}
+        return sorted(low | ({"prescreen_incomplete"} if self.incomplete else set()))
 
     def to_dict(self) -> dict:
-        return {"verdict": "blocked" if self.blocked else ("flagged" if self.hits else "ok"),
+        flagged = self.hits or self.incomplete
+        return {"verdict": "blocked" if self.blocked else ("flagged" if flagged else "ok"),
                 "reasons": self.reasons, "signals": self.signals, "hits": [asdict(h) for h in self.hits],
                 "incomplete": self.incomplete}
 

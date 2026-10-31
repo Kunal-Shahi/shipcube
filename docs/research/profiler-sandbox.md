@@ -272,7 +272,7 @@ Before anything is built or run, `shipcube_profiler.prescreen` scans the upload'
   - a webhook app that reads `request.json` next to Python's `pass`. That one was a false positive the security review found: forwarding a submitted password to a webhook is now a strike, not a refusal.
 - **Cost is bounded:**
   - in-tag regex scans are bounded (unbounded `[^>]*` was quadratic: minutes for a crafted 1 MB page);
-  - text is scanned for at most 256 KB per file, 8 MB in total and 5 s, after which the verdict is marked `incomplete`.
+  - text is scanned for at most 256 KB per file, 8 MB in total and 5 s, after which the verdict is marked `incomplete` and emits the low signal `prescreen_incomplete` (a strike, not a refusal), so padding past the budget can't hide a kit for free.
 - **Limits.** This isn't a security boundary: trivial obfuscation (concatenated strings, base64, renamed binaries, packed archives) gets past every rule. It catches careless abuse cheaply. The sandbox (§3–5) and run-time abuse signals (§8) are what hold against the rest.
 
 ## 9. What stays static-only

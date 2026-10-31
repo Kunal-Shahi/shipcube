@@ -150,3 +150,17 @@ def test_byte_and_time_budgets_mark_the_verdict_incomplete(tmp_path, monkeypatch
     assert prescreen(tmp_path).incomplete
     monkeypatch.setattr(m.P, "MAX_SECONDS", 5.0)
     assert not prescreen(tmp_path).incomplete
+
+
+def test_an_incomplete_scan_is_a_low_signal_not_a_refusal(tmp_path, monkeypatch):
+    import sys
+    m = sys.modules["shipcube_profiler.prescreen"]
+    for i in range(5):
+        (tmp_path / f"f{i}.py").write_text("x = 1\n" * 1000)
+    monkeypatch.setattr(m.P, "MAX_TOTAL_TEXT_BYTES", 10_000)
+    v = prescreen(tmp_path)
+    assert v.incomplete and not v.blocked and not v.hits
+    assert v.signals == ["prescreen_incomplete"]
+    assert v.to_dict()["verdict"] == "flagged" and v.to_dict()["signals"] == ["prescreen_incomplete"]
+    monkeypatch.setattr(m.P, "MAX_TOTAL_TEXT_BYTES", 8_000_000)
+    assert prescreen(tmp_path).signals == []
