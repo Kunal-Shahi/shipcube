@@ -122,8 +122,8 @@ export function HeroStage() {
         </div>
       </div>
 
-      <div className="flex flex-col gap-3">
-        <div role="group" aria-label="Pick a request to send to your agent" className="grid gap-2 sm:grid-cols-2">
+      <div className="flex flex-col gap-5">
+        <div role="group" aria-label="Pick a request to send to your agent" className="flex flex-col">
           {REQUESTS.map((r, i) => (
             <button
               key={r.team}
@@ -131,12 +131,12 @@ export function HeroStage() {
               onClick={() => pick(i)}
               aria-pressed={i === active}
               className={cn(
-                "rounded-lg border px-3 py-2.5 text-left transition-colors",
-                i === active ? "border-accent bg-accent-soft" : "border-input-border bg-surface/70 hover:border-fg-muted",
+                "flex items-baseline gap-4 border-l-2 py-2 pr-2 pl-4 text-left transition-colors",
+                i === active ? "border-accent text-fg" : "border-fg-subtle/30 text-fg-muted hover:border-fg-subtle hover:text-fg",
               )}
             >
-              <span className="block text-[12px] font-medium text-accent">{r.team}</span>
-              <span className="mt-0.5 block text-[13.5px] leading-5 text-fg">{r.ask}</span>
+              <span className={cn("w-16 shrink-0 text-[13px] font-medium", i === active ? "text-accent" : "text-fg-subtle")}>{r.team}</span>
+              <span className="text-[15px] leading-6">{r.ask}</span>
             </button>
           ))}
         </div>

@@ -91,7 +91,7 @@ export default async function Landing() {
               Security
             </a>
             {session ? (
-              <ButtonLink href="/apps" size="sm">
+              <ButtonLink href="/apps" size="sm" className="font-semibold">
                 Open console
               </ButtonLink>
             ) : (
@@ -113,7 +113,7 @@ export default async function Landing() {
                 it estimates, deploys, schedules and caps the work. No heavy laptop, and anything risky waits for your yes.
               </p>
               <div className="mt-6 flex flex-wrap items-center gap-4">
-                <ButtonLink href="#request-access" variant="primary" className="h-11 px-5 text-[15px]">
+                <ButtonLink href="#request-access" variant="primary" className="h-11 px-5 text-[15px] font-semibold">
                   Request access
                 </ButtonLink>
                 <Link href="/sign-in" className="text-fg-muted underline-offset-4 hover:text-fg hover:underline">
@@ -245,7 +245,7 @@ export default async function Landing() {
               {formElsewhere ? (
                 <div className="flex flex-col items-start gap-3">
                   <p className="text-fg-muted">The request form opens on ShipCube&apos;s console.</p>
-                  <ButtonLink href={formElsewhere} variant="primary" className="h-11 px-5 text-[15px]">
+                  <ButtonLink href={formElsewhere} variant="primary" className="h-11 px-5 text-[15px] font-semibold">
                     Request access
                   </ButtonLink>
                 </div>

@@ -109,7 +109,7 @@ export function RequestAccessForm({ apiBase, accountEmail }: { apiBase: string |
         <input id="ra-hp" name={HONEYPOT} type="text" tabIndex={-1} autoComplete="off" defaultValue="" />
       </div>
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" variant="primary" pending={pending}>
+        <Button type="submit" variant="primary" pending={pending} className="h-10 px-4 text-[14px] font-semibold">
           {pending ? "Sending…" : "Request access"}
         </Button>
         {message && (
@@ -119,7 +119,7 @@ export function RequestAccessForm({ apiBase, accountEmail }: { apiBase: string |
         )}
         {offerSignIn && (
           // Signed in without a workspace, the console opens /waitlist with a one-click request.
-          <ButtonLink href="/sign-in?returnTo=%2Fwaitlist" size="sm">
+          <ButtonLink href="/sign-in?returnTo=%2Fwaitlist" size="sm" className="font-semibold">
             Sign in with Google
           </ButtonLink>
         )}
