@@ -102,6 +102,10 @@ class Settings:
     waitlist_per_hour: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_WAITLIST_PER_HOUR", "200")))
     # "Request access" from people already signed in (verified Google accounts): a separate budget.
     waitlist_signed_in_per_hour: int = field(default_factory=lambda: int(os.environ.get("SHIPCUBE_WAITLIST_SIGNED_IN_PER_HOUR", "200")))
+    # The Terms/Privacy version a waitlist sign-up consents to. The API — not the request — records this
+    # against the entry, and refuses a sign-up that doesn't carry the current version (a stale page or a
+    # forged body). Keep in sync with the console's TERMS_VERSION (apps/web/src/lib/legal.ts).
+    terms_version: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_TERMS_VERSION", "2026-10-31"))
     # On Cloud Run, Google's front end appends the client's address to X-Forwarded-For; the last entry
     # is the only one a client can't forge. Off (local), the socket's peer address is used.
     trust_forwarded_for: bool = field(default_factory=lambda: os.environ.get("SHIPCUBE_TRUST_FORWARDED_FOR") == "1")

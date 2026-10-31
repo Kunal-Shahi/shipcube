@@ -77,6 +77,27 @@ def test_bad_input_is_400(client, idp):
     assert client.post("/v1/waitlist", json={"email": email(), "name": "a", "use_case": "b", "terms_version": TERMS, "role": "owner"}).status_code == 400
 
 
+def test_stale_or_forged_terms_version_is_refused(client, idp):
+    # Consent is server-authoritative: a version the API isn't currently serving is refused, and nothing
+    # is recorded. (409, not 202: it reveals nothing about the email — it's the same for everyone.)
+    addr = email()
+    r = client.post("/v1/waitlist", json={"email": addr, "name": "Ada", "use_case": "dashboards",
+                                          "terms_version": "1999-01-01"}, headers={"X-Forwarded-For": "203.0.113.8"})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "terms_outdated"
+    assert row(addr) is None
+
+
+def test_consent_recorded_is_the_servers_version(client, idp, monkeypatch):
+    # The row carries the API's current version and a server timestamp, not anything the request chose.
+    monkeypatch.setattr(app_mod, "settings", dataclasses.replace(app_mod.settings, terms_version="2026-11-15"))
+    addr = email()
+    r = client.post("/v1/waitlist", json={"email": addr, "name": "Ada", "use_case": "dashboards",
+                                          "terms_version": "2026-11-15"}, headers={"X-Forwarded-For": "203.0.113.9"})
+    assert r.status_code == 202
+    stored = row(addr)
+    assert stored["terms_version"] == "2026-11-15" and stored["terms_accepted_at"] is not None
+
+
 def test_rate_limit_per_ip(client, idp, monkeypatch):
     set_waitlist(monkeypatch, platform_admins=frozenset({ADMIN}), waitlist_per_ip_per_hour=3, waitlist_per_hour=100000)
     ip = f"198.51.100.{uuid.uuid4().int % 250}"

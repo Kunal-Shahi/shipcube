@@ -504,7 +504,8 @@ class WaitlistRequest(_Model):
     use_case: str = Field(min_length=1, max_length=500)
     website: str = Field("", max_length=200, description="Honeypot: always empty from the real form")
     terms_version: str = Field(min_length=1, max_length=32,
-                               description="The Terms and Privacy notice version the person agreed to (the console's TERMS_VERSION)")
+                               description="The Terms/Privacy version shown to the person (the console's TERMS_VERSION); "
+                                           "must match the server's current version or the sign-up is refused (409 terms_outdated)")
 
     @model_validator(mode="after")
     def _strip(self) -> WaitlistRequest:
