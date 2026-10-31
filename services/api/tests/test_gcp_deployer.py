@@ -289,9 +289,39 @@ def test_deploy_is_private_gen2_scale_to_zero_with_iap(deployer):
     assert t["executionEnvironment"] == "EXECUTION_ENVIRONMENT_GEN2" and t["serviceAccount"] == APP.runtime_sa
     assert t["scaling"] == {"minInstanceCount": 0, "maxInstanceCount": 2} and t["maxInstanceRequestConcurrency"] == 40
     assert t["containers"][0]["resources"]["cpuIdle"] is True and t["timeout"] == "60s"
+    # Mediated egress (N-2): all outbound goes through the app-egress VPC, where only 443/80 is allowed.
+    assert t["vpcAccess"] == {"networkInterfaces": [{"network": "app-egress", "subnetwork": "app-egress"}],
+                              "egress": "ALL_TRAFFIC"}
     invoker = next(c for c in sess.calls if c[1].endswith(":setIamPolicy"))
     assert {"role": "roles/run.invoker",
             "members": ["serviceAccount:service-330999971585@gcp-sa-iap.iam.gserviceaccount.com"]} in invoker[2]["policy"]["bindings"]
+
+
+def test_service_body_routes_hosted_egress_through_the_vpc(deployer):
+    """N-2: a hosted app sends all outbound through the app-egress VPC (Direct VPC egress,
+    all-traffic), so the egress firewall allows only 443/80 and raw TCP (stratum, spam, C2) fails."""
+    body = deployer._service_body(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {}, APP.runtime_sa)
+    assert body["template"]["vpcAccess"] == {
+        "networkInterfaces": [{"network": "app-egress", "subnetwork": "app-egress"}],
+        "egress": "ALL_TRAFFIC"}
+
+
+def test_service_body_omits_vpc_access_for_linked_projects(deployer):
+    """Linked apps run in the user's own project, which has no app-egress VPC yet (follow-up)."""
+    linked = AppRef("tracker", WS, Target("l1", "linked", "user-proj",
+                                          deployer_sa="ws-d@c.iam.gserviceaccount.com"), "asia-south1")
+    body = deployer._service_body(linked, "europe-docker.pkg.dev/user-proj/r/app" + PIN, {}, {},
+                                  "shipcube-apps@user-proj.iam.gserviceaccount.com")
+    assert "vpcAccess" not in body["template"]
+
+
+def test_service_body_skips_egress_vpc_when_unconfigured(monkeypatch):
+    """Setting the egress network empty turns the VPC off (transition only; leaves open egress)."""
+    monkeypatch.setattr(gcp.google.auth, "default", lambda scopes: (object(), "p"))
+    monkeypatch.setenv("SHIPCUBE_APP_EGRESS_NETWORK", "")
+    d = gcp.GcpDeployer(Settings())
+    body = d._service_body(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {}, APP.runtime_sa)
+    assert "vpcAccess" not in body["template"]
 
 
 def test_set_access_replaces_iap_accessors_only(deployer):

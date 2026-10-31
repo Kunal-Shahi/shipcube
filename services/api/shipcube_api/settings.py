@@ -78,6 +78,13 @@ class Settings:
         "SHIPCUBE_BUILD_SUBMITTER_SA", "sc-hosted-deployer@shipcube-control-ks.iam.gserviceaccount.com"))
     # Optional: impersonate this deployer for hosted deploys; unset means ADC acts directly.
     hosted_deployer_sa: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_HOSTED_DEPLOYER_SA") or None)
+    # Mediated egress (red-team N-2, networking.md §5.5): every hosted app routes all outbound through
+    # this VPC/subnet (Direct VPC egress, all-traffic) so the egress firewall can allow only 443/80 and
+    # deny raw TCP (stratum, spam relay, C2). Names are infra/terraform/modules/app_egress's outputs;
+    # set them empty to deploy without a VPC (leaves open egress — only for a transition). Linked
+    # projects need their own VPC/NAT and are skipped for now (documented follow-up).
+    app_egress_network: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_APP_EGRESS_NETWORK", "app-egress") or None)
+    app_egress_subnet: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_APP_EGRESS_SUBNET", "app-egress") or None)
     # Where approval links point (the console). Set per environment; the default is the local console.
     console_url: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONSOLE_URL", "http://localhost:3000").rstrip("/"))
     # The AI gateway's URL, injected into every deployed app as SHIPCUBE_AI_GATEWAY. Unset: not injected.

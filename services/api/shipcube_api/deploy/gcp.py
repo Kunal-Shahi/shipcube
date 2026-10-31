@@ -420,6 +420,27 @@ class GcpDeployer:
         c = normalize_caps(caps)
         if self.s.ai_gateway_url:
             env = {"SHIPCUBE_AI_GATEWAY": self.s.ai_gateway_url, **env}
+        template: dict[str, Any] = {
+            "serviceAccount": sa,
+            "executionEnvironment": "EXECUTION_ENVIRONMENT_GEN2",
+            "timeout": f"{int(c.get('timeout_s', 60))}s",
+            "maxInstanceRequestConcurrency": int(c.get("concurrency", 80)),
+            "scaling": {"minInstanceCount": 0, "maxInstanceCount": int(c.get("max_instances", 2))},
+            "containers": [{
+                "image": image,
+                "resources": {"limits": {"cpu": str(c.get("cpu", "1")), "memory": str(c.get("memory", "512Mi"))},
+                              "cpuIdle": True, "startupCpuBoost": True},
+                "env": [{"name": k, "value": v} for k, v in sorted(env.items())],
+            }],
+        }
+        # Mediated egress (red-team N-2): route all outbound through the app-egress VPC, where the
+        # firewall allows only 443/80 (infra/terraform/modules/app_egress). Hosted apps only — a linked
+        # project's app would need a VPC in that project (networking.md §5.5, follow-up).
+        if app.target.kind == "shipcube" and self.s.app_egress_network and self.s.app_egress_subnet:
+            template["vpcAccess"] = {
+                "networkInterfaces": [{"network": self.s.app_egress_network, "subnetwork": self.s.app_egress_subnet}],
+                "egress": "ALL_TRAFFIC",
+            }
         return {
             "labels": {"shipcube-app": app.name, "shipcube-workspace": app.workspace_id[:8], "managed-by": "shipcube"},
             "ingress": "INGRESS_TRAFFIC_ALL",
@@ -427,19 +448,7 @@ class GcpDeployer:
             # A redeploy always serves the newest revision, also after a rollback pinned an older one.
             "traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100}],
             "iapEnabled": True,
-            "template": {
-                "serviceAccount": sa,
-                "executionEnvironment": "EXECUTION_ENVIRONMENT_GEN2",
-                "timeout": f"{int(c.get('timeout_s', 60))}s",
-                "maxInstanceRequestConcurrency": int(c.get("concurrency", 80)),
-                "scaling": {"minInstanceCount": 0, "maxInstanceCount": int(c.get("max_instances", 2))},
-                "containers": [{
-                    "image": image,
-                    "resources": {"limits": {"cpu": str(c.get("cpu", "1")), "memory": str(c.get("memory", "512Mi"))},
-                                  "cpuIdle": True, "startupCpuBoost": True},
-                    "env": [{"name": k, "value": v} for k, v in sorted(env.items())],
-                }],
-            },
+            "template": template,
         }
 
     def deploy(self, app: AppRef, image: str, caps: dict[str, Any], env: dict[str, str]) -> Deployed:
@@ -655,5 +664,7 @@ def describe_resources(s: Settings) -> list[str]:
         f"Cloud Build builds in {s.apps_project}, as the workspace's builder SA ({s.builder_sa_template})",
         f"Cloud Run services in {s.apps_project}: gen2, min 0 / max 2 instances, 1 vCPU, 512 MiB, IAP on",
         "One runtime service account per app (app-<hash>@...), no project roles",
+        *([f"All outbound routed through the {s.app_egress_network} VPC (Cloud NAT); only HTTPS/HTTP (443/80) is allowed out"]
+          if s.app_egress_network and s.app_egress_subnet else []),
     ]
 

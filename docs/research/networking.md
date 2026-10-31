@@ -15,9 +15,9 @@ This doc covers how a coding agent reaches ShipCube, how ShipCube reaches GCP, a
 | 3 | Control plane | **REST + JSON**, OpenAPI 3.1, `/v1` in the path, AIP-151-style operations. No gRPC. Deploys and profiling run as a **step machine driven by Cloud Tasks**. | Workflows if the step graph grows |
 | 4 | Flow | MCP → API → Cloud Tasks → worker → Cloud Build → Artifact Registry → Cloud Run. In a linked project the worker impersonates a deployer service account there. | |
 | 5 | Reaching apps | **IAP directly on each Cloud Run service** (security's decision, PR #2): the app's `run.app` URL, Google sign-in, and `set_access` writes `access_grants` plus an IAM binding. No load balancer. **[security]** | `<app>.apps.<your domain>` through an ALB and the Go access proxy (`services/gateway`), if custom domains or per-request caps are needed |
-| 5 | Egress | Default: none. Apps that need a static IP for a customer database use Direct VPC egress + Cloud NAT with a reserved IP, one per GCP project. | |
+| 5 | Egress | **Default: mediated** (red-team N-2). Every hosted app routes all outbound through the `app-egress` VPC + Cloud NAT behind an egress firewall that allows only TCP 443/80 and denies the rest, so ordinary HTTPS API calls work but raw TCP (stratum mining, port-25 spam, C2) is blocked. The `egress: static` tier adds the reserved NAT IP for customer-DB allow-listing; it shares the same NAT. | SNI/domain-filtering egress proxy for the 443-tunnel residual |
 | 6 | Caps | Cloud Run handles instances, concurrency, CPU/memory and timeout. Requests per minute applies to AI-gateway calls only while apps sit behind IAP. Spend uses ShipCube's own cost meter plus a billing budget, and the kill switch is `max-instances=0`. | Per-request app caps through the access proxy or Cloud Armor |
-| 6 | Budget | About **$5–20/month** fixed (Cloud SQL, plus NAT once a demo app needs a static IP). The access-proxy option adds ~$18 for the ALB. GKE Autopilot is placement-only. | |
+| 6 | Budget | About **$5–20/month** fixed (Cloud SQL, plus **~$3–5/month for the always-on apps-project Cloud NAT** that mediated egress needs, and more NAT once a linked project connects a warehouse). The access-proxy option adds ~$18 for the ALB. GKE Autopilot is placement-only. | |
 
 ---
 
@@ -520,15 +520,19 @@ With IAP, these limits apply to the app directly. If the access proxy is built, 
 - Logs in the console stream over SSE from the API, which is the same pattern.
 - The ALB's own MCP endpoint (if `mcp.<your domain>` sits behind it) needs a timeout ≥ 60 s.
 
-### 5.5 Egress to user databases
+### 5.5 Egress: mediated by default, static IP on request
 
-Most demo apps read BigQuery or DuckDB, which needs no network setup. For customer Postgres/Snowflake behind an IP allow-list:
-- **Direct VPC egress** (GA, recommended, no connector VMs, scales to zero) with all traffic routed to the VPC, plus **Cloud NAT** in manual mode with a **reserved static IP** ([static outbound IP](https://docs.cloud.google.com/run/docs/configuring/static-outbound-ip), [VPC options](https://docs.cloud.google.com/run/docs/configuring/connecting-vpc)).
-- Cost: NAT IP $0.005/h (~$3.60/month) + $0.045/GiB processed + the gateway-hour charge ([NAT pricing](https://cloud.google.com/nat/pricing)). Serverless Access connectors are billed as VMs, so avoid them.
-- One NAT per project and region. Every app in ShipCube's project that opts in shares **one** egress IP, which the console shows when a warehouse is connected, so the user can allow-list it. Linked projects get their own NAT, created when their first warehouse is connected.
-- Only apps with `egress: static` get `--network/--subnet --vpc-egress=all-traffic`. Everything else keeps default internet egress (no NAT charges).
+**Default (mediated egress — red-team N-2).** Every hosted app routes **all** its outbound through the `app-egress` VPC (Direct VPC egress, `all-traffic`) + Cloud NAT, behind an egress firewall that **allows only TCP 443 and 80** (plus the metadata server) and **denies everything else**. Without this, a Cloud Run service has unrestricted direct outbound internet, so a tenant app can be used as a malicious egress origin — a `stratum+tcp://` mining pool on an odd port, a port-25 spam relay, C2 on an arbitrary port, bulk exfiltration. CPU/instance/spend caps bound crypto-*mining* (a 1-vCPU miner earns ~nothing) but **not** egress abuse, which needs bandwidth, not CPU. The port filter kills raw TCP on non-web ports while leaving ordinary HTTPS API calls working. Implemented in `infra/terraform/modules/app_egress` (mirrors `modules/profiler`'s egress-firewall pattern, but allow-HTTPS instead of deny-all) and attached in `deploy/gcp.py` `_service_body` (`vpcAccess.egress = ALL_TRAFFIC`).
+
+- **Residual, NOT closed by a port filter (N-2 follow-up):** TLS-tunnelled abuse still passes — a mining pool reachable on 443, or HTTPS exfiltration to an attacker endpoint. The real fix is an **SNI/domain-filtering egress proxy** (allow-list of destination hostnames) in front of the NAT. Runtime abuse monitoring (`modules/monitoring/abuse.tf`: egress/CPU/request alerts) stays detective-only.
+- **DNS** resolves through Cloud Run's link-local resolver (the metadata server, `169.254.169.254`), which bypasses VPC firewall rules, so name resolution keeps working; the firewall does not open external port-53, which closes casual DNS tunnelling to third-party resolvers.
+- **Cost delta:** Cloud NAT is **not free** — one NAT gateway per project/region at ~$0.0014/h + a reserved IP ~$0.005/h (~$3–5/month always-on) + $0.045/GiB processed ([NAT pricing](https://cloud.google.com/nat/pricing)). This is the price of mediated egress, and it is charged whether or not an app connects a warehouse. Serverless Access connectors are billed as VMs, so we use Direct VPC egress, which scales to zero.
+- **Linked projects (follow-up):** a linked app runs in the customer's own GCP project, which has no `app-egress` VPC, so `_service_body` skips `vpcAccess` there and the app keeps default egress for now. Giving linked apps the same mediation needs a NAT + egress firewall created in the user's project by `link-project.sh` (or the deployer), tracked as part of the N-2 follow-up.
+
+**`egress: static` tier (static outbound IP for customer databases).** Most demo apps read BigQuery or DuckDB, which needs no network setup. For customer Postgres/Snowflake behind an IP allow-list, the app leaves through the **same `app-egress` NAT and its reserved static IP** ([static outbound IP](https://docs.cloud.google.com/run/docs/configuring/static-outbound-ip), [VPC options](https://docs.cloud.google.com/run/docs/configuring/connecting-vpc)). Because mediated egress already routes every hosted app through this NAT, the static-IP tier is now just "show the user the NAT IP to allow-list", not a separate VPC path.
+- One NAT per project and region. Every hosted app shares **one** egress IP (`terraform output app_egress` → `nat_ip`), which the console shows when a warehouse is connected, so the user can allow-list it. Linked projects get their own NAT, created when their first warehouse is connected.
 - Private-IP databases (Cloud SQL in the user's VPC) work through the same Direct VPC egress in the linked project.
-- Risk to note: the IP is shared across tenants on ShipCube's project, so allow-listing it lets in every ShipCube app with static egress. Customers who care should use a linked project. **[security]**
+- Risk to note: the IP is shared across tenants on ShipCube's project, so allow-listing it lets in every ShipCube app. Customers who care should use a linked project. **[security]**
 
 ---
 
