@@ -789,6 +789,37 @@ def test_mixed_route_app_measured_in_the_docker_sandbox(monkeypatch):
     assert any("/api/cpu" in a for a in r.profile["assumptions"])
 
 
+# --- abuse pre-screen in estimate() --------------------------------------------------------
+
+def test_high_confidence_abuse_refuses_the_estimate_before_anything_runs():
+    from shipcube_placement import AbuseRefused
+
+    class MustNotRun:
+        name = "fake"
+
+        def run(self, *a):
+            raise AssertionError("profiled an app the pre-screen refused")
+    src = {"kind": "inline", "files": [{"path": "main.py", "content": "POOL = 'stratum+tcp://p.example:3333'\nprint(1)\n"}]}
+    with pytest.raises(AbuseRefused) as e:
+        estimate(src, {}, runner=MustNotRun(), explainer=RuleExplainer())
+    assert e.value.codes == ["crypto_miner"]
+
+
+def test_low_confidence_abuse_is_a_signal_on_the_result():
+    src = {"kind": "inline", "files": [
+        {"path": "app.py", "content": "from flask import Flask\nimport nmap\napp = Flask(__name__)\n"
+                                      "@app.route('/')\ndef i():\n    return 'ok'\n"},
+        {"path": "requirements.txt", "content": "flask\n"}]}
+    r = estimate(src, {}, runner=StaticRunner(reason="disabled"), explainer=RuleExplainer())
+    assert r.profile["prescreen"]["verdict"] == "flagged"
+    assert "prescreen_network_scanner" in r.profile["measurements"]["abuse_signals"]
+
+
+def test_clean_apps_carry_an_ok_verdict(batch_rules):
+    assert batch_rules.profile["prescreen"] == {"verdict": "ok", "reasons": [], "signals": [], "hits": [],
+                                                "incomplete": False}
+
+
 @pytest.mark.parametrize("schedule,sent", [
     ("0 2 * * *", "0 2 * * *"), ("*/15 * * * *", "*/15 * * * *"), ("0 9 * * 1-5", "0 9 * * 1-5"),
     ("0 0,12 * * *", "0 0,12 * * *"), ("@Daily", "@daily"), ("  0   2 * * *  ", "0 2 * * *"),

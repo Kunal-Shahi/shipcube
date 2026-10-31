@@ -66,6 +66,19 @@ Tests and the demo use two sample apps: `samples/dashboard` (Flask, bursty) and 
   - wheels come from an Artifact Registry PyPI mirror (`SHIPCUBE_PROFILER_PIP_INDEX`) and the base image from a Docker Hub mirror (`SHIPCUBE_PROFILER_BASE_IMAGE`);
   - builds run on a private pool with no external IP (`SHIPCUBE_PROFILER_WORKER_POOL`).
 
+## Abuse pre-screen
+
+`prescreen(app_dir) -> Verdict` runs in `estimate()` before anything is built or run: file names, requirements and a few regexes from `prescreen_patterns.py` (the one file to review), plus two structural checks (mail sent in a loop; login pages or handlers that send credentials elsewhere).
+
+- **High confidence** (`crypto_miner`, `attack_tool`, `phishing_kit`): `estimate()` raises `AbuseRefused` (`.codes`, `.verdict`). Platform enforces the same verdict at deploy.
+- **Low confidence** (`mining_pool_reference`, `network_scanner`, `flood_script`, `bulk_mail`, `phishing_suspect`): allowed, added to `profile.measurements.abuse_signals` as `prescreen_<code>` (strikes).
+- The verdict is in `profile.prescreen`. Hits name the rule and the file, never the matched text.
+- **Bounded cost:**
+  - every in-tag regex scan is bounded;
+  - text is scanned for at most 256 KB per file, 8 MB in total and 5 s, after which the verdict says `incomplete` and carries the low signal `prescreen_incomplete`, a strike, not a refusal (file names are still checked);
+  - a pathological 1 MB page finishes in well under a second.
+- **Not a security boundary.** Trivial obfuscation (string concatenation, base64, renamed binaries, packed archives) gets past every rule. It catches careless abuse cheaply; the sandbox's limits and run-time abuse signals cover the rest.
+
 ## Configure
 
 | Variable | Purpose |
