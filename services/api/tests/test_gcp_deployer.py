@@ -121,7 +121,10 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
     assert calls[0][0:2] == ("POST", "projects/shipcube-apps-ks/serviceAccounts") and calls[0][2]["accountId"] == f"sc-build-{short}"
     assert calls[1][3] == {"repositoryId": f"ws-{short}"} and calls[1][2]["format"] == "DOCKER"
     repo_set = next(c for c in calls if c[1].endswith(f"repositories/ws-{short}:setIamPolicy"))
-    assert repo_set[2]["policy"]["bindings"] == [{"role": "roles/artifactregistry.writer", "members": [f"serviceAccount:{sa}"]}]
+    assert repo_set[2]["policy"]["bindings"] == [
+        {"role": "roles/artifactregistry.writer", "members": [f"serviceAccount:{sa}"]},
+        # The worker creates profiler jobs from images in this repo; Cloud Run requires the caller to read them.
+        {"role": "roles/artifactregistry.reader", "members": [f"serviceAccount:{deployer.s.worker_sa}"]}]
     mf = next(c for c in calls if c[0] == "POST" and c[1].endswith("/managedFolders"))
     assert mf[2] == {"name": f"ws/{WS}/"}
     puts = [c for c in calls if c[0] == "PUT"]
