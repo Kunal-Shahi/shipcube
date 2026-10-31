@@ -5,9 +5,11 @@
     result.model_dump()   # the estimate_load operation result
 """
 
+from shipcube_profiler import AbuseRefused
+
 from .estimate import estimate
 from .explain import FallbackExplainer, MuseExplainer, RuleExplainer
 from .types import Alternative, Caps, CostRange, EstimateResult, Resources
 
-__all__ = ["Alternative", "Caps", "CostRange", "EstimateResult", "FallbackExplainer",
+__all__ = ["AbuseRefused", "Alternative", "Caps", "CostRange", "EstimateResult", "FallbackExplainer",
            "MuseExplainer", "Resources", "RuleExplainer", "estimate"]

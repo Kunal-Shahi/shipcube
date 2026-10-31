@@ -254,6 +254,17 @@ The ledger and admission state live in the API database (platform-owned tables),
   - Fix: the agent prints the line with a per-run nonce passed in an env var only the agent reads and then removes from the app's environment. The runner accepts only the line carrying that nonce. It's cheap.
   - The remaining risk is a tenant misleading its own estimate. That's bounded: deploy-time caps are clamped and the user can always choose the tier.
 
+### Static pre-screen (added Oct 31)
+
+Before anything is built or run, `shipcube_profiler.prescreen` scans the upload's files and requirements for high-confidence abuse markers. The patterns are in one file, `prescreen_patterns.py`.
+
+- **Refuse** (`AbuseRefused`), for markers a legitimate internal app essentially never contains:
+  - `crypto_miner`: miner binaries (xmrig and similar), `stratum+tcp://` URLs, xmrig flags and configs;
+  - `attack_tool`: masscan, zmap, hping3 floods, slowloris and similar tools or packages;
+  - `phishing_kit`: a login page with a password field that sends credentials to an exfiltration endpoint (Telegram bot, Discord or Slack webhook, form relays), or impersonates a brand and posts off-site; or server code that forwards a submitted password to one of those endpoints.
+- **Flag only**, as a strike: `prescreen_mining_pool_reference` (dashboards query pool APIs), `prescreen_network_scanner` (nmap wrappers have admin uses), `prescreen_flood_script`, `prescreen_bulk_mail` (mail sent in a loop over a file or list), and `prescreen_phishing_suspect` (a brand login look-alike without exfiltration).
+- **Benign look-alikes stay clean,** and tests cover them: one contact-form email, a short fixed notify list, a `requests` app, an own-backend login, an external SSO login, a Slack alert, and docs that mention DDoS.
+
 ## 9. What stays static-only
 
 These sources are never run. They get a static estimate with `profile.mode=static` and a machine-readable `reason`, so the agent and the user know why:
