@@ -90,6 +90,12 @@
   --color-accent-hover: var(--accent-hover);
   --color-accent-fg: var(--accent-fg);
   --color-accent-soft: var(--accent-soft);
+  /* Primary buttons. The console uses its accent; the landing page sets its own --cta. */
+  /* Bars, strips and lines on the landing page; text never uses it. */
+  --color-mark: var(--mark, var(--accent));
+  --color-cta: var(--cta, var(--accent));
+  --color-cta-hover: var(--cta-hover, var(--accent-hover));
+  --color-cta-fg: var(--cta-fg, var(--accent-fg));
   --color-good: var(--good);
   --color-good-soft: var(--good-soft);
   --color-warning: var(--warning);
@@ -164,51 +170,151 @@ h3 {
   }
 }
 
-/* Landing page (src/app/(public)). Dark-first whatever the console theme: the same token names,
-   redefined, so shared components follow. Amber means "waits for a person" and nothing else. */
+/* Landing page (src/app/(public)). Its own palette whatever the console theme: the same token names,
+   redefined, so shared components follow. Four colours: royal blue #29339b, teal #17bebb, ink
+   #1f1300 and paper #fffffa. The page is paper; a section opts into blue or ink with .tone-blue or
+   .tone-ink (the agent transcript, .term, is always ink). Yellow is the main call to action; orange means
+   "waits for a person" and nothing else. --cube is the hero cube's dots; --glow lights the hero. */
 .landing {
-  --bg: #070a18;
-  --surface: #0e1430;
-  --surface-2: #151c40;
-  --border: #222b52;
-  --border-strong: #303b6c;
-  --input-border: #5b6696;
-  --fg: #eef1ff;
-  --fg-muted: #a6aed6;
-  --fg-subtle: #8a93c0;
-  --accent: #7b8cff;
-  --accent-hover: #98a5ff;
-  --accent-fg: #070a18;
-  --accent-soft: #1b2352;
-  --good: #4ade9a;
-  --good-soft: #0f2a22;
-  --warning: #ffb547;
-  --warning-soft: #2e2210;
-  --critical: #ff8a8a;
-  --critical-soft: #2e1418;
-  --approve: #ffb547;
-  color-scheme: dark;
+  --bg: #fffffa;
+  --surface: #f5f4ec;
+  --surface-2: #eae8dc;
+  --border: #dedbcc;
+  --border-strong: #c7c3b0;
+  /* Inputs and button outlines: at least 3:1 against the section. */
+  --input-border: #8a8574;
+  --fg: #1f1300;
+  --fg-muted: #4e4636;
+  --fg-subtle: #6b624f;
+  --accent: #29339b;
+  --accent-hover: #1f2779;
+  --accent-fg: #fffffa;
+  --accent-soft: #e4e6f7;
+  --mark: #29339b;
+  --cta: #29339b;
+  --cta-hover: #1f2779;
+  --cta-fg: #fffffa;
+  --good: #0b7a77;
+  --good-soft: #dcf4f3;
+  --warning: #b54708;
+  --warning-soft: #fdebdf;
+  --critical: #b3261e;
+  --critical-soft: #fbe5e2;
+  --approve: #b54708;
+  --cube: #29339b;
+  --glow: rgb(23 190 187 / 0.18);
+  color-scheme: light;
   background: var(--bg);
   color: var(--fg);
 }
+.landing .tone-blue {
+  --bg: #29339b;
+  --surface: #222b86;
+  --surface-2: #1c2472;
+  --border: #3c47ae;
+  --border-strong: #5560bd;
+  --input-border: #8c94d6;
+  --fg: #fffffa;
+  --fg-muted: #d5d8f2;
+  --fg-subtle: #b9bee8;
+  /* Text accents are off-white: teal text on blue vibrates. Teal stays for marks and the cube. */
+  --accent: #fffffa;
+  --accent-hover: #ffffff;
+  --accent-fg: #1f1300;
+  --accent-soft: #1a2270;
+  --mark: #17bebb;
+  --cta: #ffd23f;
+  --cta-hover: #ffe17a;
+  --cta-fg: #1f1300;
+  --good: #a7f3b5;
+  --good-soft: #163a6e;
+  --warning: #ff9b6a;
+  --warning-soft: #3d2f6e;
+  --critical: #ffb3b3;
+  --critical-soft: #4a2a6e;
+  --approve: #ff9b6a;
+  --cube: #17bebb;
+  --glow: rgb(23 190 187 / 0.28);
+  color-scheme: dark;
+  background-color: var(--bg);
+  color: var(--fg);
+}
+.landing .tone-ink,
+.landing .term {
+  --bg: #1f1300;
+  --surface: #2a1d08;
+  --surface-2: #3a2c14;
+  --border: #45381f;
+  --border-strong: #5c4d31;
+  --input-border: #8f8064;
+  --fg: #fffffa;
+  --fg-muted: #cfc8b8;
+  --fg-subtle: #ada48f;
+  --accent: #fffffa;
+  --accent-hover: #ffffff;
+  --accent-fg: #1f1300;
+  --accent-soft: #0e3633;
+  --mark: #17bebb;
+  --cta: #ffd23f;
+  --cta-hover: #ffe17a;
+  --cta-fg: #1f1300;
+  --good: #95e8a6;
+  --good-soft: #10302a;
+  --warning: #ff9b6a;
+  --warning-soft: #3a1f0c;
+  --critical: #ff9d9d;
+  --critical-soft: #3a1612;
+  --approve: #ff9b6a;
+  --cube: #17bebb;
+  color-scheme: dark;
+  background-color: var(--bg);
+  color: var(--fg);
+}
 
-/* Film grain plus one glow behind the hero's terminal. Static: no motion, no cost after paint. */
+/* Blueprint paper: the fine grid the hero uses, for smaller blue panels. */
+.blueprint {
+  background-image:
+    linear-gradient(rgb(255 255 250 / 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 250 / 0.07) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -1px -1px;
+}
+
+/* The hero is a blueprint: a fine grid on blue, one teal glow behind the cube. Static: no cost after paint. */
 .landing-hero {
   position: relative;
   isolation: isolate;
-  background:
-    radial-gradient(60% 70% at 78% 40%, rgb(123 140 255 / 0.22), transparent 70%),
-    radial-gradient(40% 50% at 70% 85%, rgb(255 181 71 / 0.08), transparent 70%);
+  background-image:
+    radial-gradient(50% 60% at 25% 70%, var(--glow), transparent 70%),
+    linear-gradient(rgb(255 255 250 / 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 250 / 0.06) 1px, transparent 1px);
+  background-size: auto, 40px 40px, 40px 40px;
 }
-.landing-hero::before {
+.landing-hero::before,
+.blueprint::before {
   content: "";
   position: absolute;
   inset: 0;
   z-index: -1;
-  opacity: 0.18;
+  /* Paper grain over the blueprint. */
+  opacity: 0.45;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
-  mix-blend-mode: overlay;
+  mix-blend-mode: soft-light;
   pointer-events: none;
+  border-radius: inherit;
+}
+.blueprint {
+  position: relative;
+  isolation: isolate;
+}
+/* Blueprint sections sit a shade deeper than the tone's own blue. */
+.landing .landing-hero {
+  background-color: #232c8a;
+}
+/* Behind the hero cube: a deep blue pool that softens the grid lines without hiding them. */
+.cube-halo {
+  background: radial-gradient(closest-side, rgb(16 20 84 / 0.7), rgb(16 20 84 / 0.4) 55%, transparent 100%);
+  filter: blur(8px);
 }
 
 .font-display {
@@ -229,7 +335,7 @@ h3 {
 }
 @keyframes term-wait {
   50% {
-    box-shadow: 0 0 0 4px rgb(255 181 71 / 0.18);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--approve) 20%, transparent);
   }
 }
 @keyframes term-caret {
@@ -253,6 +359,17 @@ h3 {
   .term-line {
     opacity: 1;
   }
+}
+
+/* The hero stage: each step arrives as it's revealed, and a step waiting for a person pulses amber. */
+.stage-line {
+  animation: term-in 0.3s ease-out;
+}
+.stage-wait {
+  animation: term-wait 1.2s ease-in-out infinite;
+}
+.art-in {
+  animation: term-in 0.35s ease-out;
 }
 
 /* /terms and /privacy: plain text, readable line length, quiet headings. */

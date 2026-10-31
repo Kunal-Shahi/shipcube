@@ -3,7 +3,7 @@ import { ImageResponse } from "next/og";
 // The link preview when the landing page is shared. Next serves it at /opengraph-image (public in
 // src/middleware.ts) and points og:image at it, relative to the request's host (see generateMetadata
 // in (public)/page.tsx).
-export const alt = "ShipCube: your agent ships the app, you approve what matters";
+export const alt = "ShipCube: your agent builds it, the cloud runs it";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -34,30 +34,30 @@ export default async function OpenGraphImage() {
           flexDirection: "column",
           justifyContent: "space-between",
           padding: "72px 80px",
-          backgroundColor: "#070a18",
-          backgroundImage: "radial-gradient(circle at 85% 30%, rgba(123,140,255,0.35), rgba(7,10,24,0) 60%)",
-          color: "#eef1ff",
+          backgroundColor: "#29339b",
+          backgroundImage: "radial-gradient(circle at 85% 30%, rgba(23,190,187,0.35), rgba(41,51,155,0) 60%)",
+          color: "#fffffa",
           fontFamily: "sans-serif",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 18, fontSize: 34, fontWeight: 700 }}>
           <svg width="44" height="44" viewBox="0 0 20 20">
-            <path d="M10 1.5 17.5 5.75 10 10 2.5 5.75Z" fill="#eef1ff" />
-            <path d="M2.5 5.75 10 10v8.5L2.5 14.25Z" fill="#a6aed6" />
-            <path d="M17.5 5.75 10 10v8.5l7.5-4.25Z" fill="#7b8cff" />
+            <path d="M10 1.5 17.5 5.75 10 10 2.5 5.75Z" fill="#fffffa" />
+            <path d="M2.5 5.75 10 10v8.5L2.5 14.25Z" fill="#d5d8f2" />
+            <path d="M17.5 5.75 10 10v8.5l7.5-4.25Z" fill="#17bebb" />
           </svg>
           ShipCube
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
           <div style={{ fontSize: 80, fontWeight: 800, lineHeight: 1.02, letterSpacing: -2, maxWidth: 1000, fontFamily: font ? "Display" : undefined }}>
-            Your agent ships the app. You approve what matters.
+            Your agent builds it. The cloud runs it.
           </div>
-          <div style={{ fontSize: 30, color: "#a6aed6", maxWidth: 940 }}>
-            An MCP server for Claude Code, Cursor and other agents. Deploy, share and cap internal apps on Google Cloud.
+          <div style={{ fontSize: 30, color: "#d5d8f2", maxWidth: 940 }}>
+            One control plane for AI-built apps, jobs and data on Google Cloud, driven from Muse, Claude Code, Cursor and other agents.
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 26, color: "#ffb547" }}>
-          <div style={{ width: 14, height: 14, borderRadius: 7, background: "#ffb547" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 26, color: "#ff9b6a" }}>
+          <div style={{ width: 14, height: 14, borderRadius: 7, background: "#ff9b6a" }} />
           Anything risky waits for a person
         </div>
       </div>
