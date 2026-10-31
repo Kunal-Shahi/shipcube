@@ -20,7 +20,7 @@ from psycopg.types.json import Jsonb
 from . import db, profiler_guard
 from .auth import Caller
 from .deploy import isolation
-from .deploy.base import AppRef, Deployer, DeployError, Target
+from .deploy.base import ACCESS_NOTE, IAP_PROPAGATION_S, AppRef, Deployer, DeployError, Target
 from .models import OpError, Operation, Progress, Step
 from .settings import settings
 
@@ -233,6 +233,7 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
                       (app["workspace_id"], app["id"])).fetchone()
     est = conn.execute("select * from load_estimates where app_id = %s order by created_at desc limit 1",
                        (app["id"],)).fetchone()
+    app_grants = grants(conn, app["id"])
     history = conn.execute("select revision, status, created_at from deployments where app_id = %s and revision is not null"
                            " order by created_at desc limit 5", (app["id"],)).fetchall()
     return {
@@ -245,7 +246,7 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
         "caps": app_caps(conn, str(app["workspace_id"]), app["id"]),
         "access": [{"principal": f"{g['principal_type']}:{g['principal']}",
                     "role": "owner" if g["principal_type"] == "user" and g["principal"] == creator else "viewer",
-                    "granted_at": _iso(g["created_at"]), "sync_state": g["sync_state"]} for g in grants(conn, app["id"])],
+                    "granted_at": _iso(g["created_at"]), "sync_state": g["sync_state"]} for g in app_grants],
         "ai": {"provider": ai["provider"], "model": ai["model"], "key_secret": ai["key_secret"]} if ai
         else {"provider": "meta", "model": "muse-spark-1.3", "key_secret": None},
         "updated_at": _iso(dep["finished_at"] if dep and dep["finished_at"] else app["created_at"]),
@@ -255,7 +256,16 @@ def _app_view(conn, app: dict[str, Any], creator_email: str | None = None) -> di
                      "monthly_cost_usd": est["reasoning"].get("monthly_cost_usd") or {"expected": float(est["monthly_cost_usd"] or 0)},
                      "explained_by": est["reasoning"].get("explained_by"), "created_at": _iso(est["created_at"])} if est else None,
         "revisions": [{"revision": h["revision"], "status": h["status"], "created_at": _iso(h["created_at"])} for h in history],
+        "access_note": ACCESS_NOTE if _access_propagating(app_grants) else None,
     }
+
+
+def _access_propagating(app_grants: list[dict[str, Any]], now: datetime | None = None) -> bool:
+    """A grant pushed to IAP within the last few minutes may not apply yet (deploy/base.ACCESS_NOTE)."""
+    if settings.backend != "gcp":
+        return False
+    since = (now or datetime.now(UTC)) - timedelta(seconds=IAP_PROPAGATION_S)
+    return any(g["last_synced_at"] and g["last_synced_at"] > since for g in app_grants)
 
 
 def get_app(caller: Caller, slug: str, include_deleted: bool = False) -> dict[str, Any]:

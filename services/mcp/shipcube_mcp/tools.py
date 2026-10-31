@@ -72,6 +72,8 @@ def _next(op: Operation) -> str | None:
                 f'then call operation with id "{op.id}" to follow it.')
     if not op.done:
         return f'Not finished yet. Call operation with id "{op.id}" (wait_s up to 55) to keep waiting.'
+    if op.status == "succeeded" and isinstance(op.result, dict) and (note := op.result.get("access_note")):
+        return f"Tell the user, with the URL: {note}"  # IAP takes minutes to apply a new grant
     return None
 
 

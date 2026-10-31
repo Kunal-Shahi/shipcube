@@ -49,6 +49,14 @@ class AppRef:
         return f"app-{self.short}@{self.target.project}.iam.gserviceaccount.com"
 
 
+# IAP applies a new grant to its access checks only after a few minutes (up to ~7 observed). Until then
+# the app's URL answers "You don't have access" even to its owner. Nothing can confirm propagation for
+# the person themselves, so results say so while a grant is that fresh.
+IAP_PROPAGATION_S = 10 * 60
+ACCESS_NOTE = ("Access can take a few minutes to apply. If you see \"You don't have access\", "
+               "wait a minute and retry in a fresh tab.")
+
+
 @dataclass
 class Deployed:
     url: str

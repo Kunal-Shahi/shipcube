@@ -310,6 +310,7 @@ class App(AppSummary):
     runtime: dict[str, Any] | None = Field(None, description="Live state from Cloud Run: ready, URL, revision, IAP, scaling")
     revisions: list[dict[str, Any]] = Field(default_factory=list, description="Recent deployments, newest first (for rollback)")
     estimate: AppEstimate | None = Field(None, description="The load estimate the latest deploy used (estimate_id, or the latest for this app name)")
+    access_note: str | None = Field(None, description="Set for a few minutes after access changes, while IAP may still deny the new grant")
 
 
 class EstimateResult(BaseModel):

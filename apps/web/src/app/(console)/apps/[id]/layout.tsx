@@ -43,6 +43,11 @@ export default async function AppLayout({ children, params }: { children: React.
           </a>
         )}
       </header>
+      {app.accessNote && !restore && !isJob && (
+        <div role="status" className="mb-5 rounded-lg border border-warning/40 bg-warning-soft px-4 py-3">
+          {app.accessNote}
+        </div>
+      )}
       {restore && app.deletedAt && (
         <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-critical/40 bg-critical-soft px-4 py-3">
           <p>

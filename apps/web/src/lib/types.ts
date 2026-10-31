@@ -150,6 +150,8 @@ export interface AppDetail extends AppSummary {
   monitoring?: Monitoring;
   logs: LogLine[];
   restorableUntil?: string;
+  /** Set for a few minutes after access changes: IAP may still deny the new grant. */
+  accessNote?: string;
 }
 
 export type ProviderId = "meta" | "openai-compatible" | "openai" | "anthropic";

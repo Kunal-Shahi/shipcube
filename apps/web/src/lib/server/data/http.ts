@@ -61,6 +61,8 @@ export interface ApiApp extends ApiAppSummary {
   runtime?: Record<string, unknown> | null;
   /** The load estimate of the deploy that created the app (networking, GET /v1/apps/{app}). */
   estimate?: ApiEstimate | null;
+  /** Set while a fresh IAP grant may not apply yet. */
+  access_note?: string | null;
 }
 export interface ApiEstimate {
   estimate_id: string;
@@ -515,6 +517,7 @@ export const httpData: ConsoleData = {
       monitoring: metrics ? monitoringFromApi(metrics, health) : undefined,
       deletedAt: a.deleted_at ?? undefined,
       restorableUntil: a.restorable_until ?? undefined,
+      accessNote: a.access_note ?? undefined,
     };
     return detail;
   },
