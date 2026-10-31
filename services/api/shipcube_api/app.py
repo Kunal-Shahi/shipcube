@@ -324,12 +324,18 @@ def _verified_console(authorization: str | None) -> auth.ConsoleIdentity:
 def join_waitlist(body: WaitlistRequest, request: Request,
                   authorization: Annotated[str | None, Header()] = None) -> dict:
     # Always 202 for a well-formed request: new, already listed, already decided or a bot (honeypot).
+    # Consent is recorded against the version the server currently serves, never the body's: a stale or
+    # forged version is refused (the same for everyone, so it reveals nothing about the email), and the
+    # stored version is the API's. 409 is independent of whether the email is already listed.
+    if body.terms_version != settings.terms_version:
+        raise ApiError(409, "terms_outdated",
+                       "the Terms and Privacy notice was updated; reload the page and accept the current version")
     # Signed in (the console's one-click request), the email is the session's verified one, not the body's.
     if authorization:
         ident = _verified_console(authorization)
-        waitlist.sign_up(ident.email, body.name, body.use_case, body.website, None, body.terms_version)
+        waitlist.sign_up(ident.email, body.name, body.use_case, body.website, None, settings.terms_version)
     elif body.email:
-        waitlist.sign_up(body.email, body.name, body.use_case, body.website, _client_ip(request), body.terms_version)
+        waitlist.sign_up(body.email, body.name, body.use_case, body.website, _client_ip(request), settings.terms_version)
     else:
         raise ApiError(400, "invalid_argument", "email: required")
     return {"status": "received"}
