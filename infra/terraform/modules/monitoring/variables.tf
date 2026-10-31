@@ -44,3 +44,34 @@ variable "sql_instance" {
   description = "Cloud SQL instance name."
   type        = string
 }
+
+# --- Runtime abuse alerts on hosted apps (abuse.tf) -------------------------------------------
+
+variable "apps_project_id" {
+  description = "Project where ShipCube hosts users' apps. Added to this project's metrics scope so the abuse alerts can see its Cloud Run metrics."
+  type        = string
+}
+
+variable "abuse_cpu_utilization" {
+  description = "Median CPU utilization of a hosted app's instances that counts as pegged (mining signature)."
+  type        = number
+  default     = 0.9
+}
+
+variable "abuse_cpu_minutes" {
+  description = "How long the CPU must stay pegged before alerting."
+  type        = number
+  default     = 30
+}
+
+variable "abuse_egress_bytes_per_s" {
+  description = "Outbound bytes/s per hosted app, sustained 10 min. 1 MB/s is ~600 MB in 10 minutes: far above an internal tool's JSON/HTML responses, well below a bulk exfiltration or spam/DDoS source."
+  type        = number
+  default     = 1000000
+}
+
+variable "abuse_requests_per_s" {
+  description = "Requests/s per hosted app, sustained 10 min. 20/s is 10x the default workspace cap of 120 requests/minute."
+  type        = number
+  default     = 20
+}
