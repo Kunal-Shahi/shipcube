@@ -235,9 +235,17 @@ export default async function Landing() {
         <div className="mx-auto flex max-w-[1180px] flex-wrap items-center justify-between gap-3 px-4 py-8 text-[13px] text-fg-muted sm:px-6">
           <Wordmark />
           <span>Built for the Meta Global AI Developer Hackathon.</span>
-          <Link href="/sign-in" className="hover:text-fg">
-            Sign in
-          </Link>
+          <nav aria-label="Legal" className="flex gap-4">
+            <Link href="/terms" className="hover:text-fg">
+              Terms
+            </Link>
+            <Link href="/privacy" className="hover:text-fg">
+              Privacy
+            </Link>
+            <Link href="/sign-in" className="hover:text-fg">
+              Sign in
+            </Link>
+          </nav>
         </div>
       </footer>
     </div>
