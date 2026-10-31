@@ -100,3 +100,42 @@ def test_a_bound_user_is_never_reclaimed_by_email(idp):
     # Another Google account with the same verified email can't take the row over.
     idp["claims"] = {"sub": f"uid-{uuid.uuid4().hex[:8]}", "email": email, "email_verified": True}
     assert auth.verify("session-cookie", None) is None
+
+
+# --- Google's signing keys are fetched once, not on every request -------------------------------
+
+
+class _Resp:
+    def __init__(self, status, cache_control=""):
+        self.status, self.headers, self.data = status, {"cache-control": cache_control}, b"{}"
+
+
+def test_signing_keys_are_cached_for_their_max_age(monkeypatch):
+    r = auth._CertCachingRequest()
+    calls = []
+    answers = iter([_Resp(503), _Resp(200, "public, max-age=2"), _Resp(200)])
+    r._inner = lambda url, method="GET", **kw: calls.append((method, url)) or next(answers)
+    assert r("https://keys").status == 503 and r("https://keys").status == 200  # errors aren't cached
+    assert r("https://keys").status == 200 and len(calls) == 2  # cached
+    now = auth.time.monotonic()
+    monkeypatch.setattr(auth.time, "monotonic", lambda: now + 3)  # max-age=2 has passed
+    r("https://keys")
+    assert len(calls) == 3
+
+
+def test_an_unknown_key_id_refetches_the_keys_once(monkeypatch, client):
+    monkeypatch.setattr(auth, "settings", dataclasses.replace(auth.settings, idp_project=P))
+    req = auth._CertCachingRequest()
+    req._cache["https://keys"] = (auth.time.monotonic() + 3600, _Resp(200))
+    monkeypatch.setattr(auth, "_cert_request", req)
+    attempts = []
+
+    def verify(token, project, id_token, request):
+        attempts.append(dict(request._cache))
+        if len(attempts) == 1:
+            raise ValueError("Certificate for key id abc not found.")
+        return {"sub": f"uid-{uuid.uuid4().hex[:8]}", "email": "nobody@example.com", "email_verified": True}
+
+    monkeypatch.setattr(auth, "_verify_console_jwt", verify)
+    ident = auth.console_identity("cookie")
+    assert ident is not None and ident.user_id is None and len(attempts) == 2 and attempts[1] == {}

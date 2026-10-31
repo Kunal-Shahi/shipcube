@@ -17,6 +17,8 @@ import logging
 import os
 import re
 import secrets
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -137,6 +139,51 @@ def register_dev_session(token: str, user_id: str, workspace_id: str) -> None:
 SESSION_COOKIE_CERTS = "https://www.googleapis.com/identitytoolkit/v3/relyingparty/publicKeys"
 
 
+class _CertCachingRequest:
+    """google-auth fetches Google's public signing keys on every verify_*_token call and caches
+    nothing, so each console request paid one or two HTTPS round trips to googleapis.com before
+    any work (a session cookie fails the ID-token keys first, then fetches the cookie keys).
+    This keeps successful key fetches for their Cache-Control max-age (1 hour by default).
+    Google publishes new keys well before signing with them; an unknown key id clears the cache
+    and retries once (console_identity)."""
+
+    def __init__(self) -> None:
+        from google.auth.transport.requests import Request
+
+        self._inner = Request()
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._lock = threading.Lock()
+
+    def __call__(self, url: str, method: str = "GET", **kwargs: Any) -> Any:
+        if method != "GET":
+            return self._inner(url, method=method, **kwargs)
+        now = time.monotonic()
+        with self._lock:
+            hit = self._cache.get(url)
+        if hit and hit[0] > now:
+            return hit[1]
+        resp = self._inner(url, method=method, **kwargs)
+        if resp.status == 200:
+            m = re.search(r"max-age=(\d+)", resp.headers.get("cache-control", ""))
+            with self._lock:
+                self._cache[url] = (now + min(int(m[1]) if m else 3600, 6 * 3600), resp)
+        return resp
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+
+
+_cert_request: _CertCachingRequest | None = None
+
+
+def _certs_request() -> _CertCachingRequest:
+    global _cert_request
+    if _cert_request is None:
+        _cert_request = _CertCachingRequest()
+    return _cert_request
+
+
 def _verify_console_jwt(token: str, project: str, id_token: Any, request: Any) -> dict[str, Any]:
     try:
         return id_token.verify_firebase_token(token, request, audience=project)
@@ -204,14 +251,20 @@ def console_identity(token: str) -> ConsoleIdentity | None:
         return ConsoleIdentity(u["email"], user_id, True, workspace_id) if u else None
     if not settings.idp_project or token.startswith("sc_"):
         return None
-    from google.auth.transport.requests import Request
     from google.oauth2 import id_token
 
     try:
         if settings.dev_mode and os.environ.get("FIREBASE_AUTH_EMULATOR_HOST"):
             claims = _emulator_claims(token, settings.idp_project)
         else:
-            claims = _verify_console_jwt(token, settings.idp_project, id_token, Request())
+            request = _certs_request()
+            try:
+                claims = _verify_console_jwt(token, settings.idp_project, id_token, request)
+            except ValueError as e:
+                if "not found" not in str(e).lower():  # only a key id we haven't fetched yet is worth a retry
+                    raise
+                request.clear()
+                claims = _verify_console_jwt(token, settings.idp_project, id_token, request)
     except ValueError as e:
         log.info("console token rejected", extra={"reason": str(e)[:200]})
         return None
