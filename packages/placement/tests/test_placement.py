@@ -598,3 +598,101 @@ def test_cpu_bound_web_app_measured_in_the_docker_sandbox(tmp_path, monkeypatch)
     assert m["mode"] == "measured", r.profile["assumptions"]
     assert r.workload_class == "compute_heavy", (m, r.profile["assumptions"])
     assert "T0" not in {a.tier for a in r.alternatives}
+
+
+# --- per-route probes: compute-heavy judged on the heaviest route, not the mix ----------------
+
+from shipcube_profiler import RouteStats
+
+
+def _routes(*specs):
+    return [RouteStats(path=p, sent=10, ok=10, cpu_mean_cores=m, cpu_p95_cores=p95, latency_mean_s=lat,
+                       latency_p95_s=lat * 1.5) for p, m, p95, lat in specs]
+
+
+def test_a_cpu_heavy_route_counts_even_when_the_mix_averages_it_away():
+    # loadlab, measured on GCP: mean 0.58 over the mixed load test, just under the 0.6 line.
+    mixed = dict(cpu_mean_cores=0.58, cpu_p95_cores=1.29, cpu_peak_cores=1.57)
+    p = _web(**mixed, routes=_routes(("/api/cpu", 0.97, 1.0, 0.21), ("/api/io", 0.01, 0.02, 0.5),
+                                     ("/healthz", 0.01, 0.03, 0.002), ("/", 0.02, 0.05, 0.003)))
+    cls, note = sandbox_class(p)
+    assert cls == "compute_heavy" and "/api/cpu" in note
+    assert sandbox_class(_web(**mixed)) is None                       # without probes: the old near miss
+    light = _web(**mixed, routes=_routes(("/api/io", 0.01, 0.02, 0.5), ("/", 0.3, 0.95, 0.01)))
+    assert sandbox_class(light) is None                               # a short spike on one route isn't saturation
+    failed = _web(**mixed, routes=[RouteStats("/api/cpu", sent=10, ok=0, cpu_mean_cores=0.99, cpu_p95_cores=1.0)])
+    assert sandbox_class(failed) is None                              # a route that never answered doesn't count
+
+
+def test_routes_round_trip_and_drive_the_timeout():
+    p = _web(routes=_routes(("/api/slow", 0.9, 1.0, 8.0), ("/", 0.01, 0.02, 0.003)))
+    back = Profile.from_dict(p.to_dict())
+    assert back.routes == p.routes and back.heaviest_route().path == "/api/slow"
+
+    class Measured:
+        name = "fake"
+
+        def run(self, *a):
+            return p
+    src = {"kind": "inline", "files": [{"path": "app.py", "content": FLASK_CPU},
+                                       {"path": "requirements.txt", "content": "flask\n"}]}
+    r = estimate(src, {"expected_users": 10}, runner=Measured(), explainer=RuleExplainer())
+    assert r.resources.timeout_s >= 240                               # 20x the slow route's p95 (12 s), capped at 300
+    assert r.profile["measurements"]["routes"][0]["path"] == "/api/slow"
+
+
+LOADLAB_LIKE = """import time
+from flask import Flask, request, jsonify
+app = Flask(__name__)
+
+@app.route("/api/cpu")
+def cpu():
+    ms = int(request.args.get("ms", 200))
+    t0, x = time.perf_counter(), 0
+    while (time.perf_counter() - t0) * 1000 < ms:
+        x += 1
+    return jsonify(x=x)
+
+@app.route("/api/io")
+def io():
+    time.sleep(0.5)
+    return jsonify(ok=True)
+
+@app.route("/api/stats")
+def stats():
+    return jsonify(ok=True)
+
+@app.route("/healthz")
+def healthz():
+    return "ok"
+
+@app.route("/")
+def index():
+    return "<input type=range>"
+
+if __name__ == "__main__":
+    import os
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+"""
+
+
+def test_mixed_route_app_measured_in_the_docker_sandbox(monkeypatch):
+    """The loadlab case for real: the CPU route is diluted in the mixed load test, but its own probe
+    pins the sandbox's vCPU, so the app is compute-heavy and the probe names the route."""
+    import shutil
+    import subprocess
+    if not shutil.which("docker") or subprocess.run(["docker", "version"], capture_output=True).returncode:
+        pytest.skip("needs a Docker daemon")
+    monkeypatch.setenv("SHIPCUBE_PROFILER", "local")
+    monkeypatch.delenv("SHIPCUBE_DEV_MODE")
+    src = {"kind": "inline", "files": [{"path": "main.py", "content": LOADLAB_LIKE},
+                                       {"path": "requirements.txt", "content": "flask==3.0.3\n"}]}
+    r = estimate(src, {"expected_users": 25}, explainer=RuleExplainer())
+    m = r.profile["measurements"]
+    assert m["mode"] == "measured", r.profile["assumptions"]
+    routes = {x["path"]: x for x in m["routes"]}
+    assert set(routes) == {"/", "/api/cpu", "/api/io", "/api/stats", "/healthz"}
+    top = max(routes.values(), key=lambda x: x["cpu_mean_cores"])
+    assert top["path"] == "/api/cpu" and top["cpu_mean_cores"] > routes["/api/io"]["cpu_mean_cores"] + 0.3
+    assert r.workload_class == "compute_heavy", (m["cpu_mean_cores"], top, r.profile["assumptions"])
+    assert any("/api/cpu" in a for a in r.profile["assumptions"])

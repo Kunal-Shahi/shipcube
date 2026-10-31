@@ -34,7 +34,7 @@ import psutil
 
 from .detect import CodeSummary
 from .errors import STATIC_REASONS
-from .profile import Hints, Profile, RequestStats
+from .profile import Hints, Profile, RequestStats, RouteStats
 
 SANDBOX_DIR = Path(__file__).parent / "_sandbox"
 GIB = 2**30
@@ -362,22 +362,30 @@ def _wait_port(port: int, proc: subprocess.Popen, timeout: float) -> bool:
     return False
 
 
+def _paths(routes: list[str]) -> list[str]:
+    return [r for r in routes if "<" not in r and "{" not in r] or ["/"]
+
+
+def _get(port: int, path: str) -> tuple[float, bool]:
+    t = time.perf_counter()
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=10) as r:
+            r.read()
+            good = r.status < 500
+    except Exception:
+        good = False
+    return time.perf_counter() - t, good
+
+
 def _load(port: int, routes: list[str], bursts: int, per_burst: int, concurrency: int,
           gap_s: float) -> RequestStats:
     """Bursty synthetic traffic: `bursts` bursts of `per_burst` GETs with idle gaps."""
-    paths = [r for r in routes if "<" not in r and "{" not in r] or ["/"]
+    paths = _paths(routes)
     lat: list[float] = []
     ok = 0
 
     def hit(i: int):
-        t = time.perf_counter()
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}{paths[i % len(paths)]}", timeout=10) as r:
-                r.read()
-                good = r.status < 500
-        except Exception:
-            good = False
-        return time.perf_counter() - t, good
+        return _get(port, paths[i % len(paths)])
 
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     urllib.request.install_opener(opener)
@@ -394,14 +402,47 @@ def _load(port: int, routes: list[str], bursts: int, per_burst: int, concurrency
                         concurrency=concurrency)
 
 
+PROBE_ROUTES = 8          # at most this many routes probed
+PROBE_MIN_S = 1.0         # each probe runs at least this long (enough CPU samples) ...
+PROBE_MAX_S = 4.0         # ... and at most this long or PROBE_MAX_REQUESTS requests
+PROBE_MAX_REQUESTS = 40
+PROBE_CONCURRENCY = 4
+
+
+def _probe_routes(port: int, routes: list[str], sampler: "_Sampler", interval_s: float) -> list[RouteStats]:
+    """Each route on its own, one after another, so its CPU window is its own: the mixed load test
+    averages a CPU-heavy route with idle ones (a 500 ms sleep, a health check, a static page)."""
+    out = []
+    with ThreadPoolExecutor(PROBE_CONCURRENCY) as pool:
+        for path in _paths(routes)[:PROBE_ROUTES]:
+            start, t0, lat, ok = sampler.mark(), time.monotonic(), [], 0
+            while (len(lat) < PROBE_MAX_REQUESTS and time.monotonic() - t0 < PROBE_MAX_S
+                   and (time.monotonic() - t0 < PROBE_MIN_S or len(lat) < 2 * PROBE_CONCURRENCY)):
+                for dt, good in pool.map(lambda _: _get(port, path), range(PROBE_CONCURRENCY)):
+                    lat.append(dt)
+                    ok += good
+            time.sleep(2 * interval_s)              # let the sampler catch the tail of the window
+            cpu = sampler.cpu[start:sampler.mark()]
+            lat.sort()
+            out.append(RouteStats(
+                path=path, sent=len(lat), ok=ok,
+                latency_mean_s=statistics.fmean(lat) if lat else 0.0,
+                latency_p95_s=lat[int(0.95 * (len(lat) - 1))] if lat else 0.0,
+                cpu_mean_cores=statistics.fmean(cpu) if cpu else 0.0,
+                cpu_p95_cores=sorted(cpu)[int(0.95 * (len(cpu) - 1))] if cpu else 0.0))
+    return out
+
+
 class LocalRunner:
     """Run the app in a subprocess on this machine and sample it with psutil."""
 
     name = "local"
 
     def __init__(self, limits: Limits | None = None, python: str | None = None,
-                 bursts: int = 3, per_burst: int = 40, concurrency: int = 8, gap_s: float = 1.5):
+                 bursts: int = 3, per_burst: int = 40, concurrency: int = 8, gap_s: float = 1.5,
+                 probe_routes: bool = True):
         self.limits = limits or Limits()
+        self.probe_routes = probe_routes
         # The app's interpreter. Default: this one (its packages must cover the app's
         # imports). Production builds the app image first, so deps are always present.
         self.python = python or sys.executable
@@ -441,7 +482,7 @@ class LocalRunner:
         sampler = _Sampler(proc.pid, self.limits, writable)
         sampler.start()
         prof = Profile(mode="measured", runner=self.name, kind=summary.kind)
-        win_start = 0
+        win_start, win_end = 0, None
         try:
             if summary.kind == "web":
                 if not _wait_port(port, proc, min(20.0, self.limits.timeout_s)):
@@ -456,6 +497,9 @@ class LocalRunner:
                                     concurrency=max(1, load["concurrency"] // 2), gap_s=0)
                     prof.requests = _load(port, summary.routes, **load)
                     prof.active_s = time.monotonic() - ta
+                    win_end = sampler.mark()   # the overall numbers cover the load test only
+                    if self.probe_routes:
+                        prof.routes = _probe_routes(port, summary.routes, sampler, self.limits.sample_interval_s)
                 _killpg(proc.pid, signal.SIGTERM)
                 try:
                     proc.wait(timeout=5)
@@ -483,7 +527,9 @@ class LocalRunner:
         prof.killed_reason = (sampler.kill_reason or _allocation_refused(proc.returncode, stderr, self.limits)
                               or _nproc_refused(proc.returncode, stderr, self.limits))
         prof.processes_max = sampler.nprocs
-        cpu = sampler.cpu[win_start:] or sampler.cpu
+        # CPU: the load test's window only (the route probes are separate). Memory: everything
+        # from the load test on, probes included, so a heavy route's peak counts.
+        cpu = sampler.cpu[win_start:win_end] or sampler.cpu
         rss = sampler.rss[win_start:] or sampler.rss
         prof.samples = len(sampler.cpu)
         prof.cpu_seconds = (ru1.ru_utime - ru0.ru_utime) + (ru1.ru_stime - ru0.ru_stime)
