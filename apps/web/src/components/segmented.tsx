@@ -58,7 +58,7 @@ export function Segmented<T extends string>({
             className={cn(
               "flex items-center gap-1.5 rounded text-[12px]",
               size === "sm" ? "size-6 justify-center" : "h-7 px-2.5",
-              checked ? "bg-surface font-medium text-fg shadow-sm" : "text-fg-muted hover:text-fg",
+              checked ? "bg-surface font-medium text-fg shadow-sm ring-1 ring-input-border" : "text-fg-muted hover:text-fg",
             )}
           >
             {o.icon}

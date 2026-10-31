@@ -3,7 +3,7 @@
 /* Tokens are documented in docs/design/DESIGN.md. Light values on :root, dark values
    under prefers-color-scheme (unless the user picked light) and under data-theme="dark".
    The console shares the landing page's palette: paper and ink with royal blue in light,
-   ink with yellow text accents and teal marks (--mark: bars, lines) in dark. */
+   neutral dark grey with yellow text accents and teal marks (--mark: bars, lines) in dark. */
 :root {
   --bg: #f6f5ee;
   --surface: #fffffa;
@@ -35,58 +35,58 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #1a1000;
-    --surface: #241806;
-    --surface-2: #2f2310;
-    --border: #3d311b;
-    --border-strong: #54462b;
-    --input-border: #8f8064;
-    --fg: #fffffa;
-    --fg-muted: #cfc8b8;
-    --fg-subtle: #ada48f;
+    --bg: #121316;
+    --surface: #1a1b1f;
+    --surface-2: #24262b;
+    --border: #2f3137;
+    --border-strong: #42454d;
+    --input-border: #747882;
+    --fg: #f5f5f2;
+    --fg-muted: #bfc1c7;
+    --fg-subtle: #9fa2aa;
     --accent: #ffd23f;
     --accent-hover: #ffe17a;
     --accent-fg: #1f1300;
-    --accent-soft: #3a2f0c;
+    --accent-soft: #2e2a14;
     --mark: #17bebb;
     --chart-1: #17bebb;
     --chart-2: #8c94d6;
     --chart-3: #ffd23f;
     --good: #95e8a6;
-    --good-soft: #15301c;
+    --good-soft: #172a1d;
     --warning: #ff9b6a;
-    --warning-soft: #3a1f0c;
+    --warning-soft: #33221a;
     --critical: #ff9d9d;
-    --critical-soft: #3a1612;
+    --critical-soft: #331b1d;
     --shadow: 0 4px 16px rgb(0 0 0 / 0.45), 0 1px 2px rgb(0 0 0 / 0.35);
     color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #1a1000;
-  --surface: #241806;
-  --surface-2: #2f2310;
-  --border: #3d311b;
-  --border-strong: #54462b;
-  --input-border: #8f8064;
-  --fg: #fffffa;
-  --fg-muted: #cfc8b8;
-  --fg-subtle: #ada48f;
+  --bg: #121316;
+  --surface: #1a1b1f;
+  --surface-2: #24262b;
+  --border: #2f3137;
+  --border-strong: #42454d;
+  --input-border: #747882;
+  --fg: #f5f5f2;
+  --fg-muted: #bfc1c7;
+  --fg-subtle: #9fa2aa;
   --accent: #ffd23f;
   --accent-hover: #ffe17a;
   --accent-fg: #1f1300;
-  --accent-soft: #3a2f0c;
+  --accent-soft: #2e2a14;
   --mark: #17bebb;
   --chart-1: #17bebb;
   --chart-2: #8c94d6;
   --chart-3: #ffd23f;
   --good: #95e8a6;
-  --good-soft: #15301c;
+  --good-soft: #172a1d;
   --warning: #ff9b6a;
-  --warning-soft: #3a1f0c;
+  --warning-soft: #33221a;
   --critical: #ff9d9d;
-  --critical-soft: #3a1612;
+  --critical-soft: #331b1d;
   --shadow: 0 4px 16px rgb(0 0 0 / 0.45), 0 1px 2px rgb(0 0 0 / 0.35);
   color-scheme: dark;
 }
