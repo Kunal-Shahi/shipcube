@@ -215,7 +215,8 @@ def alternatives(tier: str, cls: str, summary: CodeSummary, profile: Profile, tr
                  hints: Hints, confidence: float) -> list[Alternative]:
     if profile.kind == "web":
         options = [("T1", "cloud-run-service"), ("T3", "cloud-run-service")]
-        if all("<" not in r and "{" not in r for r in summary.routes):  # no per-item pages
+        # A snapshot only works for read-only pages: no per-item routes and no input per request.
+        if not summary.accepts_input and all("<" not in r and "{" not in r for r in summary.routes):
             options.append(("T0", "static-snapshot"))
     else:
         options = [("T2", "cloud-run-job"), ("T3", "cloud-run-service")]

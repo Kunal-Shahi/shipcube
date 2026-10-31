@@ -461,3 +461,140 @@ def test_measured_estimates_may_say_measured(batch_rules):
                  explainer=FallbackExplainer(MuseExplainer(client=client, model="m")))
     assert r.profile["measurements"]["mode"] == "measured" and r.explained_by == "m"
     assert '"measured":' in client.calls[0]["messages"][1]["content"]
+
+
+# --- static confidence, read-only snapshots, sandbox-relative classes ----------------------
+
+from shipcube_placement.estimate import STATIC_MAX_CONFIDENCE, sandbox_class
+from shipcube_profiler import StaticRunner
+
+
+def _web(**kw) -> Profile:
+    base = dict(mode="measured", runner="gcp", kind="web", cpu_mean_cores=0.05, cpu_p95_cores=0.3, cpu_peak_cores=0.4,
+                mem_mean_gb=0.1, mem_peak_gb=0.15, active_s=10, cpu_limit_cores=1.0, mem_limit_gb=2.0,
+                requests=RequestStats(sent=120, ok=120, latency_mean_s=0.02, latency_p95_s=0.05))
+    return Profile(**{**base, **kw})
+
+
+FLASK_CPU = """from flask import Flask, request
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "<form><input type='range' name='ms'></form>"
+
+@app.route("/burn")
+def burn():
+    ms = int(request.args.get("ms", 200))
+    import time
+    end = time.perf_counter() + ms / 1000
+    n = 0
+    while time.perf_counter() < end:
+        n += 1
+    return str(n)
+"""
+
+
+def test_static_estimates_are_never_confident():
+    for src in (IMAGE, inline(SAMPLES / "dashboard"),
+                {"kind": "inline", "files": [{"path": "app.py", "content": FLASK_CPU},
+                                             {"path": "requirements.txt", "content": "flask\nnumpy\n"}]}):
+        r = estimate(src, {"expected_users": 5}, runner=StaticRunner(reason="disabled"), explainer=RuleExplainer())
+        assert r.profile["measurements"]["mode"] == "static"
+        assert r.confidence <= STATIC_MAX_CONFIDENCE and r.low_confidence
+        assert any("not run" in a for a in r.profile["assumptions"])
+
+
+def test_measured_estimates_keep_the_classifier_confidence(dashboard_rules):
+    if dashboard_rules.profile["measurements"]["mode"] == "measured":
+        assert dashboard_rules.confidence > STATIC_MAX_CONFIDENCE
+
+
+def test_snapshot_is_offered_only_for_read_only_apps():
+    from shipcube_profiler import summarize
+    interactive = {"kind": "inline", "files": [{"path": "app.py", "content": FLASK_CPU},
+                                               {"path": "requirements.txt", "content": "flask\n"}]}
+    r = estimate(interactive, {"expected_users": 5}, runner=StaticRunner(reason="disabled"), explainer=RuleExplainer())
+    assert "T0" not in {a.tier for a in r.alternatives}
+    read_only = {"kind": "inline", "files": [{"path": "app.py", "content":
+                 "from flask import Flask\napp = Flask(__name__)\n@app.route('/')\ndef i():\n    return 'report'\n"},
+                 {"path": "requirements.txt", "content": "flask\n"}]}
+    r = estimate(read_only, {"expected_users": 5}, runner=StaticRunner(reason="disabled"), explainer=RuleExplainer())
+    assert "T0" in {a.tier for a in r.alternatives}
+
+
+@pytest.mark.parametrize("code,takes_input", [
+    ("@app.route('/x', methods=['GET', 'POST'])\ndef x(): pass", True),
+    ("@app.post('/items')\ndef add(): pass", True),
+    ("v = request.args.get('n')", True),
+    ("data = request.get_json()", True),
+    ("def f(q: str = Query(None)): pass", True),
+    ("st.slider('n', 0, 10)", True),
+    ("@app.route('/')\ndef i(): return 'hi'", False),
+])
+def test_input_detection(tmp_path, code, takes_input):
+    from shipcube_profiler import summarize
+    (tmp_path / "app.py").write_text("from flask import Flask, request\napp = Flask(__name__)\n" + code + "\n")
+    assert summarize(tmp_path).accepts_input is takes_input
+
+
+def test_input_detection_reads_templates(tmp_path):
+    from shipcube_profiler import summarize
+    (tmp_path / "app.py").write_text("from flask import Flask, render_template\napp = Flask(__name__)\n"
+                                     "@app.route('/')\ndef i(): return render_template('i.html')\n")
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "i.html").write_text("<form method=post><input name=q></form>")
+    assert summarize(tmp_path).accepts_input
+
+
+@pytest.mark.parametrize("kw,want", [
+    (dict(cpu_mean_cores=0.85, cpu_p95_cores=0.99, cpu_peak_cores=1.0), "compute_heavy"),
+    (dict(mem_peak_gb=1.2), "memory_heavy"),
+    (dict(killed_reason="memory over 1843 MB"), "memory_heavy"),
+    (dict(), None),                                                       # an ordinary light web app
+    (dict(cpu_mean_cores=0.3, cpu_p95_cores=0.99, cpu_peak_cores=1.0), None),   # short spikes aren't saturation
+    (dict(cpu_mean_cores=0.9, cpu_p95_cores=1.0, kind="script"), None),   # scripts stay batch_cron etc.
+    (dict(cpu_mean_cores=0.9, cpu_p95_cores=1.0, mode="static"), None),
+    (dict(cpu_mean_cores=0.9, cpu_p95_cores=1.0, cpu_limit_cores=0.0), None),    # limit unknown (in-process)
+    (dict(cpu_mean_cores=1.3, cpu_p95_cores=1.9, cpu_limit_cores=2.0), "compute_heavy"),
+])
+def test_sandbox_relative_classes(kw, want):
+    got = sandbox_class(_web(**kw))
+    assert (got[0] if got else None) == want
+
+
+def test_cpu_bound_web_app_is_sized_for_it():
+    class Measured:
+        name = "fake"
+
+        def run(self, *a):
+            return _web(cpu_mean_cores=0.9, cpu_p95_cores=1.0, cpu_peak_cores=1.0,
+                        requests=RequestStats(sent=120, ok=120, latency_mean_s=2.0, latency_p95_s=5.0))
+    src = {"kind": "inline", "files": [{"path": "app.py", "content": FLASK_CPU},
+                                       {"path": "requirements.txt", "content": "flask\n"}]}
+    r = estimate(src, {"expected_users": 50}, runner=Measured(), explainer=RuleExplainer())
+    assert r.workload_class == "compute_heavy" and r.decided_by == "rules" and not r.low_confidence
+    assert r.resources.concurrency <= 2                  # CPU-bound requests don't share a vCPU well
+    assert r.resources.timeout_s >= 100                  # 20x the measured p95
+    assert any("compute-heavy" in a for a in r.profile["assumptions"])
+    light = estimate(src, {"expected_users": 50}, runner=StaticRunner(reason="disabled"), explainer=RuleExplainer())
+    assert r.monthly_cost_usd.expected > light.monthly_cost_usd.expected
+
+
+def test_cpu_bound_web_app_measured_in_the_docker_sandbox(tmp_path, monkeypatch):
+    """The loadlab case end to end: a Flask app that burns CPU per request, profiled for real."""
+    import shutil
+    import subprocess
+    if not shutil.which("docker") or subprocess.run(["docker", "version"], capture_output=True).returncode:
+        pytest.skip("needs a Docker daemon")
+    monkeypatch.setenv("SHIPCUBE_PROFILER", "local")
+    monkeypatch.delenv("SHIPCUBE_DEV_MODE")
+    burn = FLASK_CPU.replace('int(request.args.get("ms", 200))', '400').replace(
+        '@app.route("/burn")', '@app.route("/api/burn")')
+    src = {"kind": "inline", "files": [{"path": "app.py", "content": burn},
+                                       {"path": "requirements.txt", "content": "flask==3.0.3\n"}]}
+    r = estimate(src, {"expected_users": 50}, explainer=RuleExplainer())
+    m = r.profile["measurements"]
+    assert m["mode"] == "measured", r.profile["assumptions"]
+    assert r.workload_class == "compute_heavy", (m, r.profile["assumptions"])
+    assert "T0" not in {a.tier for a in r.alternatives}

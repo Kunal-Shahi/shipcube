@@ -55,6 +55,8 @@ variables `SHIPCUBE_DATA_WORKSPACE`, `SHIPCUBE_PROFILER_ENV_JSON` and `SHIPCUBE_
 emails that review the waitlist; a local `deploy.sh` defaults it to your gcloud account). `MAX_WORKSPACES`
 (default 50) caps waitlist approvals.
 
+**Profiler.** Deploys turn the profiler sandbox on: `SHIPCUBE_PROFILER_JOB`, the sandbox's runtime SA from the profiler settings, is set on the API (admission) and the worker (runs). `PROFILER_ON=0` (the repository variable `SHIPCUBE_PROFILER_ON`) deploys it off, so every estimate is static. To switch it off at once without a deploy: `gcloud run services update shipcube-mcp --update-env-vars SHIPCUBE_PROFILER_ENABLED=0`, then the same for `shipcube-worker`.
+
 ## Monthly cost (asia-south1 list prices, demo traffic)
 
 | Item | Estimate | Basis |

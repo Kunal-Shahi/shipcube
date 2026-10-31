@@ -116,6 +116,8 @@ def run_args(cfg: DockerSandboxConfig, image: str, name: str, hints: Hints, nonc
         "--env", f"SHIPCUBE_AGENT_TIMEOUT_S={agent_timeout}",
         "--env", f"SHIPCUBE_AGENT_MEMORY_MB={agent_memory}",
         "--env", f"SHIPCUBE_AGENT_NPROC={cfg.pids}",
+        "--env", f"SHIPCUBE_AGENT_CPUS={cfg.cpus}",
+        "--env", f"SHIPCUBE_SANDBOX_MEMORY_MB={cfg.memory_mb}",
         "--env", f"SHIPCUBE_AGENT_DISK_MB={cfg.disk_mb}",
         "--env", f"{NONCE_ENV}={nonce}",
         image,

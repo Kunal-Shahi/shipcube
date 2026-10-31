@@ -19,6 +19,10 @@ DATA_LIBS = {"pandas", "polars", "duckdb", "numpy", "pyarrow", "sqlalchemy", "ps
 NET_LIBS = {"requests", "httpx", "urllib3", "aiohttp", "boto3", "google.cloud", "openai"}
 ENTRY_NAMES = ["main.py", "app.py", "server.py", "run.py", "job.py", "__main__.py"]
 _ROUTE = re.compile(r"""@\w+\.(?:route|get)\(\s*['"]([^'"]+)['"]""")
+_INPUT = re.compile(
+    r"""@\w+\.(?:post|put|patch|delete|websocket)\s*\(|methods\s*=\s*[\[(][^\])]*['"](?:POST|PUT|PATCH|DELETE)['"]"""
+    r"""|request\.(?:form|args|values|json|get_json|files|data|query_params|body)\b|\b(?:Query|Form|Body|File)\s*\("""
+    r"""|<form\b|<input\b|st\.(?:slider|text_input|number_input|button|file_uploader|selectbox)\b""", re.I)
 _SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", "site-packages"}
 
 
@@ -29,6 +33,9 @@ class CodeSummary:
     kind: str = "script"                 # "web" or "script"
     framework: str | None = None
     routes: list[str] = field(default_factory=list)
+    # The app takes input per request (POST/PUT/..., form or JSON bodies, query parameters,
+    # websockets): its responses can't be precomputed into a static snapshot.
+    accepts_input: bool = False
     api_only: bool = False               # every route is under /api, /v1 ... (no pages)
     imports: list[str] = field(default_factory=list)
     requirements: list[str] = field(default_factory=list)
@@ -126,6 +133,8 @@ def summarize(root: Path, excerpt_lines: int = 60) -> CodeSummary:
     s.uses_network_libs = bool(NET_LIBS & (tops | req_names))
 
     body = "\n".join(text_all)
+    templates = [t.read_text(errors="replace") for t in root.rglob("*.html") if _inside(root, t)][:50]
+    s.accepts_input = bool(_INPUT.search(body) or any(_INPUT.search(t) for t in templates))
     s.writes_outputs = sorted(set(re.findall(r"""\.(html|csv|json|parquet|md|png)['"]""", body)))
 
     candidates = [root / n for n in ENTRY_NAMES if _inside(root, root / n)]

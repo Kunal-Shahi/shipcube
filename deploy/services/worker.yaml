@@ -45,6 +45,7 @@ spec:
             - {name: GOOGLE_CLOUD_PROJECT, value: "${PROJECT}"}
             - name: META_API_KEY
               valueFrom: {secretKeyRef: {name: meta-api-key, key: "${META_KEY_VERSION}"}}
+            - {name: SHIPCUBE_PROFILER_JOB, value: "${PROFILER_JOB}"}
 ${PROFILER_ENV}
           startupProbe:
             httpGet: {path: /healthz, port: 8080}
