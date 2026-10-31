@@ -368,6 +368,3 @@ h3 {
 .stage-wait {
   animation: term-wait 1.2s ease-in-out infinite;
 }
-.art-in {
-  animation: term-in 0.35s ease-out;
-}
