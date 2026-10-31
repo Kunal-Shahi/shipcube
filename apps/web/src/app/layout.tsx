@@ -23,13 +23,14 @@ export const metadata: Metadata = {
 
 export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const nonce = (await headers()).get("x-nonce") ?? undefined;
+  // The font variables go on <html>: the theme (globals.css) reads them there, on :root.
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} ${display.variable}`} suppressHydrationWarning>
       <head>
         {/* Browsers hide the nonce attribute after load, so the client sees "" here. */}
         <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className={`${geistSans.variable} ${geistMono.variable} ${display.variable}`}>{children}</body>
+      <body>{children}</body>
     </html>
   );
 }
