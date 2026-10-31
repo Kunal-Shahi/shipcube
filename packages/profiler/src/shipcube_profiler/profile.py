@@ -49,6 +49,18 @@ class RequestStats:
 
 
 @dataclass
+class RouteStats:
+    """One route probed on its own after the load test, so its CPU is its own."""
+    path: str
+    sent: int = 0
+    ok: int = 0
+    latency_mean_s: float = 0.0
+    latency_p95_s: float = 0.0
+    cpu_mean_cores: float = 0.0
+    cpu_p95_cores: float = 0.0
+
+
+@dataclass
 class Profile:
     mode: str                        # "measured" or "static"
     runner: str                      # "local", "gcp" or "static"
@@ -79,6 +91,7 @@ class Profile:
     timed_out: bool = False
     killed_reason: str | None = None
     requests: RequestStats | None = None
+    routes: list[RouteStats] = field(default_factory=list)   # web: per-route probes
     notes: list[str] = field(default_factory=list)
     static_reason: str | None = None  # errors.STATIC_REASONS code when mode == "static"
     abuse_signals: list[str] = field(default_factory=list)  # abuse.abuse_signals, set by the control plane side
@@ -92,7 +105,14 @@ class Profile:
         if isinstance(d.get("requests"), dict):
             d["requests"] = RequestStats(**{k: v for k, v in d["requests"].items()
                                             if k in RequestStats.__dataclass_fields__})
+        if isinstance(d.get("routes"), list):
+            d["routes"] = [RouteStats(**{k: v for k, v in r.items() if k in RouteStats.__dataclass_fields__})
+                           for r in d["routes"] if isinstance(r, dict)]
         return cls(**d)
+
+    def heaviest_route(self) -> "RouteStats | None":
+        """The probed route that used the most CPU (among those that answered)."""
+        return max((r for r in self.routes if r.ok), key=lambda r: r.cpu_mean_cores, default=None)
 
 
 def _round(d: dict) -> dict:

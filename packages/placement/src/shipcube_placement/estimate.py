@@ -25,6 +25,10 @@ def _measured(profile, tr: pl.Traffic) -> dict:
                                           "mem_peak_gb", "net_calls", "net_blocked", "remote_hosts",
                                           "static_reason")}
     d["latency_mean_s"] = tr.latency_s
+    if profile.routes:   # heaviest first, so the explanation can name the route that drives sizing
+        d["routes"] = [{"path": r.path, "cpu_mean_cores": round(r.cpu_mean_cores, 3),
+                        "latency_mean_ms": round(r.latency_mean_s * 1000, 1), "ok": r.ok, "sent": r.sent}
+                       for r in sorted(profile.routes, key=lambda r: -r.cpu_mean_cores)[:5]]
     return {k: (round(v, 4) if isinstance(v, float) else v) for k, v in d.items()}
 
 
@@ -52,6 +56,13 @@ def sandbox_class(profile) -> tuple[str, str] | None:
     if profile.cpu_p95_cores >= SATURATED_CPU_P95 * lim_cpu and profile.cpu_mean_cores >= SATURATED_CPU_MEAN * lim_cpu:
         return "compute_heavy", (f"kept the sandbox's {lim_cpu:g} vCPU busy (mean {profile.cpu_mean_cores:.2f}, "
                                  f"p95 {profile.cpu_p95_cores:.2f}), so treated as compute-heavy")
+    # The mixed load test averages every route; a CPU-heavy route next to idle ones (a sleep, a
+    # health check, a static page) can stay under the line. Each route probed on its own can't.
+    top = profile.heaviest_route()
+    if top and top.cpu_p95_cores >= SATURATED_CPU_P95 * lim_cpu and top.cpu_mean_cores >= SATURATED_CPU_MEAN * lim_cpu:
+        return "compute_heavy", (f"route {top.path} kept the sandbox's {lim_cpu:g} vCPU busy on its own "
+                                 f"(mean {top.cpu_mean_cores:.2f}, p95 {top.cpu_p95_cores:.2f}, "
+                                 f"{top.latency_mean_s * 1000:.0f} ms per request), so treated as compute-heavy")
     return None
 
 

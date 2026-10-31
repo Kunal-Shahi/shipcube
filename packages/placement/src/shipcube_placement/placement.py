@@ -120,6 +120,7 @@ def size(tier: str, cls: str, profile: Profile, tr: Traffic, hints: Hints) -> Re
     in_flight = tr.peak_rps * max(tr.latency_s, 0.01)
     max_inst = int(min(10, max(2, math.ceil(in_flight / conc * 2))))
     p95 = profile.requests.latency_p95_s if profile.requests else 1.0
+    p95 = max([p95] + [r.latency_p95_s for r in profile.routes if r.ok])   # the slowest route, on its own
     timeout = int(min(300, max(60, math.ceil(p95 * 20))))
     return Resources(cpu=_cpu_str(cpu), memory=_mem_str(mem),
                      min_instances=1 if tier == "T3" else 0, max_instances=max_inst,
