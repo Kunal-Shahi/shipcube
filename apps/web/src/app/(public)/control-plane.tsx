@@ -28,8 +28,8 @@ const JOBS: Job[] = [
   },
   {
     icon: Database,
-    title: "Connect your warehouse, safely",
-    body: "Agents query your data through named measures and dimensions, not raw SQL. They can propose a model change; a person reviews the diff.",
+    title: "Analyse your data",
+    body: "Connect your warehouse and your agent can pull your data and run analytics on it, like revenue by region last month. It uses your metric definitions, so the numbers match yours.",
     Art: DataArt,
   },
   {
@@ -166,29 +166,33 @@ function EstimateArt() {
 }
 
 function DataArt() {
+  // A question asked in plain words, answered from the warehouse with the workspace's own revenue metric.
+  const rows = [
+    { region: "North", value: 48.2 },
+    { region: "West", value: 39.6 },
+    { region: "South", value: 27.1 },
+    { region: "East", value: 18.4 },
+  ];
+  const max = Math.max(...rows.map((r) => r.value));
   return (
-    <div className="art-in grid gap-4 sm:grid-cols-2">
-      <div>
-        <p className="text-[12px] text-fg-subtle">Measures</p>
-        <ul className="mt-2 flex flex-col gap-1.5 font-mono text-[12.5px]">
-          {["orders.revenue", "orders.count", "customers.active", "customers.churned"].map((m) => (
-            <li key={m} className="rounded border border-border bg-surface px-2 py-1 text-fg">
-              {m}
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div>
-        <p className="text-[12px] text-fg-subtle">Proposed by the agent</p>
-        <pre className="mt-2 overflow-hidden rounded border border-border bg-surface p-2 font-mono text-[12px] leading-5">
-          <span className="text-good">+ refunds:</span>
-          {"\n"}
-          <span className="text-good">+   sql: amount &lt; 0</span>
-          {"\n"}
-          <span className="text-good">+   type: sum</span>
-        </pre>
-        <p className="mt-2 text-[12px] text-warning">Waiting for review</p>
-      </div>
+    <div className="art-in">
+      <p className="text-[15px]">&ldquo;Revenue by region, last month&rdquo;</p>
+      <p className="mt-1 flex items-center gap-2 text-[12px] text-fg-muted">
+        <span aria-hidden>&rarr;</span>
+        <code className="rounded bg-surface px-1.5 py-0.5 font-mono">shipcube.data_query</code>
+        using your <span className="font-mono">orders.revenue</span>
+      </p>
+      <ul className="mt-5 flex flex-col gap-3">
+        {rows.map((r) => (
+          <li key={r.region} className="grid grid-cols-[56px_minmax(0,1fr)_56px] items-center gap-3 text-[13px]">
+            <span className="text-fg-muted">{r.region}</span>
+            <span className="h-2.5 rounded-full bg-surface" aria-hidden>
+              <span className="block h-full rounded-full bg-mark" style={{ width: `${(r.value / max) * 100}%` }} />
+            </span>
+            <span className="text-right">${r.value}k</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

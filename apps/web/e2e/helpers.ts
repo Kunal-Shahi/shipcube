@@ -13,7 +13,18 @@ import { expect, type Page } from "@playwright/test";
  */
 export const MEMBER_EMAIL = process.env.E2E_EMAIL ?? process.env.SHIPCUBE_SEED_EMAIL ?? `e2e-${Date.now()}@example.com`;
 
-export async function signIn(page: Page, email: string): Promise<void> {
+/**
+ * Signs in. The console's first-run tour is marked as seen first, so its overlay doesn't sit over
+ * the page a test is driving; pass `{ tour: true }` to see it (e2e/tour.spec.ts).
+ */
+export async function signIn(page: Page, email: string, opts: { tour?: boolean } = {}): Promise<void> {
+  if (!opts.tour) {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("sc-tour-done", "1");
+      } catch {}
+    });
+  }
   // The emulator's popup hands its result to a relay iframe in this page, which loads
   // apis.google.com/js/api.js. When that load stalls the hand-off never arrives, so a stalled
   // attempt is abandoned and the whole sign-in retried.

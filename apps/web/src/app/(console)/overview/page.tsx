@@ -55,7 +55,9 @@ export default async function OverviewPage({ searchParams }: Props) {
         actions={<ButtonLink href="/apps">All apps</ButtonLink>}
       />
       <div className="flex flex-col gap-4">
-        <Headline apps={live} billing={billing} pending={pending} />
+        <div data-tour="overview-headline">
+          <Headline apps={live} billing={billing} pending={pending} />
+        </div>
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] [&>*]:min-w-0">
           <SpendPanel billing={billing} />
           <BudgetPanel billing={billing} details={details} />
@@ -160,7 +162,7 @@ function BudgetPanel({ billing, details }: { billing: BillingOverview | null; de
   const credits = billing?.credits;
   const capped = details.filter((d) => d.caps.monthlySpend > 0).slice(0, 4);
   return (
-    <Panel>
+    <Panel data-tour="overview-budgets">
       <PanelHeader title="Budgets" description="Credits, and spend against each app's monthly cap" />
       <div className="flex flex-col gap-5 p-4">
         {credits && credits.granted > 0 && (
@@ -209,7 +211,7 @@ function BudgetPanel({ billing, details }: { billing: BillingOverview | null; de
 function HealthPanel({ apps, details, total }: { apps: AppSummary[]; details: AppDetail[]; total: number }) {
   const byId = new Map(details.map((d) => [d.id, d]));
   return (
-    <Panel>
+    <Panel data-tour="overview-health">
       <PanelHeader
         title="App health"
         description={total > apps.length ? `The ${apps.length} busiest of ${total} apps, last 24 hours` : "Last 24 hours"}

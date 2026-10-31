@@ -1,9 +1,11 @@
-import { LogOut } from "lucide-react";
+import { Compass, LogOut } from "lucide-react";
+import { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Wordmark } from "@/components/logo";
 import { Nav } from "@/components/nav";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Tour } from "@/components/tour";
 import { accountStatus, pendingApprovalCount } from "@/lib/api";
 import { requireSession } from "@/lib/auth";
 import { signOut } from "../(auth)/actions";
@@ -42,6 +44,13 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
           <Nav pendingApprovals={(await pendingApprovalCount()) ?? 0} platformAdmin={account.platformAdmin} />
         </div>
         <div className="hidden flex-col gap-3 md:flex">
+          <Link
+            href="/overview?tour=1"
+            className="flex h-8 items-center gap-2 rounded-md px-2 text-[13px] text-fg-muted hover:bg-surface-2 hover:text-fg"
+          >
+            <Compass className="size-4 text-fg-subtle" aria-hidden />
+            Take the tour
+          </Link>
           <div className="px-2">
             <ThemeToggle />
           </div>
@@ -69,6 +78,10 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
       <main id="main" tabIndex={-1} className="min-w-0 px-4 py-6 focus:outline-none sm:px-6 md:py-8">
         <div className="mx-auto max-w-[1120px]">{children}</div>
       </main>
+      {/* The first-run tour: reads the URL, so it sits in its own Suspense boundary. */}
+      <Suspense fallback={null}>
+        <Tour />
+      </Suspense>
     </div>
   );
 }
