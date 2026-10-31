@@ -7,6 +7,9 @@ locals {
   # Every Cloud Run service ShipCube runs, for the 5xx alert.
   services_filter = join(" OR ", [for s in keys(var.uptime_paths) : "resource.label.service_name=\"${s}\""])
   sql_filter      = "resource.type=\"cloudsql_database\" AND resource.label.database_id=\"${var.project_id}:${var.sql_instance}\""
+  # Once the apps project is in this metrics scope (abuse.tf), a hosted app could share a platform
+  # service's name; every platform alert is pinned to the control project.
+  in_control = "resource.label.project_id=\"${var.project_id}\""
 }
 
 resource "google_monitoring_notification_channel" "email" {
@@ -70,7 +73,7 @@ resource "google_monitoring_alert_policy" "down" {
   conditions {
     display_name = "Uptime check failing for ${each.key} from 2+ regions"
     condition_threshold {
-      filter          = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND resource.type=\"${contains(var.private_services, each.key) ? "cloud_run_revision" : "uptime_url"}\" AND metric.label.check_id=\"${google_monitoring_uptime_check_config.service[each.key].uptime_check_id}\""
+      filter          = "metric.type=\"monitoring.googleapis.com/uptime_check/check_passed\" AND resource.type=\"${contains(var.private_services, each.key) ? "cloud_run_revision" : "uptime_url"}\" AND metric.label.check_id=\"${google_monitoring_uptime_check_config.service[each.key].uptime_check_id}\" AND ${local.in_control}"
       comparison      = "COMPARISON_GT"
       threshold_value = 1
       duration        = "300s"
@@ -101,8 +104,8 @@ resource "google_monitoring_alert_policy" "errors" {
   conditions {
     display_name = "5xx / all requests > 5% for 5 min"
     condition_threshold {
-      filter                  = "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND metric.label.response_code_class=\"5xx\" AND (${local.services_filter})"
-      denominator_filter      = "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND (${local.services_filter})"
+      filter                  = "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND metric.label.response_code_class=\"5xx\" AND ${local.in_control} AND (${local.services_filter})"
+      denominator_filter      = "metric.type=\"run.googleapis.com/request_count\" AND resource.type=\"cloud_run_revision\" AND ${local.in_control} AND (${local.services_filter})"
       comparison              = "COMPARISON_GT"
       threshold_value         = 0.05
       duration                = "300s"
@@ -143,7 +146,7 @@ resource "google_monitoring_alert_policy" "worker_not_running" {
   conditions {
     display_name = "No ${var.worker_service} instance for 15 min"
     condition_absent {
-      filter   = "metric.type=\"run.googleapis.com/container/instance_count\" AND resource.type=\"cloud_run_revision\" AND resource.label.service_name=\"${var.worker_service}\""
+      filter   = "metric.type=\"run.googleapis.com/container/instance_count\" AND resource.type=\"cloud_run_revision\" AND ${local.in_control} AND resource.label.service_name=\"${var.worker_service}\""
       duration = "900s"
       aggregations {
         alignment_period     = "300s"
@@ -257,7 +260,7 @@ resource "google_monitoring_alert_policy" "public_hosted_service" {
   conditions {
     display_name = "Worker found a hosted service callable by anyone"
     condition_threshold {
-      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.public_hosted_service.name}\" AND resource.type=\"cloud_run_revision\""
+      filter          = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.public_hosted_service.name}\" AND resource.type=\"cloud_run_revision\" AND ${local.in_control}"
       comparison      = "COMPARISON_GT"
       threshold_value = 0
       duration        = "0s"
@@ -311,7 +314,7 @@ resource "google_monitoring_alert_policy" "exposure_check_stopped" {
   conditions {
     display_name = "No exposure-check heartbeat for 3 h"
     condition_absent {
-      filter   = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.exposure_check_heartbeat.name}\" AND resource.type=\"cloud_run_revision\""
+      filter   = "metric.type=\"logging.googleapis.com/user/${google_logging_metric.exposure_check_heartbeat.name}\" AND resource.type=\"cloud_run_revision\" AND ${local.in_control}"
       duration = "10800s"
       aggregations {
         alignment_period     = "3600s"

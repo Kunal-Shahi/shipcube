@@ -70,6 +70,17 @@ def inline_object(s: Settings, workspace_id: str, op_id: str) -> str:
     return f"{upload_prefix(s, workspace_id)}inline/{op_id}.tgz"
 
 
+def source_objects(s: Settings, workspace_id: str, op_id: str, source: dict) -> list[str]:
+    """The uploads-bucket objects an operation's source occupies: its upload, or the tarball an inline
+    source was staged as. Deleted once a build has used them (worker._delete_sources)."""
+    kind = (source or {}).get("kind")
+    if kind == "upload" and source.get("upload_id"):
+        return [upload_object(s, workspace_id, source["upload_id"])]
+    if kind == "inline":
+        return [inline_object(s, workspace_id, op_id)]
+    return []
+
+
 def check_object(s: Settings, workspace_id: str, bucket: str, name: str) -> None:
     if bucket != s.upload_bucket or not name.startswith(upload_prefix(s, workspace_id)) or "/../" in f"/{name}/":
         raise DeployError("permission_denied", f"gs://{bucket}/{name} is outside this workspace's uploads")

@@ -179,7 +179,7 @@ class GcpDeployer:
             name = self._object(app.workspace_id, source["upload_id"])
             blob = bucket.blob(name)
             if not blob.exists():
-                raise DeployError("invalid_argument", f"upload {source['upload_id']} was not found; PUT the tarball first")
+                raise DeployError("invalid_argument", f"upload {source['upload_id']} was not found; PUT the tarball first (uploads are deleted once a build uses them, or an hour after an estimate; create a new upload)")
             blob.reload()
             if (blob.size or 0) > UPLOAD_MAX_BYTES:
                 raise DeployError("invalid_argument", "upload is larger than 100 MB")
@@ -520,6 +520,18 @@ class GcpDeployer:
         op = self._call(sess, "PATCH", self._service_url(app), params={"updateMask": "traffic"},
                         json={"traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION", "revision": revision, "percent": 100}]})
         self._wait_op(sess, RUN, op)
+
+    def delete_objects(self, workspace_id: str, names: list[str]) -> None:
+        """Delete source objects from the workspace's uploads folder (never outside it); gone is fine."""
+        from google.api_core.exceptions import NotFound
+
+        bucket = self._bucket()
+        for name in names:
+            isolation.check_object(self.s, workspace_id, self.s.upload_bucket, name)
+            try:
+                bucket.blob(name).delete()
+            except NotFound:
+                pass
 
     def download_upload(self, workspace_id: str, upload_id: str, dest: Any) -> Any:
         blob = self._bucket().blob(self._object(workspace_id, upload_id))
