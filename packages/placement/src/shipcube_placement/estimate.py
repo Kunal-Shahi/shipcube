@@ -191,14 +191,14 @@ def _estimate(estimate_id, source, h: Hints, runner, explainer, fetch_upload, wo
             "measured": _measured(profile, tr),
             "code": {k: summary.to_dict()[k] for k in ("framework", "kind", "entrypoint", "routes", "api_only",
                                                        "files", "lines", "uses_data_libs",
-                                                       "uses_gpu_libs", "uses_network_libs")},
+                                                       "uses_gpu_libs", "uses_network_libs", "accepts_input")},
             "hints": {"expected_users": h.expected_users, "schedule": h.schedule, "traffic": h.traffic},
             "candidate_alternatives": [a.model_dump() for a in alts],
             "rule_caps": caps.model_dump(exclude_none=True),
             "assumptions": assumptions + notes,
         }
         with obs.timed(log, "explain.completed") as ex_log:
-            ex = explainer.explain(facts, alts, caps, summary.excerpt)
+            ex = explainer.explain(facts, alts, caps)   # no code: Muse gets muse_facts() only
             ex_log.update(explained_by=ex.explained_by, fallback=bool(ex.fallback_reason))
 
         return EstimateResult(
