@@ -81,18 +81,21 @@ def tarball_digest(path: Path) -> str:
 
 
 def source_key(deployer: Any, workspace_id: str, source: dict[str, Any], pins: dict[str, Any] | None = None) -> str | None:
-    """What strikes are counted against: the source's content, so an estimate and the deploys that reuse
-    a source share one key. Git: the commit (screened, or the ref's current one). Uploads: a hash of
-    their files (the screened generation). Inline: a hash of its files. None when it can't be keyed."""
+    """What prescreen strikes are counted against: exactly the content that was screened, so an estimate
+    and the deploys that reuse a source share one key. Inline: a hash of its files (the request itself).
+    Git: the commit the screen checked out (pins). Uploads: a hash of the files of the generation the screen
+    read (pins). Without pins, git and uploads aren't keyed (None: their strikes count per operation), so a
+    source changed after the screen can never be keyed onto one already struck."""
     pins, kind = pins or {}, (source or {}).get("kind")
     try:
         if kind == "git":
-            sha = pins.get("commit") or git_source.resolve(source["url"], source.get("ref"))
-            return f"git:{sha}" if sha else None
+            return f"git:{pins['commit']}" if pins.get("commit") else None
         if kind == "inline":
             return "files:" + _digest([(f["path"], base64.b64decode(f["content"]) if f.get("encoding") == "base64"
                                         else f["content"].encode()) for f in source.get("files") or []])
         if kind == "upload":
+            if pins.get("generation") is None:
+                return None
             with upload_guard.source_slot(source):
                 tmp = Path(tempfile.mkdtemp(prefix="shipcube-key-"))
                 try:

@@ -351,3 +351,73 @@ def test_the_source_key_is_the_content_not_the_packing(tmp_path):
     other = {"kind": "inline", "files": [{"path": "app.py", "content": "print('bye')\n"}]}
     assert abuse_screen.source_key(None, "ws", other) != abuse_screen.source_key(None, "ws", inline)
     assert abuse_screen.source_key(None, "ws", GIT, {"commit": "c" * 40}) == "git:" + "c" * 40
+    # Unscreened git or uploads are never keyed: a later state can't be matched to what was struck.
+    assert abuse_screen.source_key(None, "ws", GIT) is None
+    assert abuse_screen.source_key(None, "ws", {"kind": "upload", "upload_id": "upl_0123456789ab"}) is None
+
+
+
+def _estimate_flagged(client, ws, source, monkeypatch, signals):
+    from shipcube_api import estimator as est_mod
+    real = est_mod.DevEstimator.estimate
+
+    def flagged(self, *a, **kw):
+        res = real(self, *a, **kw)
+        res.setdefault("profile", {}).setdefault("measurements", {})["abuse_signals"] = list(signals)
+        return res
+
+    monkeypatch.setattr(est_mod.DevEstimator, "estimate", flagged)
+    r = client.post("/v1/estimates", json={"source": source}, headers=ws["agent"])
+    return wait_op(client, ws["agent"], r.json()["id"])
+
+
+def test_a_git_estimate_isnt_keyed_so_a_moved_ref_still_adds_a_strike(client, ws, monkeypatch):
+    """Security #97: the ref may move during or between estimates; without the exact commit the run read,
+    each estimate counts on its own instead of being keyed onto an earlier strike."""
+    from shipcube_api import store
+    monkeypatch.setattr(store, "GIT_ESTIMATES_PAUSED", False)  # paused in production today (#58); not the point
+    for _ in range(2):
+        assert _estimate_flagged(client, ws, GIT, monkeypatch, ["prescreen_network_scanner"])["status"] == "succeeded"
+    assert _strikes(ws) == ["prescreen_network_scanner", "prescreen_network_scanner"]
+
+
+def test_runtime_sandbox_signals_count_every_run(client, ws, monkeypatch):
+    src = _flagged_inline("print('same source')\n")
+    for _ in range(2):
+        _estimate_flagged(client, ws, src, monkeypatch, ["egress_attempt", "prescreen_network_scanner"])
+    # The sandbox caught it twice: two strikes. The static finding on the same files: one.
+    assert sorted(_strikes(ws)) == ["egress_attempt", "egress_attempt", "prescreen_network_scanner"]
+
+
+def test_the_estimator_keys_the_upload_bytes_it_read(monkeypatch, tmp_path):
+    """A re-PUT between (or during) estimates is a different source: the key is the digest of the tarball
+    this run downloaded and screened, not of whatever the object holds afterwards."""
+    import sys
+
+    from shipcube_api import estimator as est_mod
+
+    content = {"bytes": _tgz({"app.py": "print('v1')\n"}, 1)}
+
+    class Deployer:
+        def download_upload(self, workspace_id, upload_id, dest, generation=None):
+            dest.write_bytes(content["bytes"])
+            return dest
+
+    def estimate(source, hints, runner=None, fetch_upload=None):
+        fetch_upload(source["upload_id"])
+        content["bytes"] = _tgz({"app.py": "print('swapped')\n"}, 2)  # re-PUT while the estimate runs
+        return types.SimpleNamespace(profile={"measurements": {"abuse_signals": ["prescreen_network_scanner"]}})
+
+    monkeypatch.setitem(sys.modules, "shipcube_placement", types.SimpleNamespace(estimate=estimate))
+    monkeypatch.setitem(sys.modules, "shipcube_profiler", types.SimpleNamespace(
+        CloudRunJobRunner=object, StaticRunner=lambda **kw: object()))
+    e = est_mod.PlacementEstimator(Deployer())
+    src = {"kind": "upload", "upload_id": "upl_0123456789ab"}
+    first = e.estimate(src, {}, workspace_id="ws", op_id="op-1", static_reason="disabled")["source_key"]
+    second = e.estimate(src, {}, workspace_id="ws", op_id="op-2", static_reason="disabled")["source_key"]
+    v1, v2 = tmp_path / "v1.tgz", tmp_path / "v2.tgz"
+    v1.write_bytes(_tgz({"app.py": "print('v1')\n"}, 1))
+    v2.write_bytes(_tgz({"app.py": "print('swapped')\n"}, 2))
+    assert first == "files:" + abuse_screen.tarball_digest(v1)   # what the first run read
+    assert second == "files:" + abuse_screen.tarball_digest(v2)  # the re-PUT is a new source
+    assert first != second

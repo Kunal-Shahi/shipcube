@@ -270,10 +270,10 @@ class Worker:
                     verdict = getattr(e, "verdict", None)
                     verdict = verdict.to_dict() if hasattr(verdict, "to_dict") else verdict
                     abuse_screen.enforce(op, verdict or {"verdict": "blocked", "reasons": list(getattr(e, "codes", []) or [])},
-                                         abuse_screen.source_key(self.d, str(op["workspace_id"]), inp["source"]))
+                                         getattr(e, "source_key", None))  # keyed by what the estimator screened
                     raise  # enforce raised the typed refusal; this is only reached if the verdict wasn't blocked
+                key = res.pop("source_key", None) if isinstance(res, dict) else None  # what this run read
                 if signals := measurements(res).get("abuse_signals"):
-                    key = abuse_screen.source_key(self.d, str(op["workspace_id"]), inp["source"])
                     with db.worker_tx() as conn:
                         profiler_guard.record_abuse(conn, op, list(signals), key)
                 return res

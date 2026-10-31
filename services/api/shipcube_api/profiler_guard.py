@@ -211,8 +211,12 @@ def record_abuse(conn, op: dict[str, Any], signals: list[str], source_key: str |
         return None
     ws = op["workspace_id"]
     for s in sorted(set(signals)):
+        # Only the static pre-screen's findings are a property of the source. Runtime sandbox signals
+        # (egress, mining, fork bombs...) count every run, so an abusive source can't be profiled forever
+        # for one strike.
+        key = source_key if s.startswith("prescreen_") else None
         conn.execute("insert into profiler_strikes (workspace_id, operation_id, signal, source_key) values (%s, %s, %s, %s)"
-                     " on conflict do nothing", (ws, op["id"], s, source_key))
+                     " on conflict do nothing", (ws, op["id"], s, key))
     log.error("profiler abuse signals; strike recorded", extra={"workspace_id": str(ws), "signals": sorted(set(signals))})
     if human := sorted(HUMAN_ONLY & set(signals)):
         reason = f"{human[0]} in operation {op['id']}"
