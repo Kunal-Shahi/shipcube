@@ -289,9 +289,78 @@ def test_deploy_is_private_gen2_scale_to_zero_with_iap(deployer):
     assert t["executionEnvironment"] == "EXECUTION_ENVIRONMENT_GEN2" and t["serviceAccount"] == APP.runtime_sa
     assert t["scaling"] == {"minInstanceCount": 0, "maxInstanceCount": 2} and t["maxInstanceRequestConcurrency"] == 40
     assert t["containers"][0]["resources"]["cpuIdle"] is True and t["timeout"] == "60s"
+    # Mediated egress (N-2): all outbound goes through the app-egress VPC, where only 443/80 is allowed.
+    assert t["vpcAccess"] == {"networkInterfaces": [{"network": "app-egress", "subnetwork": "app-egress"}],
+                              "egress": "ALL_TRAFFIC"}
     invoker = next(c for c in sess.calls if c[1].endswith(":setIamPolicy"))
     assert {"role": "roles/run.invoker",
             "members": ["serviceAccount:service-330999971585@gcp-sa-iap.iam.gserviceaccount.com"]} in invoker[2]["policy"]["bindings"]
+
+
+def test_service_body_routes_hosted_egress_through_the_vpc(deployer):
+    """N-2: a hosted app sends all outbound through the app-egress VPC (Direct VPC egress,
+    all-traffic), so the egress firewall allows only 443/80 and raw TCP (stratum, spam, C2) fails."""
+    body = deployer._service_body(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {}, APP.runtime_sa)
+    assert body["template"]["vpcAccess"] == {
+        "networkInterfaces": [{"network": "app-egress", "subnetwork": "app-egress"}],
+        "egress": "ALL_TRAFFIC"}
+
+
+def test_service_body_omits_vpc_access_for_linked_projects(deployer):
+    """Linked apps run in the user's own project, which has no app-egress VPC yet (follow-up)."""
+    linked = AppRef("tracker", WS, Target("l1", "linked", "user-proj",
+                                          deployer_sa="ws-d@c.iam.gserviceaccount.com"), "asia-south1")
+    body = deployer._service_body(linked, "europe-docker.pkg.dev/user-proj/r/app" + PIN, {}, {},
+                                  "shipcube-apps@user-proj.iam.gserviceaccount.com")
+    assert "vpcAccess" not in body["template"]
+
+
+def test_service_body_skips_egress_vpc_when_unconfigured(monkeypatch):
+    """Setting the egress network empty turns the VPC off (transition only; leaves open egress)."""
+    monkeypatch.setattr(gcp.google.auth, "default", lambda scopes: (object(), "p"))
+    monkeypatch.setenv("SHIPCUBE_APP_EGRESS_NETWORK", "")
+    d = gcp.GcpDeployer(Settings())
+    body = d._service_body(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {}, APP.runtime_sa)
+    assert "vpcAccess" not in body["template"]
+
+
+def test_deploy_refuses_a_hosted_app_without_mediated_egress_in_production(monkeypatch):
+    """N-2/E-1: fail closed. On Cloud Run, a hosted deploy with no egress VPC = open egress, so refuse."""
+    monkeypatch.setattr(gcp.google.auth, "default", lambda scopes: (object(), "p"))
+    monkeypatch.setattr(gcp, "on_cloud_run", lambda env=None: True)
+    monkeypatch.setenv("SHIPCUBE_APP_EGRESS_NETWORK", "")
+    d = gcp.GcpDeployer(Settings())
+    d._sessions[None] = sess = FakeSession({})
+    with pytest.raises(DeployError) as e:
+        d.deploy(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {})
+    assert e.value.code == "invalid_argument" and "egress" in str(e.value).lower()
+    assert sess.calls == []  # Cloud Run was never touched
+
+
+def test_deploy_without_egress_is_still_allowed_off_cloud_run_and_for_linked(monkeypatch):
+    """The escape hatch stays for local/dev; and a linked app (its own project) is never guarded."""
+    monkeypatch.setattr(gcp.google.auth, "default", lambda scopes: (object(), "p"))
+    monkeypatch.setenv("SHIPCUBE_APP_EGRESS_NETWORK", "")
+    # Off Cloud Run: the guard does not fire (deploy proceeds to the real Cloud Run calls).
+    monkeypatch.setattr(gcp, "on_cloud_run", lambda env=None: False)
+    d = gcp.GcpDeployer(Settings())
+    d._project_numbers["shipcube-apps-ks"] = "330999971585"
+    d._iap_agents["shipcube-apps-ks"] = "service-330999971585@gcp-sa-iap.iam.gserviceaccount.com"
+    d._sessions[None] = FakeSession({
+        ("PATCH", "/services/"): (200, {"name": "operations/1", "done": True, "response": {"uri": "https://x.run.app"}}),
+        ("GET", ":getIamPolicy"): (200, {"bindings": []})})
+    d._sessions[d.s.provisioner_sa] = FakeSession({})
+    d.deploy(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {})  # no DeployError
+    # On Cloud Run, a linked app is exempt (the guard is hosted-only).
+    monkeypatch.setattr(gcp, "on_cloud_run", lambda env=None: True)
+    linked = AppRef("tracker", WS, Target("l1", "linked", "user-proj", deployer_sa="ws-d@c.iam.gserviceaccount.com",
+                                          shared_runtime_sa="shipcube-apps@user-proj.iam.gserviceaccount.com"), "asia-south1")
+    d._project_numbers["user-proj"] = "42"
+    d._iap_agents["user-proj"] = "service-42@gcp-sa-iap.iam.gserviceaccount.com"
+    d._sessions["ws-d@c.iam.gserviceaccount.com"] = FakeSession({
+        ("PATCH", "/services/"): (200, {"name": "operations/2", "done": True, "response": {"uri": "https://y.run.app"}}),
+        ("GET", ":getIamPolicy"): (200, {"bindings": []})})
+    d.deploy(linked, "europe-docker.pkg.dev/user-proj/r/app" + PIN, {}, {})  # no DeployError
 
 
 def test_set_access_replaces_iap_accessors_only(deployer):

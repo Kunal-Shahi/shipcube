@@ -24,6 +24,14 @@ module "profiler" {
   depends_on        = [google_project_service.apps]
 }
 
+module "app_egress" {
+  source = "./modules/app_egress"
+
+  project_id = google_project.apps.project_id
+  region     = var.region
+  depends_on = [google_project_service.apps]
+}
+
 module "build_isolation" {
   source = "./modules/build_isolation"
 

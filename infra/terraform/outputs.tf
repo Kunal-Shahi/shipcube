@@ -29,3 +29,10 @@ output "profiler" {
 output "uploads_bucket" {
   value = google_storage_bucket.uploads.name
 }
+
+output "app_egress" {
+  description = "Mediated egress for hosted apps (networking.md §5.5): SHIPCUBE_APP_EGRESS_* for the deployer, plus the shared NAT IP to show in the console."
+  value = merge(module.app_egress.env, {
+    nat_ip = module.app_egress.nat_ip
+  })
+}
