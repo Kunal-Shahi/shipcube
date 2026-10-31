@@ -67,6 +67,8 @@ export function HeroStage({ children }: { children: React.ReactNode }) {
   const [shown, setShown] = useState(0);
   const [picked, setPicked] = useState(false);
   const [still, setStill] = useState(false);
+  // Bumped on every new run, picked or automatic, so the cube rebuilds even for the same request.
+  const [run, setRun] = useState(0);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const req = REQUESTS[active];
 
@@ -89,6 +91,7 @@ export function HeroStage({ children }: { children: React.ReactNode }) {
       timer.current = setTimeout(() => {
         setActive((a) => (a + 1) % REQUESTS.length);
         setShown(0);
+        setRun((r) => r + 1);
       }, NEXT_MS);
     }
     return () => clearTimeout(timer.current);
@@ -98,6 +101,7 @@ export function HeroStage({ children }: { children: React.ReactNode }) {
     setPicked(true);
     setActive(i);
     setShown(0);
+    setRun((r) => r + 1);
   };
 
   const last = req.steps[shown - 1];
@@ -109,7 +113,9 @@ export function HeroStage({ children }: { children: React.ReactNode }) {
       <div className="grid items-center gap-8 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] lg:gap-12">
         <div>{children}</div>
         <div className="relative h-[260px] sm:h-[340px] lg:h-[440px]">
-          <CubeField mode={mode} className="absolute inset-0 size-full" />
+          {/* A soft shadow: the blueprint grid fades out behind the cube instead of running through it. */}
+          <div className="cube-halo pointer-events-none absolute inset-0" aria-hidden />
+          <CubeField mode={mode} runKey={String(run)} className="absolute inset-0 size-full" />
           <div
             className={cn(
               "pointer-events-none absolute bottom-0 left-1/2 -translate-x-1/2 rounded-full border px-3 py-1 text-[12px] whitespace-nowrap transition-colors",

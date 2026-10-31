@@ -9,6 +9,7 @@ import { RequestAccessForm } from "@/components/request-access-form";
 import { ButtonLink } from "@/components/ui";
 import { auth } from "@/lib/auth";
 import { config } from "@/lib/server/config";
+import { ComputeDay } from "./compute-day";
 import { ControlPlane } from "./control-plane";
 import { FlowDiagram } from "./flow-diagram";
 import { HeroStage } from "./hero-stage";
@@ -43,16 +44,6 @@ export async function generateMetadata(): Promise<Metadata> {
 
 // Public: the only page besides sign-in that needs no session (src/middleware.ts).
 export const dynamic = "force-dynamic";
-
-// Where each kind of work lands (packages/placement), and the hours of a day it's billed for.
-// The hours are a picture of the billing model, not a measurement.
-const COMPUTE = [
-  { work: "A report that changes once a day", where: "Static snapshot, refreshed on a schedule", hours: [5] },
-  { work: "A dashboard your team opens", where: "Serverless, scales to zero between visits", hours: [9, 10, 13, 14, 15, 17] },
-  { work: "A notebook or script that runs nightly", where: "Cloud Run job on a schedule, billed while it runs", hours: [2, 3] },
-  { work: "A model that needs a GPU", where: "NVIDIA L4, billed while it works", hours: [11, 12, 13] },
-  { work: "An API that can't wait", where: "Always on, for steady latency", hours: Array.from({ length: 24 }, (_, h) => h) },
-];
 
 const SECURITY = [
   { icon: Building2, text: "Every workspace builds and runs apps under its own service accounts, isolated from every other workspace." },
@@ -140,44 +131,18 @@ export default async function Landing() {
         </section>
 
         <section aria-labelledby="compute-heading" className="tone-ink">
-          <div className={`${SECTION} grid gap-12 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-16`}>
-            <div>
+          <div className={SECTION}>
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:items-end lg:gap-16">
               <h2 id="compute-heading" className={H2}>
                 Your laptop isn&apos;t a server
               </h2>
-              <p className={INTRO}>
-                Most heavy work runs once a day or once a week. You shouldn&apos;t need an expensive machine for it, or a
-                server that runs all month. ShipCube profiles each workload, puts it where it costs least, and stops billing
-                when it&apos;s done.
+              <p className={`${INTRO} lg:mt-0`}>
+                Most heavy work runs once a day or once a week. You shouldn&apos;t need an expensive machine for it, or a server
+                that runs all month. ShipCube puts each workload where it costs least and stops billing when it&apos;s done.
               </p>
             </div>
-            <div className="lg:pt-2">
-              <div className="hidden pb-3 text-[12px] text-fg-subtle sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:gap-6" aria-hidden>
-                <span />
-                <span className="flex justify-between">
-                  <span>Midnight</span>
-                  <span>Noon</span>
-                  <span>Midnight</span>
-                </span>
-              </div>
-              <ul className="flex flex-col">
-                {COMPUTE.map((c) => (
-                  <li key={c.work} className="grid gap-3 border-t border-border py-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] sm:items-center sm:gap-6">
-                    <div>
-                      <p className="font-display text-[17px] font-semibold">{c.work}</p>
-                      <p className="mt-0.5 text-[14px] text-fg-muted">{c.where}</p>
-                    </div>
-                    <div className="grid grid-cols-24 gap-[3px]" role="img" aria-label={`Billed for ${c.hours.length} of 24 hours`}>
-                      {Array.from({ length: 24 }, (_, h) => (
-                        <span key={h} className={`h-5 rounded-[2px] ${c.hours.includes(h) ? "bg-mark" : "bg-surface-2"}`} />
-                      ))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              <p className="border-t border-border pt-4 text-[12px] text-fg-subtle">
-                Lit hours are billed. An illustration of each billing model, not a measurement.
-              </p>
+            <div className="mt-12 lg:mt-16">
+              <ComputeDay />
             </div>
           </div>
         </section>

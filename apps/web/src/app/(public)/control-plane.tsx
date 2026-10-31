@@ -1,80 +1,92 @@
 "use client";
 
-import { AppWindow, Cpu, Database, Gauge, Lock, Sparkles, UserCheck } from "lucide-react";
+import { Lock } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/cn";
 
-type Job = { icon: typeof AppWindow; title: string; body: string; Art: () => React.ReactNode };
+type Job = { verb: string; title: string; body: string; Art: () => React.ReactNode };
 
 // What one ShipCube workspace does, as jobs. Each picture is an illustration of the console, not a screenshot.
 const JOBS: Job[] = [
   {
-    icon: AppWindow,
+    verb: "Deploy",
     title: "Run the apps your agent builds",
     body: "Dashboards, trackers and internal tools go live at a private URL, behind Google sign-in, without anyone writing a Dockerfile.",
     Art: AppArt,
   },
   {
-    icon: Cpu,
+    verb: "Schedule",
     title: "Run heavy work in the cloud, not on your laptop",
     body: "Notebooks, scripts and models that need memory or a GPU run as Cloud Run jobs or on an NVIDIA L4, on a schedule, and stop when they're done.",
     Art: JobsArt,
   },
   {
-    icon: Gauge,
+    verb: "Estimate",
     title: "Know the cost before anything runs",
     body: "ShipCube profiles the code, classifies the workload and picks where it should run. The reasoning and a monthly cost range come back first.",
     Art: EstimateArt,
   },
   {
-    icon: Database,
+    verb: "Query",
     title: "Connect your warehouse, safely",
     body: "Agents query your data through named measures and dimensions, not raw SQL. They can propose a model change; a person reviews the diff.",
     Art: DataArt,
   },
   {
-    icon: Sparkles,
+    verb: "Cap",
     title: "Cap what AI costs",
     body: "Apps call models through ShipCube's gateway, with token and spend limits per app. Bring your own provider key, or use the default.",
     Art: GatewayArt,
   },
   {
-    icon: UserCheck,
+    verb: "Approve",
     title: "Approve the risky parts",
     body: "First deploys to your project, cap raises, domain-wide sharing and deletes wait for a person. The agent can't approve its own requests.",
     Art: ApprovalArt,
   },
 ];
 
+/**
+ * The six jobs as six big verbs. The active verb is ink and says what it means underneath; the
+ * others step back. Beside them, a blueprint drawing of that job in the console.
+ */
 export function ControlPlane() {
   const [active, setActive] = useState(0);
   const job = JOBS[active];
   return (
-    <div className="grid gap-10 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-16">
-      <ol className="flex flex-col" aria-label="What ShipCube does">
+    <div className="grid gap-10 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:items-center lg:gap-16">
+      <ol aria-label="What ShipCube does">
         {JOBS.map((j, i) => (
-          <li key={j.title}>
+          <li key={j.verb}>
             <button
               type="button"
               onClick={() => setActive(i)}
               onMouseEnter={() => setActive(i)}
               aria-pressed={i === active}
-              className={cn(
-                "flex w-full items-center gap-3 border-l-2 py-3.5 pr-2 pl-4 text-left transition-colors",
-                i === active ? "border-accent text-fg" : "border-border text-fg-muted hover:text-fg",
-              )}
+              aria-label={`${j.verb}: ${j.title}`}
+              className="group block w-full py-1 text-left"
             >
-              <j.icon className={cn("size-[18px] shrink-0", i === active ? "text-accent" : "text-fg-subtle")} aria-hidden />
-              <span className="text-[16px] font-medium sm:text-[17px]">{j.title}</span>
+              <span
+                className={cn(
+                  "block font-display text-[44px] leading-[1.05] font-extrabold tracking-[-0.03em] transition-colors sm:text-[56px] lg:text-[64px]",
+                  i === active
+                    ? "text-fg"
+                    : // Outlined: the stroke paints under a page-coloured fill, so the font's overlapping contours stay hidden.
+                      "text-bg [paint-order:stroke_fill] [-webkit-text-stroke:3px_var(--fg-subtle)] group-hover:[-webkit-text-stroke-color:var(--fg)]",
+                )}
+              >
+                {j.verb}
+              </span>
+              {i === active && <span className="art-in mt-1 mb-3 block text-[16px] text-fg-muted">{j.title}</span>}
             </button>
           </li>
         ))}
       </ol>
       <div aria-live="polite">
-        <div className="tone-blue blueprint rounded-xl p-5 sm:p-7">
+        <div className="tone-blue blueprint rounded-2xl p-6 sm:p-8 lg:p-10">
           <job.Art key={active} />
         </div>
-        <p className="mt-5 max-w-[60ch] text-[15px] leading-6 text-fg-muted">{job.body}</p>
+        <p className="mt-6 max-w-[60ch] text-[16px] leading-[26px] text-fg-muted">{job.body}</p>
       </div>
     </div>
   );
