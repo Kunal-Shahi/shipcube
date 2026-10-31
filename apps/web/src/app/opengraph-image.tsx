@@ -34,17 +34,17 @@ export default async function OpenGraphImage() {
           flexDirection: "column",
           justifyContent: "space-between",
           padding: "72px 80px",
-          backgroundColor: "#070a18",
-          backgroundImage: "radial-gradient(circle at 85% 30%, rgba(123,140,255,0.35), rgba(7,10,24,0) 60%)",
-          color: "#eef1ff",
+          backgroundColor: "#eafdf8",
+          backgroundImage: "radial-gradient(circle at 85% 30%, rgba(180,160,229,0.55), rgba(234,253,248,0) 60%)",
+          color: "#261447",
           fontFamily: "sans-serif",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 18, fontSize: 34, fontWeight: 700 }}>
           <svg width="44" height="44" viewBox="0 0 20 20">
-            <path d="M10 1.5 17.5 5.75 10 10 2.5 5.75Z" fill="#eef1ff" />
-            <path d="M2.5 5.75 10 10v8.5L2.5 14.25Z" fill="#a6aed6" />
-            <path d="M17.5 5.75 10 10v8.5l7.5-4.25Z" fill="#7b8cff" />
+            <path d="M10 1.5 17.5 5.75 10 10 2.5 5.75Z" fill="#261447" />
+            <path d="M2.5 5.75 10 10v8.5L2.5 14.25Z" fill="#506c64" />
+            <path d="M17.5 5.75 10 10v8.5l7.5-4.25Z" fill="#4a2f8a" />
           </svg>
           ShipCube
         </div>
@@ -52,12 +52,12 @@ export default async function OpenGraphImage() {
           <div style={{ fontSize: 80, fontWeight: 800, lineHeight: 1.02, letterSpacing: -2, maxWidth: 1000, fontFamily: font ? "Display" : undefined }}>
             Your agent builds it. The cloud runs it.
           </div>
-          <div style={{ fontSize: 30, color: "#a6aed6", maxWidth: 940 }}>
+          <div style={{ fontSize: 30, color: "#445e57", maxWidth: 940 }}>
             One control plane for AI-built apps, jobs and data on Google Cloud, driven from Muse, Claude Code, Cursor and other agents.
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 26, color: "#ffb547" }}>
-          <div style={{ width: 14, height: 14, borderRadius: 7, background: "#ffb547" }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 26, color: "#8a5300" }}>
+          <div style={{ width: 14, height: 14, borderRadius: 7, background: "#9a5d00" }} />
           Anything risky waits for a person
         </div>
       </div>

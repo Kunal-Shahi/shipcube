@@ -5,9 +5,12 @@ import { useEffect, useRef } from "react";
 export type CubeMode = "idle" | "run" | "wait" | "done";
 
 const N = 9; // points along each edge
-const ACCENT = [123, 140, 255];
-const APPROVE = [255, 181, 71];
-const GOOD = [74, 222, 154];
+/** A token's colour as [r, g, b], from the page's CSS (see .landing in globals.css). */
+function rgbOf(el: Element, name: string): number[] {
+  const hex = getComputedStyle(el).getPropertyValue(name).trim().replace("#", "");
+  const n = parseInt(hex.length === 3 ? hex.replace(/./g, "$&$&") : hex, 16);
+  return Number.isNaN(n) ? [128, 128, 128] : [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
 
 /** Points on the six faces of a unit cube, each face an N×N grid, with the face's outward normal.
  *  Edge points belong to two faces, so edges draw twice and read a little brighter. */
@@ -72,6 +75,8 @@ export function CubeField({ mode, className }: { mode: CubeMode; className?: str
 
     const draw = () => {
       const m = modeRef.current;
+      // Read each frame, so the dots follow the palette tokens.
+      const [ACCENT, APPROVE, GOOD] = ["--cube", "--approve", "--good"].map((t) => rgbOf(el, t));
       ctx.clearRect(0, 0, w, h);
       const ay = t * 0.25 + 0.6;
       const ax = 0.52 + Math.sin(t * 0.15) * 0.08; // tilted toward the viewer: the top face shows
