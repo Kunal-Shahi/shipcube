@@ -8,7 +8,7 @@ whoami → create_upload (PUT examples/hello-ai) → estimate_load → deploy_ap
 → the app answers on its URL → inspect_app → list_apps → set_caps → set_access → ai_config →
 data_list_cubes / describe / query / search_values / propose_migration → delete_app (approved).
 Then calls the AI gateway once with the seeded app token: Muse when META_API_KEY is set, the local
-Ollama model when LOCAL_LLM=ollama, otherwise that call is skipped.
+Ollama model when LOCAL_LLM=ollama, otherwise the gateway's built-in mock provider.
 
 Exit code 0 only if every step passed or was legitimately skipped.
 """
@@ -314,8 +314,12 @@ async def run(r: Report) -> None:
                       json={"model": "default", "max_tokens": 1500,
                             "messages": [{"role": "user", "content": "Reply with the single word: pong"}]})
         provider = resp.headers.get("X-ShipCube-Provider", "")
-        if provider == "mock":
-            r.add("gateway model call", "SKIP", "no META_API_KEY and LOCAL_LLM unset (see .env)")
+        if provider == "mock" and resp.status_code == 200:
+            # No key and no local model: the gateway's built-in mock answers (local DEV_MODE only), after the
+            # same app-token auth, caps and metering as a real provider.
+            text = resp.json()["choices"][0]["message"]["content"]
+            r.add("gateway model call", "PASS", f"mock provider, no key configured (META_API_KEY or LOCAL_LLM=ollama "
+                                               f"for a real model): {text[:40]!r}")
         elif resp.status_code == 200:
             text = resp.json()["choices"][0]["message"]["content"]
             r.add("gateway model call", "PASS", f"{provider}/{resp.headers.get('X-ShipCube-Model')}: {text[:60]!r}")
