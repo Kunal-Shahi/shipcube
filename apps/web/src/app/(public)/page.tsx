@@ -11,7 +11,7 @@ import { config } from "@/lib/server/config";
 
 /** The public repo: judges and the curious can run the whole stack locally from it. */
 const REPO_URL = "https://github.com/Kunal-Shahi/shipcube";
-const RUN_LOCALLY_URL = `${REPO_URL}#try-it-locally-in-5-minutes`;
+const RUN_LOCALLY_URL = `${REPO_URL}#try-it-locally`;
 import { ComputeDay } from "./compute-day";
 import { ControlPlane } from "./control-plane";
 import { FlowDiagram } from "./flow-diagram";
