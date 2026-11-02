@@ -4,6 +4,9 @@ import { GoogleSignIn } from "./google-sign-in";
 
 export function AuthCard({ intent, returnTo }: { intent: "sign-in" | "sign-up"; returnTo?: string }) {
   const signUp = intent === "sign-up";
+  const webConfig = webAuthConfig();
+  // No web config: the DEV_MODE mock sign-in, which never contacts Google.
+  const demo = webConfig === null;
   return (
     <div className="w-full max-w-[360px]">
       <h1 className="text-[20px] font-semibold leading-7 tracking-[-0.01em]">
@@ -12,17 +15,20 @@ export function AuthCard({ intent, returnTo }: { intent: "sign-in" | "sign-up"; 
       <p className="mt-1.5 text-fg-muted">
         {signUp
           ? "ShipCube deploys the apps you build in Claude Code, Cursor or Muse Code, and keeps them private to the people you choose. ShipCube is in early access: request access first, and once you're approved, sign up with the same Google account."
-          : "Use the Google account your apps are shared with."}
+          : demo
+            ? "A local copy of the console, signed in as a demo user."
+            : "Use the Google account your apps are shared with."}
       </p>
 
       <div className="mt-6">
         <GoogleSignIn
-          label={signUp ? "Sign up with Google" : "Continue with Google"}
+          label={demo ? "Continue as demo user" : signUp ? "Sign up with Google" : "Continue with Google"}
           intent={intent}
           returnTo={returnTo}
-          webConfig={webAuthConfig()}
+          webConfig={webConfig}
         />
       </div>
+      {demo && <p className="mt-3 text-[12px] text-fg-muted">Local demo mode: no Google account is used.</p>}
 
       <p className="mt-4 text-[12px] text-fg-muted">
         Your Google identity decides who can open your apps. ShipCube reads your name and email address only;

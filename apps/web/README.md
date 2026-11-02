@@ -17,7 +17,7 @@ npm install
 DEV_MODE=1 npm run dev
 ```
 
-Open http://localhost:3000 and choose **Continue with Google**. In `DEV_MODE` this signs you in as a demo user without contacting Google.
+Open http://localhost:3000 and choose **Continue as demo user**. In `DEV_MODE` this signs you in as a demo user without contacting Google. The console shows sample data; to run it against the real local stack, see below.
 
 ### With the Firebase Auth emulator
 
@@ -25,17 +25,19 @@ The same popup, ID token and session cookie flow as production, with the emulato
 
 ```bash
 npx firebase-tools emulators:start --only auth --project demo-shipcube   # in another terminal
-DEV_MODE=1 AUTH_PROVIDER=firebase-emulator SHIPCUBE_API_URL=http://127.0.0.1:8080 SHIPCUBE_MCP_URL=http://localhost:8080/mcp SHIPCUBE_DEV_API_SESSION=<the API's dev console token> npm run dev
+DEV_MODE=1 AUTH_PROVIDER=firebase-emulator SHIPCUBE_API_URL=http://localhost:18080 SHIPCUBE_MCP_URL=http://localhost:18080/mcp SHIPCUBE_DEV_API_SESSION=$(grep ^SHIPCUBE_DEV_CONSOLE_TOKEN= ../../deploy/local/.state/seed.env | cut -d= -f2) npm run dev
 ```
 
 The emulator's popup lets you type any email address. The API can't verify the emulator's unsigned tokens, so the console calls it with `SHIPCUBE_DEV_API_SESSION`, as the API's bootstrap user.
 
-### Against a local control-plane API
+### Against the local stack
 
-Start `services/api` with a console session token (see its README), then point the console at it. The mock sign-in sends that token to the API, so approvals, restores and caps go through the real API.
+Start the local stack from the repo root with `make up` ([docs/LOCAL.md](../../docs/LOCAL.md)): the API and MCP server on port 18080, with a seeded demo workspace. Then point the console at it. The demo sign-in sends the seeded console token to the API, so approvals, restores and caps go through the real API.
 
 ```bash
-DEV_MODE=1 SHIPCUBE_API_URL=http://127.0.0.1:8081 SHIPCUBE_DEV_API_SESSION=sc_ses_devcons1_devonlyConsoleNotASecret0123456789abc npm run dev
+DEV_MODE=1 AUTH_PROVIDER=mock SHIPCUBE_API_URL=http://localhost:18080 SHIPCUBE_MCP_URL=http://localhost:18080/mcp \
+SHIPCUBE_DEV_API_SESSION=$(grep ^SHIPCUBE_DEV_CONSOLE_TOKEN= ../../deploy/local/.state/seed.env | cut -d= -f2) \
+npm run dev
 ```
 
 ### Scripts
@@ -82,7 +84,7 @@ Everything is read from the environment at request time.
 | Variable | Required | Meaning |
 |---|---|---|
 | `SHIPCUBE_API_URL` | Yes, unless `DEV_MODE=1` | Control-plane API base URL: the `shipcube-mcp` Cloud Run service URL |
-| `SHIPCUBE_MCP_URL` | Yes, unless `DEV_MODE=1` | The MCP endpoint shown on the setup guide: `<your ShipCube MCP URL>`, the `shipcube-mcp` service URL plus `/mcp`. Must be `https` in production; the server exits at boot without it. `DEV_MODE` defaults to `http://localhost:8080/mcp` |
+| `SHIPCUBE_MCP_URL` | Yes, unless `DEV_MODE=1` | The MCP endpoint shown on the setup guide: `<your ShipCube MCP URL>`, the `shipcube-mcp` service URL plus `/mcp`. Must be `https` in production; the server exits at boot without it. `DEV_MODE` defaults to `http://localhost:18080/mcp`, the local stack's |
 | `SHIPCUBE_CONSOLE_ORIGINS` | No (`SHIPCUBE_CONSOLE_URL`) | Comma-separated origins the API accepts the waitlist form from: the same value the API gets. The first is canonical. On a host not listed, the landing page's form becomes a link to the canonical one |
 | `SHIPCUBE_PUBLIC_API_URL` | No (`SHIPCUBE_API_URL`) | The API as browsers reach it, for the landing page's waitlist form, and allowed in the CSP's `connect-src`. Set it when the console reaches the API at an internal address (Docker Compose) |
 | `SHIPCUBE_CONTACT_EMAIL` | No | The address `/terms` and `/privacy` give for questions and deletion requests. Unset or not an address: the pages show a visible placeholder |

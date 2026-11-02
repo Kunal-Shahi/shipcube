@@ -45,7 +45,7 @@ export async function signIn(page: Page, email: string, opts: { tour?: boolean }
 async function attemptSignIn(page: Page, email: string) {
   await page.goto("/sign-in");
   const popup = page.waitForEvent("popup", { timeout: 5_000 }).catch(() => null);
-  await page.getByRole("button", { name: /continue with google/i }).click();
+  await page.getByRole("button", { name: /continue with google|continue as demo user/i }).click();
   const p = await popup;
   if (p) {
     let alert: string | null = null;

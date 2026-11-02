@@ -178,7 +178,8 @@ export function CostChart({ data }: { data: { t: string; value: number }[] }) {
                 </g>
               );
             })}
-            {[0, Math.floor(data.length / 2), data.length - 1].map((i) => (
+            {/* First, middle and last day; with one or two days some coincide, so each label is drawn once. */}
+            {[...new Set([0, Math.floor(data.length / 2), data.length - 1])].map((i) => (
               <text key={i} x={M.left + i * band + band / 2} y={H - 6} fontSize={11} fill="var(--fg-subtle)" textAnchor={i === 0 ? "start" : i === data.length - 1 ? "end" : "middle"}>
                 {dayFmt(data[i].t)}
               </text>

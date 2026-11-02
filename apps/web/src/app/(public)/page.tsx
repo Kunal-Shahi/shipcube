@@ -8,6 +8,10 @@ import { RequestAccessForm } from "@/components/request-access-form";
 import { ButtonLink } from "@/components/ui";
 import { auth } from "@/lib/auth";
 import { config } from "@/lib/server/config";
+
+/** The public repo: judges and the curious can run the whole stack locally from it. */
+const REPO_URL = "https://github.com/Kunal-Shahi/shipcube";
+const RUN_LOCALLY_URL = `${REPO_URL}#try-it-locally-in-5-minutes`;
 import { ComputeDay } from "./compute-day";
 import { ControlPlane } from "./control-plane";
 import { FlowDiagram } from "./flow-diagram";
@@ -82,6 +86,9 @@ export default async function Landing() {
             <a href="#security" className="hidden rounded-md px-2 py-1 text-fg-muted hover:text-fg sm:inline">
               Security
             </a>
+            <a href={REPO_URL} className="rounded-md px-2 py-1 text-fg-muted hover:text-fg">
+              GitHub
+            </a>
             {session ? (
               <ButtonLink href="/apps" size="sm" className="font-semibold">
                 Open console
@@ -111,6 +118,12 @@ export default async function Landing() {
                 Approved already? Sign in
               </Link>
             </div>
+            <p className="mt-6 max-w-[52ch] text-[15px] leading-6 text-fg-muted">
+              Judging, or just curious? Run the whole thing on your laptop, no account needed.{" "}
+              <a href={RUN_LOCALLY_URL} className="font-medium text-fg underline underline-offset-4 hover:no-underline">
+                Run it locally
+              </a>
+            </p>
           </HeroStage>
         </section>
       </div>
@@ -232,6 +245,12 @@ export default async function Landing() {
             <Link href="/privacy" className="hover:text-fg">
               Privacy
             </Link>
+            <a href={REPO_URL} className="hover:text-fg">
+              GitHub
+            </a>
+            <a href={RUN_LOCALLY_URL} className="hover:text-fg">
+              Run it locally
+            </a>
             <Link href="/sign-in" className="hover:text-fg">
               Sign in
             </Link>

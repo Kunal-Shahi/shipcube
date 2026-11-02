@@ -226,8 +226,9 @@ export function GoogleSignIn({
         disabled={pending}
         className="flex h-9 w-full items-center justify-center gap-2 rounded-md border border-input-border bg-surface text-[13px] font-medium hover:bg-surface-2 disabled:opacity-60"
       >
-        {pending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <GoogleG />}
-        {pending ? "Waiting for Google…" : label}
+        {/* No web config: the demo sign-in, so no Google logo or wait. */}
+        {pending ? <Loader2 className="size-4 animate-spin" aria-hidden /> : webConfig && <GoogleG />}
+        {pending ? (webConfig ? "Waiting for Google…" : "Signing in…") : label}
       </button>
       {webConfig && !pending && (
         // Always offered: no detection catches every browser where the popup can't work.

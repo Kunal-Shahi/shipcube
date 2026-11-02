@@ -41,8 +41,8 @@ export interface Config {
 
 let cached: Config | null = null;
 
-/** The local MCP server (services/mcp listens on 8080). Used only when DEV_MODE=1 and SHIPCUBE_MCP_URL is unset. */
-export const DEV_MCP_URL = "http://localhost:8080/mcp";
+/** The local stack's MCP server (`make up`, docs/LOCAL.md). Used only when DEV_MODE=1 and SHIPCUBE_MCP_URL is unset. */
+export const DEV_MCP_URL = "http://localhost:18080/mcp";
 /** The emulator's default address, and a demo- project, which the emulator never connects to Google for. */
 export const DEV_AUTH_EMULATOR_HOST = "127.0.0.1:9099";
 export const EMULATOR_PROJECT = "demo-shipcube";
