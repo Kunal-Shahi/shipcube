@@ -43,8 +43,11 @@ switches above win over it, so nothing falls back to canned data. The mocks (`SH
 `SHIPCUBE_ESTIMATOR=dev`, `SHIPCUBE_MONITOR=mock`) are for unit tests.
 
 **Model calls.** With `MUSE_API_KEY` (or `META_API_KEY`) in the repo-root `.env`, the local secrets step
-puts it in the Secret Manager emulator and the gateway and the estimator's explainer call Muse for real. Without it, `LOCAL_LLM=ollama` starts Ollama with a small model (~400 MB) as the gateway's
-upstream. With neither, the smoke test skips the model call.
+puts it in the Secret Manager emulator, and the gateway and the estimator's explainer call Muse for real. Without it, `LOCAL_LLM=ollama` starts Ollama with a small model (~400 MB) as the gateway's
+upstream. With neither, nothing is skipped. Two built-in fallbacks take over:
+
+- The estimator's explainer uses rules, and its results say `explained_by=rules`.
+- The gateway answers with its mock provider, which runs only in DEV_MODE. Calls are still authenticated, capped and metered. The smoke test counts the mock reply as `ok` and says it came from the mock.
 
 **Builder.** Apps without a Dockerfile are built with buildpacks, as Cloud Build does. Production's
 builder (`gcr.io/buildpacks/builder`) is amd64-only, so on arm64 Docker hosts (Apple Silicon) `make up`
@@ -74,13 +77,13 @@ claude mcp add --transport http shipcube-local http://localhost:18080/mcp --head
 
 ```bash
 cd apps/web && npm install
-DEV_MODE=1 AUTH_PROVIDER=mock SHIPCUBE_API_URL=http://localhost:18080 \
+SHIPCUBE_DEV_MODE=1 AUTH_PROVIDER=mock SHIPCUBE_API_URL=http://localhost:18080 \
 SHIPCUBE_MCP_URL=http://localhost:18080/mcp \
 SHIPCUBE_DEV_API_SESSION=$(grep ^SHIPCUBE_DEV_CONSOLE_TOKEN= ../../deploy/local/.state/seed.env | cut -d= -f2) \
-npm run dev
+npm run dev -- --port 3100
 ```
 
-Then open http://localhost:3000. The dev sign-in acts as the seeded user.
+Then open http://localhost:3100. The dev sign-in acts as the seeded user and doesn't contact Google.
 
 ## The smoke test
 
@@ -93,7 +96,7 @@ Then open http://localhost:3000. The dev sign-in acts as the seeded user.
 5. `inspect_app` (status, logs, metrics), then `list_apps`, `set_caps`, `set_access`, `ai_config`;
 6. the five `data_*` tools;
 7. `delete_app`, approved with the console token, the way a person approves in the console;
-8. the gateway: an unauthenticated call is rejected, then one model call;
+8. the gateway: an unauthenticated call is rejected, then one model call (to Muse, Ollama or the mock provider);
 9. data-layer's own MCP-level smoke (`shipcube-data smoke --mcp`): exactly five data tools, partition
    pruning, and that agents can't apply migrations.
 
@@ -114,8 +117,9 @@ compose profile from frontend's PR #34, then runs the Playwright suite in `apps/
 
 It needs PR #13 (`/v1/tokens`) and PR #34 merged, and internet access (the emulator's sign-in popup
 loads Google scripts). `SHIPCUBE_CONSOLE_AUTH=mock` uses the mock sign-in instead of the emulator. The
-console then calls the API as the seeded dev user, whoever signs in; the API verifies only
-Google-signed tokens.
+console then calls the API as the seeded dev user, whoever signs in. The API verifies
+Google-signed tokens and, in DEV_MODE with `FIREBASE_AUTH_EMULATOR_HOST` set, the Auth emulator's
+tokens.
 
 ## Runbook
 
@@ -131,4 +135,4 @@ Google-signed tokens.
 | A port is in use (or requests reach the wrong server) | `lsof -nP -iTCP:<port> -sTCP:LISTEN`; change `SHIPCUBE_API_PORT`, `_GATEWAY_PORT`, `_DB_PORT`, `_IAP_PORT`, `_GCS_PORT` or `_SECRETMANAGER_PORT` in `deploy/local/.env` |
 | A deployed local app is stuck | `docker ps --filter label=managed-by=shipcube`, then `docker rm -f <id>`. `make reset` removes them all. |
 | See what the worker is doing | `make logs worker`, or `docker compose -f deploy/local/compose.yaml run --rm admin ops` |
-| Gateway model call `skip` | Set `META_API_KEY` or `LOCAL_LLM=ollama` in `deploy/local/.env`, then `make reset && make up`. The seed picks the upstream. |
+| Gateway model call says `mock provider` | Expected without a key. For a real model, put `MUSE_API_KEY` in the repo-root `.env`, or set `LOCAL_LLM=ollama` in `deploy/local/.env`, then `make reset && make up`. The seed picks the upstream. |
