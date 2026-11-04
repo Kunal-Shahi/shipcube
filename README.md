@@ -14,6 +14,31 @@ You build an internal app (a tracker, dashboard, report, API or scoring job) in 
 
 Built for the Meta Global AI Developer Hackathon (Indie track) on Meta's Muse models.
 
+## Where Muse decides
+
+ShipCube uses Meta's **Muse Spark** (`muse-spark-1.3`, through the Meta Model API) in three places:
+
+1. **Explaining each load estimate.** The sandbox measures the app, and the classifier picks the workload class, tier and price. Muse Spark turns those measurements into the reasoning the user reads, writes the trade-off for each alternative tier, and recommends the app's caps.
+2. **Drafting data-model changes.** `data_propose_migration` takes a plain-English request or the app's code, and Muse Spark drafts the change. A person approves it before it applies.
+3. **The model inside every deployed app.** Apps call Muse through ShipCube's AI gateway by default, with a token budget for each app.
+
+Two real estimates from the local stack, as Muse returned them (`explained_by: muse-spark-1.3`):
+
+> **order-tracker** (dashboard, 25 office-hours users): "Classifier gives bursty_interactive at 86.9% vs 10% steady. Measured run shows low average 0.04 vCPU with p95 0.27 vCPU, 6.7 ms mean latency, and 42 MB peak well under 512Mi. Zero network calls and 25 expected office-hours users fit scale-to-zero T1 with 1 vCPU, max 2 instances, 80 concurrency at $0.81/month expected."
+>
+> `recommended_caps: {"cpu": "1", "memory": "512Mi", "max_instances": 2, "concurrency": 80, "requests_per_minute": 150, "monthly_spend_usd": 5.0, "timeout_s": 60}`
+
+> **A second Flask app, 12 users:** "Classifier picked bursty_interactive at 65% over batch_cron at 30% for this 2-route Flask app with 12 expected users. … T1 with 0.5 vCPU, 512 MiB, scale-to-zero and max 2 instances covers this at $0.22/month expected ($0.09-$0.60), versus T3 at $26.32/month."
+
+Guardrails on what Muse can change (`packages/placement/src/shipcube_placement/explain.py`):
+
+- **Muse never sees the user's code.** It gets only the measured facts: no source, route paths, file names, or hostnames the app tried to reach.
+- **Muse explains the numbers but never changes them.** The workload class, tier and every price come from the classifier and the pricing model. Any alternative Muse writes about must be a tier ShipCube already priced.
+- **Its caps are limited.** They're checked against the Caps schema, and each one must stay between half and twice the rule-based caps. `max_instances` can only go down.
+- **Anything that fails validation falls back to the rule-based text**, field by field.
+
+**To see it live:** put your own Meta Model API key in a repo-root `.env` (`MUSE_API_KEY=...`) before `make up`; Meta bills the calls. Without a key, the same paths run on built-in rules and a mock gateway reply, as described below.
+
 ## Try it locally
 
 Everything runs on one machine with Docker. You don't need a Google Cloud account, gcloud, a model API key or any private repository. The local stack runs the same code as production with local backends: fake GCS for uploads, a Secret Manager emulator, a local IAP, Docker for apps and the load profiler, and DuckDB for the demo warehouse.
