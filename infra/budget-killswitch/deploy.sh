@@ -3,8 +3,8 @@
 # service account and its project roles (infra/terraform/budget.tf); this script owns
 # the function code and the invoker binding the Pub/Sub trigger needs.
 #
-#   CONTROL_PROJECT=shipcube-control-ks CAP=24000 \
-#   PROJECTS=shipcube-apps-ks,other-project,shipcube-control-ks ./deploy.sh
+#   CONTROL_PROJECT=your-control-project CAP=24000 \
+#   PROJECTS=your-apps-project,other-project,your-control-project ./deploy.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 

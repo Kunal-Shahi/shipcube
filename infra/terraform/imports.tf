@@ -33,7 +33,7 @@ import {
   id = "projects/${var.apps_project_id}/locations/${var.region}/repositories/shipcube"
 }
 
-# Adopted Oct 28 (Kunal: "create the shipcube-apps project first" — it already existed).
+# Adopted Oct 28 (Kunal: "create the your-apps-project project first" — it already existed).
 import {
   to = google_project.apps
   id = var.apps_project_id

@@ -11,7 +11,7 @@ import pytest
 from shipcube_api import admin, auth, db
 from shipcube_api.auth import SESSION_COOKIE_CERTS, _verify_console_jwt
 
-P = "shipcube-control-ks"
+P = "your-control-project"
 
 
 class FakeIdToken:

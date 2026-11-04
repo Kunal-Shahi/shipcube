@@ -38,18 +38,18 @@ class FakeSession:
 def deployer(monkeypatch):
     monkeypatch.setattr(gcp.google.auth, "default", lambda scopes: (object(), "p"))
     d = gcp.GcpDeployer(Settings())
-    d._project_numbers["shipcube-apps-ks"] = "330999971585"
-    d._iap_agents["shipcube-apps-ks"] = "service-330999971585@gcp-sa-iap.iam.gserviceaccount.com"
+    d._project_numbers["your-apps-project"] = "000000000000"
+    d._iap_agents["your-apps-project"] = "service-000000000000@gcp-sa-iap.iam.gserviceaccount.com"
     return d
 
 
-APP = AppRef(name="tracker", workspace_id="3c1d5e2a-7b4f-4e8a-9c6d-2f1e0a9b8c7d", target=Target("shipcube", "shipcube", "shipcube-apps-ks"), region="asia-south1")
+APP = AppRef(name="tracker", workspace_id="3c1d5e2a-7b4f-4e8a-9c6d-2f1e0a9b8c7d", target=Target("shipcube", "shipcube", "your-apps-project"), region="asia-south1")
 
 
 def test_names_follow_rules():
     assert APP.service.startswith("tracker-") and len(APP.service) <= 49
     sa = APP.runtime_sa
-    assert sa.startswith("app-") and sa.endswith("@shipcube-apps-ks.iam.gserviceaccount.com")
+    assert sa.startswith("app-") and sa.endswith("@your-apps-project.iam.gserviceaccount.com")
     assert 6 <= len(sa.split("@")[0]) <= 30
 
 
@@ -58,7 +58,7 @@ def test_caps_follow_cloud_run_rules():
 
 
 WS = APP.workspace_id
-REPO = f"asia-south1-docker.pkg.dev/shipcube-apps-ks/ws-{WS.replace('-', '')[:20]}"
+REPO = f"asia-south1-docker.pkg.dev/your-apps-project/ws-{WS.replace('-', '')[:20]}"
 DIGEST = "sha256:" + "a" * 64
 OTHER_WS = "9f0e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c"
 
@@ -73,17 +73,17 @@ def test_build_runs_as_the_workspace_builder_and_pins_the_digest(deployer):
     deployer._sessions[None] = sess
     deployer._provisioned.add(WS)
     seen = []
-    image = deployer.build(APP, {"storageSource": {"bucket": "shipcube-uploads-ks", "object": obj}}, "op_1", lambda: False, seen.append)
+    image = deployer.build(APP, {"storageSource": {"bucket": "your-uploads-bucket", "object": obj}}, "op_1", lambda: False, seen.append)
     assert seen == ["b1"] and image == f"{REPO}/{APP.service}@{DIGEST}"
     body = sess.calls[0][2]
     step = body["steps"][0]
     assert step["name"] == "gcr.io/k8s-skaffold/pack" and "--publish" in step["args"]
     assert f"{REPO}/{APP.service}:op-1" in step["args"]  # pushes only into the workspace's repo
-    assert body["serviceAccount"] == (f"projects/shipcube-apps-ks/serviceAccounts/sc-build-{WS.replace('-', '')[:20]}"
-                                      "@shipcube-apps-ks.iam.gserviceaccount.com")
-    assert body["source"] == {"storageSource": {"bucket": "shipcube-uploads-ks", "object": obj}}
+    assert body["serviceAccount"] == (f"projects/your-apps-project/serviceAccounts/sc-build-{WS.replace('-', '')[:20]}"
+                                      "@your-apps-project.iam.gserviceaccount.com")
+    assert body["source"] == {"storageSource": {"bucket": "your-uploads-bucket", "object": obj}}
     # No logWriter for hosted builders (#28): logs go to the workspace's own folder in GCS.
-    assert body["options"]["logging"] == "GCS_ONLY" and body["logsBucket"] == f"gs://shipcube-uploads-ks/ws/{WS}/build-logs"
+    assert body["options"]["logging"] == "GCS_ONLY" and body["logsBucket"] == f"gs://your-uploads-bucket/ws/{WS}/build-logs"
     tag = next(c for c in sess.calls if "/tags/" in c[1])
     assert f"/repositories/ws-{WS.replace('-', '')[:20]}/packages/{APP.service}/tags/op-1" in tag[1]
 
@@ -104,7 +104,7 @@ def test_linked_builds_log_to_cloud_logging_in_the_users_project(deployer):
 
 def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer):
     short = WS.replace("-", "")[:20]
-    sa = f"sc-build-{short}@shipcube-apps-ks.iam.gserviceaccount.com"
+    sa = f"sc-build-{short}@your-apps-project.iam.gserviceaccount.com"
     folder_iam = {"bindings": [{"role": "roles/storage.objectViewer", "members": ["serviceAccount:someone@x"],
                                 "condition": {"title": "c"}}]}
     prov = FakeSession({
@@ -118,7 +118,7 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
     deployer.ensure_builder(WS)
     deployer.ensure_builder(WS)  # cached: no second round of calls
     calls = [(m, u.split("/v1/")[-1], b, p) for m, u, b, p in prov.calls]
-    assert calls[0][0:2] == ("POST", "projects/shipcube-apps-ks/serviceAccounts") and calls[0][2]["accountId"] == f"sc-build-{short}"
+    assert calls[0][0:2] == ("POST", "projects/your-apps-project/serviceAccounts") and calls[0][2]["accountId"] == f"sc-build-{short}"
     assert calls[1][3] == {"repositoryId": f"ws-{short}"} and calls[1][2]["format"] == "DOCKER"
     repo_set = next(c for c in calls if c[1].endswith(f"repositories/ws-{short}:setIamPolicy"))
     assert repo_set[2]["policy"]["bindings"] == [
@@ -148,21 +148,21 @@ def test_ensure_builder_provisions_one_sa_repo_and_folder_per_workspace(deployer
 
 def test_ensure_link_deployer_only_creates_the_sa_in_the_links_project(deployer):
     sa = isolation.link_deployer_sa(deployer.s, WS)
-    assert sa == f"ws-{WS.replace('-', '')[:12]}-deployer@shipcube-links-ks.iam.gserviceaccount.com"
+    assert sa == f"ws-{WS.replace('-', '')[:12]}-deployer@your-links-project.iam.gserviceaccount.com"
     adc = FakeSession({("POST", "/serviceAccounts"): (409, {"error": {"message": "exists"}})})  # a retry
     deployer._sessions[None] = adc
     deployer.ensure_link_deployer(WS, sa)
     deployer.ensure_link_deployer(WS, sa)  # cached: no second call
     calls = [(m, u.split("/v1/")[-1], b) for m, u, b, _ in adc.calls]
     # One create, nothing else: no getIamPolicy/setIamPolicy, which the API may no longer call (#15).
-    assert [c[0:2] for c in calls] == [("POST", "projects/shipcube-links-ks/serviceAccounts")]
+    assert [c[0:2] for c in calls] == [("POST", "projects/your-links-project/serviceAccounts")]
     assert calls[0][2]["accountId"] == f"ws-{WS.replace('-', '')[:12]}-deployer"
 
 
 @pytest.mark.parametrize("bucket,obj", [
-    ("shipcube-uploads-ks", f"ws/{OTHER_WS}/uploads/upl_0123456789ab.tgz"),  # another workspace's upload
-    ("shipcube-uploads-ks", "uploads/x/upl_0123456789ab.tgz"),  # the pre-isolation layout
-    ("shipcube-uploads-ks", f"ws/{WS}/../{OTHER_WS}/uploads/upl_0123456789ab.tgz"),
+    ("your-uploads-bucket", f"ws/{OTHER_WS}/uploads/upl_0123456789ab.tgz"),  # another workspace's upload
+    ("your-uploads-bucket", "uploads/x/upl_0123456789ab.tgz"),  # the pre-isolation layout
+    ("your-uploads-bucket", f"ws/{WS}/../{OTHER_WS}/uploads/upl_0123456789ab.tgz"),
     ("someone-elses-bucket", f"ws/{WS}/uploads/upl_0123456789ab.tgz"),
 ])
 def test_build_refuses_source_outside_the_workspace(deployer, bucket, obj):
@@ -182,11 +182,11 @@ def test_uploads_are_named_from_the_callers_workspace_only(deployer):
 
 
 @pytest.mark.parametrize("image,code", [
-    (f"asia-south1-docker.pkg.dev/shipcube-apps-ks/ws-{OTHER_WS.replace('-', '')[:20]}/victim-123456@{DIGEST}", "permission_denied"),
-    (f"asia-south1-docker.pkg.dev/shipcube-apps-ks/shipcube/victim-123456@{DIGEST}", "permission_denied"),
-    (f"asia-south1-docker.pkg.dev/shipcube-apps-ks/profiler/x@{DIGEST}", "permission_denied"),
-    (f"us-docker.pkg.dev/shipcube-apps-ks/ws-{WS.replace('-', '')[:20]}/x@{DIGEST}", "permission_denied"),
-    (f"gcr.io/shipcube-control-ks/x@{DIGEST}", "permission_denied"),
+    (f"asia-south1-docker.pkg.dev/your-apps-project/ws-{OTHER_WS.replace('-', '')[:20]}/victim-123456@{DIGEST}", "permission_denied"),
+    (f"asia-south1-docker.pkg.dev/your-apps-project/shipcube/victim-123456@{DIGEST}", "permission_denied"),
+    (f"asia-south1-docker.pkg.dev/your-apps-project/profiler/x@{DIGEST}", "permission_denied"),
+    (f"us-docker.pkg.dev/your-apps-project/ws-{WS.replace('-', '')[:20]}/x@{DIGEST}", "permission_denied"),
+    (f"gcr.io/your-control-project/x@{DIGEST}", "permission_denied"),
     (f"ASIA-SOUTH1-DOCKER.PKG.DEV/SHIPCUBE-APPS-KS/shipcube/x@{DIGEST}", "permission_denied"),
     (f"{REPO}/tracker-abc123:latest", "invalid_argument"),  # own repo, but a movable tag
 ])
@@ -200,7 +200,7 @@ def test_deploy_refuses_images_outside_the_workspace_repo(deployer, image, code)
 
 
 def test_update_caps_refuses_a_service_still_on_a_shared_repo_tag(deployer):
-    svc = {"template": {"containers": [{"image": "asia-south1-docker.pkg.dev/shipcube-apps-ks/shipcube/x:op-1",
+    svc = {"template": {"containers": [{"image": "asia-south1-docker.pkg.dev/your-apps-project/shipcube/x:op-1",
                                         "resources": {"limits": {}}}]}}
     deployer._sessions[None] = sess = FakeSession({("GET", "/services/"): (200, svc)})
     with pytest.raises(DeployError) as e:
@@ -294,7 +294,7 @@ def test_deploy_is_private_gen2_scale_to_zero_with_iap(deployer):
                               "egress": "ALL_TRAFFIC"}
     invoker = next(c for c in sess.calls if c[1].endswith(":setIamPolicy"))
     assert {"role": "roles/run.invoker",
-            "members": ["serviceAccount:service-330999971585@gcp-sa-iap.iam.gserviceaccount.com"]} in invoker[2]["policy"]["bindings"]
+            "members": ["serviceAccount:service-000000000000@gcp-sa-iap.iam.gserviceaccount.com"]} in invoker[2]["policy"]["bindings"]
 
 
 def test_service_body_routes_hosted_egress_through_the_vpc(deployer):
@@ -344,8 +344,8 @@ def test_deploy_without_egress_is_still_allowed_off_cloud_run_and_for_linked(mon
     # Off Cloud Run: the guard does not fire (deploy proceeds to the real Cloud Run calls).
     monkeypatch.setattr(gcp, "on_cloud_run", lambda env=None: False)
     d = gcp.GcpDeployer(Settings())
-    d._project_numbers["shipcube-apps-ks"] = "330999971585"
-    d._iap_agents["shipcube-apps-ks"] = "service-330999971585@gcp-sa-iap.iam.gserviceaccount.com"
+    d._project_numbers["your-apps-project"] = "000000000000"
+    d._iap_agents["your-apps-project"] = "service-000000000000@gcp-sa-iap.iam.gserviceaccount.com"
     d._sessions[None] = FakeSession({
         ("PATCH", "/services/"): (200, {"name": "operations/1", "done": True, "response": {"uri": "https://x.run.app"}}),
         ("GET", ":getIamPolicy"): (200, {"bindings": []})})
@@ -370,7 +370,7 @@ def test_set_access_replaces_iap_accessors_only(deployer):
     deployer._sessions[None] = sess
     deployer.set_access(APP, ["user:owner@x.com", "domain:x.com"])
     method, url, body, _ = sess.calls[-1]
-    assert url.endswith(f"/projects/330999971585/iap_web/cloud_run-asia-south1/services/{APP.service}:setIamPolicy")
+    assert url.endswith(f"/projects/000000000000/iap_web/cloud_run-asia-south1/services/{APP.service}:setIamPolicy")
     assert body["policy"]["etag"] == "e"
     assert {"role": "roles/iap.httpsResourceAccessor", "members": ["domain:x.com", "user:owner@x.com"]} in body["policy"]["bindings"]
     assert {"role": "roles/other", "members": ["user:keep@x.com"]} in body["policy"]["bindings"]
@@ -448,7 +448,7 @@ def test_malformed_image_references_are_refused(deployer, image):
 
 def test_ensure_builder_grants_read_on_the_profiler_mirrors_that_exist(deployer):
     short = WS.replace("-", "")[:20]
-    member = f"serviceAccount:sc-build-{short}@shipcube-apps-ks.iam.gserviceaccount.com"
+    member = f"serviceAccount:sc-build-{short}@your-apps-project.iam.gserviceaccount.com"
     prov = FakeSession({
         ("GET", "repositories/dockerhub-remote:getIamPolicy"): lambda _: (200, {"bindings": []}),
         ("GET", "repositories/dockerhub-remote"): (404, {"error": {"message": "not found"}}),  # offline_builds off
@@ -465,15 +465,15 @@ def test_ensure_builder_grants_read_on_the_profiler_mirrors_that_exist(deployer)
 
 # --- #16: the hosted deployer may act only as each app's own runtime SA ---------------------------
 
-HOSTED_DEPLOYER = "sc-hosted-deployer@shipcube-control-ks.iam.gserviceaccount.com"
+HOSTED_DEPLOYER = "sc-hosted-deployer@your-control-project.iam.gserviceaccount.com"
 
 
 @pytest.fixture
 def hosted(monkeypatch):
     monkeypatch.setattr(gcp.google.auth, "default", lambda scopes: (object(), "p"))
     d = gcp.GcpDeployer(Settings(hosted_deployer_sa=HOSTED_DEPLOYER))
-    d._project_numbers["shipcube-apps-ks"] = "330999971585"
-    d._iap_agents["shipcube-apps-ks"] = "service-330999971585@gcp-sa-iap.iam.gserviceaccount.com"
+    d._project_numbers["your-apps-project"] = "000000000000"
+    d._iap_agents["your-apps-project"] = "service-000000000000@gcp-sa-iap.iam.gserviceaccount.com"
     return d
 
 
@@ -486,9 +486,9 @@ def test_hosted_runtime_sa_grants_the_deployer_act_as_on_that_sa_only(hosted):
     hosted._sessions[hosted.s.provisioner_sa] = prov
     hosted._sessions[HOSTED_DEPLOYER] = dep
     hosted.deploy(APP, f"{REPO}/{APP.service}@{DIGEST}", {}, {})
-    sa_url = f"projects/shipcube-apps-ks/serviceAccounts/{APP.runtime_sa}"
+    sa_url = f"projects/your-apps-project/serviceAccounts/{APP.runtime_sa}"
     calls = [(m, u.split("/v1/")[-1], b) for m, u, b, _ in prov.calls]
-    assert calls[0][0:2] == ("POST", "projects/shipcube-apps-ks/serviceAccounts")
+    assert calls[0][0:2] == ("POST", "projects/your-apps-project/serviceAccounts")
     set_policy = next(c for c in calls if c[1] == f"{sa_url}:setIamPolicy")
     assert set_policy[2]["policy"] == {"etag": "e", "bindings": [
         {"role": "roles/iam.serviceAccountUser", "members": [f"serviceAccount:{HOSTED_DEPLOYER}"]}]}
@@ -511,7 +511,7 @@ def test_purge_deletes_the_hosted_runtime_sa_as_the_provisioner(hosted):
     hosted._sessions[hosted.s.provisioner_sa] = prov
     hosted._sessions[HOSTED_DEPLOYER] = dep
     hosted.purge(APP)
-    assert ("DELETE", f"https://iam.googleapis.com/v1/projects/shipcube-apps-ks/serviceAccounts/{APP.runtime_sa}") in [
+    assert ("DELETE", f"https://iam.googleapis.com/v1/projects/your-apps-project/serviceAccounts/{APP.runtime_sa}") in [
         (m, u) for m, u, _, _ in prov.calls]
     assert not any("/serviceAccounts/" in u for _, u, _, _ in dep.calls)
 
@@ -539,12 +539,12 @@ def test_retry_act_as_waits_for_a_new_binding_only(monkeypatch):
 
 
 def test_public_services_finds_all_users_bindings(hosted):
-    base = "/projects/shipcube-apps-ks/locations/asia-south1/services"
+    base = "/projects/your-apps-project/locations/asia-south1/services"
     adc = FakeSession({
         ("GET", "a:getIamPolicy"): (200, {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}),
         ("GET", "b:getIamPolicy"): (200, {"bindings": [{"role": "roles/run.invoker", "members": ["serviceAccount:iap@x"]}]}),
-        ("GET", base): (200, {"services": [{"name": f"projects/shipcube-apps-ks/locations/asia-south1/services/a"},
-                                           {"name": f"projects/shipcube-apps-ks/locations/asia-south1/services/b"}]}),
+        ("GET", base): (200, {"services": [{"name": f"projects/your-apps-project/locations/asia-south1/services/a"},
+                                           {"name": f"projects/your-apps-project/locations/asia-south1/services/b"}]}),
     })
     hosted._sessions[None] = adc
-    assert hosted.public_services(["asia-south1"]) == (["projects/shipcube-apps-ks/locations/asia-south1/services/a"], 2)
+    assert hosted.public_services(["asia-south1"]) == (["projects/your-apps-project/locations/asia-south1/services/a"], 2)

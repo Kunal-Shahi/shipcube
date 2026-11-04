@@ -2,7 +2,7 @@
 # platform repo. Submitted by deploy/deploy.sh with the repo root as the build context, running as
 # sc-platform-build (infra/terraform/platform.tf). One image per commit is promoted unchanged.
 substitutions:
-  _IMAGES: asia-south1-docker.pkg.dev/shipcube-control-ks/platform
+  _IMAGES: asia-south1-docker.pkg.dev/your-control-project/platform
   _TAG: dev
 options:
   logging: CLOUD_LOGGING_ONLY

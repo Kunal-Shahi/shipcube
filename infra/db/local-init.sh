@@ -13,7 +13,7 @@
 #      SC_MIGRATOR_DB_PASSWORD, SC_API_DB_PASSWORD, SC_WORKER_DB_PASSWORD.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PROJECT="${PROJECT:-shipcube-control-ks}"
+PROJECT="${PROJECT:-your-control-project}"
 export PGHOST="${PGHOST:-localhost}" PGPORT="${PGPORT:-5432}" PGUSER="${PGUSER:-postgres}"
 export PGPASSWORD="${PGPASSWORD:-${POSTGRES_PASSWORD:?POSTGRES_PASSWORD or PGPASSWORD}}"
 : "${SC_MIGRATOR_DB_PASSWORD:?}" "${SC_API_DB_PASSWORD:?}" "${SC_WORKER_DB_PASSWORD:?}"

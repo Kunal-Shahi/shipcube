@@ -11,12 +11,12 @@ import (
 // replaced but its shape kept. The guard must let exactly this start.
 var liveGateway = map[string]string{
 	"K_SERVICE":             "shipcube-gateway",
-	"GATEWAY_AUDIENCE":      "https://shipcube-gateway-340481939948.asia-south1.run.app",
+	"GATEWAY_AUDIENCE":      "https://shipcube-gateway-000000000000.asia-south1.run.app",
 	"GATEWAY_REGISTRY_FILE": "/etc/shipcube/registry/registry.json",
-	"META_SECRET_REF":       "projects/shipcube-control-ks/secrets/meta-api-key/versions/1",
-	"GOOGLE_CLOUD_PROJECT":  "shipcube-control-ks",
+	"META_SECRET_REF":       "projects/your-control-project/secrets/meta-api-key/versions/1",
+	"GOOGLE_CLOUD_PROJECT":  "your-control-project",
 	"GATEWAY_PRICES":        `{"meta/muse-spark-1.3": [1.25, 4.25], "meta/muse-spark": [1.25, 4.25]}`,
-	"GATEWAY_COUNTERS_URL":  "https://shipcube-mcp-340481939948.asia-south1.run.app",
+	"GATEWAY_COUNTERS_URL":  "https://shipcube-mcp-000000000000.asia-south1.run.app",
 }
 
 func envOf(m map[string]string) func(string) string { return func(k string) string { return m[k] } }

@@ -145,7 +145,7 @@ from shipcube_api.deploy.base import AppRef, Target  # noqa: E402
 from shipcube_api.settings import Settings  # noqa: E402
 
 APP = AppRef(name="tracker", workspace_id="3c1d5e2a-7b4f-4e8a-9c6d-2f1e0a9b8c7d",
-             target=Target("shipcube", "shipcube", "shipcube-apps-ks"), region="asia-south1")
+             target=Target("shipcube", "shipcube", "your-apps-project"), region="asia-south1")
 
 
 def test_on_cloud_run_a_missing_prescreen_refuses_the_deploy(monkeypatch):

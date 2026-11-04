@@ -75,7 +75,7 @@ function logs(appSlug: string, route: string, extra: Omit<LogLine, "id">[] = [])
   const [r1, r2] = [route.replace("{v}", "SP"), route.replace("{v}", "RJ")];
   const base: Omit<LogLine, "id">[] = [
     { ts: hoursAgo(26.2), level: "info", source: "build", message: `Building ${appSlug} from commit 8f3c2d1 (Dockerfile detected)` },
-    { ts: hoursAgo(26.1), level: "info", source: "build", message: "Image pushed to us-central1-docker.pkg.dev/shipcube-apps/apps/" + appSlug + ":8f3c2d1 (142 MB)" },
+    { ts: hoursAgo(26.1), level: "info", source: "build", message: "Image pushed to us-central1-docker.pkg.dev/your-apps-project/apps/" + appSlug + ":8f3c2d1 (142 MB)" },
     { ts: hoursAgo(25.9), level: "info", source: "deploy", message: "Revision " + appSlug + "-00007-kq2 serving 100% of traffic" },
     { ts: hoursAgo(3.2), level: "info", source: "runtime", message: `GET ${r1} 200 184ms` },
     { ts: hoursAgo(3.1), level: "info", source: "gateway", message: "Access granted: maria@example.com (group finance-team@)" },

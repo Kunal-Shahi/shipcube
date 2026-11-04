@@ -10,7 +10,7 @@ Cloud Logging for one deployed app and returns networking's `Metrics` and `Logs`
 from shipcube_monitor import AppTarget, provider_from_env
 
 monitor = provider_from_env(usage=gateway_usage)  # usage: optional UsageSource over usage_events
-t = AppTarget(app="tracker", project_id="shipcube-apps-ks", region="asia-south1", service="tracker",
+t = AppTarget(app="tracker", project_id="your-apps-project", region="asia-south1", service="tracker",
               cpu=1, memory_mib=512, caps={"max_instances": 3},
               data_last_changed=lambda: datasource.last_modified())  # optional
 monitor.metrics(t, window="1h")                                  # 15m | 1h | 24h | 7d | 30d
@@ -20,11 +20,11 @@ monitor.logs(t, limit=50, severity="WARNING", page_token=None)   # severity is "
 Smoke check against a real service (uses your Application Default Credentials):
 
 ```bash
-uv run --extra gcp python -m shipcube_monitor shipcube-control-ks asia-south1 budget-killswitch 7d
+uv run --extra gcp python -m shipcube_monitor your-control-project asia-south1 budget-killswitch 7d
 ```
 
 Tests: `uv run pytest` (unit, with faked HTTP). Integration against real GCP:
-`SHIPCUBE_IT_PROJECT=shipcube-control-ks uv run --extra gcp pytest tests/test_integration_gcp.py`.
+`SHIPCUBE_IT_PROJECT=your-control-project uv run --extra gcp pytest tests/test_integration_gcp.py`.
 
 ## What it returns
 

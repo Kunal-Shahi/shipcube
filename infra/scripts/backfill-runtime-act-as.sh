@@ -6,8 +6,8 @@
 # Run as a project Owner of the apps project.
 #   infra/scripts/backfill-runtime-act-as.sh [--dry-run]
 set -euo pipefail
-APPS_PROJECT="${APPS_PROJECT:-shipcube-apps-ks}"
-CONTROL_PROJECT="${CONTROL_PROJECT:-shipcube-control-ks}"
+APPS_PROJECT="${APPS_PROJECT:-your-apps-project}"
+CONTROL_PROJECT="${CONTROL_PROJECT:-your-control-project}"
 DEPLOYER="serviceAccount:sc-hosted-deployer@${CONTROL_PROJECT}.iam.gserviceaccount.com"
 DRY="${1:-}"
 

@@ -15,9 +15,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 PROVISION="${HERE}/../scripts/provision-workspace-builder.sh"
-APPS_PROJECT="${APPS_PROJECT:-shipcube-apps-ks}"
+APPS_PROJECT="${APPS_PROJECT:-your-apps-project}"
 REGION="${REGION:-asia-south1}"
-UPLOADS_BUCKET="${UPLOADS_BUCKET:-shipcube-uploads-ks}"
+UPLOADS_BUCKET="${UPLOADS_BUCKET:-your-uploads-bucket}"
 export APPS_PROJECT REGION UPLOADS_BUCKET
 
 ME="$(gcloud config get-value account 2>/dev/null)"

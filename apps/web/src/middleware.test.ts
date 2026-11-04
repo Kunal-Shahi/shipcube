@@ -15,9 +15,9 @@ describe("csp()", () => {
   it("frames only the exact sign-in hosts, never a wildcard Firebase domain", () => {
     vi.stubEnv("AUTH_PROVIDER", "");
     vi.stubEnv("FIREBASE_AUTH_DOMAIN", "shipcube.web.app");
-    vi.stubEnv("IDENTITY_PLATFORM_PROJECT", "shipcube-control-ks");
+    vi.stubEnv("IDENTITY_PLATFORM_PROJECT", "your-control-project");
     const frames = csp("n", false).split("; ").find((d) => d.startsWith("frame-src "));
-    expect(frames).toBe("frame-src https://shipcube.web.app https://shipcube-control-ks.firebaseapp.com https://accounts.google.com");
+    expect(frames).toBe("frame-src https://shipcube.web.app https://your-control-project.firebaseapp.com https://accounts.google.com");
     expect(frames).not.toContain("*");
   });
 

@@ -30,7 +30,7 @@ def test_init_is_idempotent_and_private(tmp_path):
         assert (tmp_path / f).stat().st_mode & 0o077 == 0, f
     env = (tmp_path / "secrets.env").read_text()
     assert f"SHIPCUBE_TOKEN_PEPPER={first['token-hmac-pepper']}\n" in env
-    assert "sc-api%40shipcube-control-ks.iam:" in env and "@db:5432/shipcube" in env
+    assert "sc-api%40your-control-project.iam:" in env and "@db:5432/shipcube" in env
 
 
 @pytest.mark.parametrize("env", [{"K_SERVICE": "shipcube-mcp"}, {"CLOUD_RUN_JOB": "migrate"}, {"SHIPCUBE_ENV": "production"}])

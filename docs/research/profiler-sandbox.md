@@ -9,7 +9,7 @@ Status: design, not implemented. No GCP changes were made for this doc. Owner: l
 Today `estimate_load` in production only does static analysis: `services/api/shipcube_api/estimator.py` uses `StaticRunner` unless `SHIPCUBE_PROFILER_JOB` is set. This doc covers what has to be true before that variable is set, and the profiler really runs user code.
 
 The answer in one paragraph:
-- **Where it runs.** A user's code runs only in a throwaway Cloud Run job in `shipcube-apps`, as a service account with no roles, on a network with no way out.
+- **Where it runs.** A user's code runs only in a throwaway Cloud Run job in `your-apps-project`, as a service account with no roles, on a network with no way out.
 - **What one run can do.** Every run has fixed caps on CPU, memory, processes, disk, wall clock, build time, image size and self-generated load. The worst one run can do is waste about 10 cents and 25 minutes.
 - **What one tenant can do.** Per-workspace and global admission limits stop one tenant from monopolising the profiler or the worker. A spend ledger turns the profiler off before the billing kill switch has to.
 - **Abuse.** Signals measured during the run (egress attempts, CPU pinned without work, process storms) feed an auto-suspend.
@@ -45,7 +45,7 @@ This is the short list asked for. "Enforced" means in code or in Terraform on `m
 
 | Control | State | Where |
 |---|---|---|
-| Sandbox runs in `shipcube-apps`, never in the control project | **Enforced** | `module "profiler"` → `project_id = google_project.apps` |
+| Sandbox runs in `your-apps-project`, never in the control project | **Enforced** | `module "profiler"` → `project_id = google_project.apps` |
 | Runtime SA with zero roles and no secrets | **Enforced** | `profiler-sandbox` SA, no IAM bindings; `job_spec` sets no secrets |
 | Deny-all egress: Direct VPC `ALL_TRAFFIC` into `profiler-no-egress`, Private Google Access off | **Enforced**; verified on GCP (the sample's webhook was blocked) | module `main.tf`; `job_spec` |
 | No host or worker environment reaches the run | **Enforced** | `job_spec` env is the run id and hints only |
@@ -76,14 +76,14 @@ The design keeps what is already in place and closes the two remaining paths.
  worker (control project, sc-worker)
    │  creates build + job, reads one log line, deletes job
    ▼
- shipcube-apps
+ your-apps-project
    ├─ Cloud Build (profiler-build-<ws>)  ── egress: PyPI only, wheels only   (§4, new)
    │     └─ pushes prof-<id> to AR repo `profiler` (by digest)
    └─ Cloud Run job prof-<id>  (gen2, profiler-sandbox: 0 roles)
          └─ VPC profiler-no-egress: deny 0.0.0.0/0, no PGA, no peering, no NAT
 ```
 
-- **Project.** The run is in `shipcube-apps`, and the control project is unreachable: there's no route and no identity. It never runs in `shipcube-control`.
+- **Project.** The run is in `your-apps-project`, and the control project is unreachable: there's no route and no identity. It never runs in `your-control-project`.
 - **Identity.**
   - `profiler-sandbox` has no project or resource roles.
   - Cloud Run always exposes the metadata server, and it can't be turned off. So the app can mint a token for this SA.
@@ -132,7 +132,7 @@ Design:
    | Final image | ≤ 2 GiB, checked from the build result's image size; a larger image is deleted and the estimate goes static |
    | Build machine | the default `e2-standard-2`; never a large machine type |
 
-3. **Egress at build time.** Wheels-only already removes code execution. To also remove arbitrary egress, run builds in a Cloud Build private pool on a VPC whose egress is allowed only to PyPI (via a proxy or Artifact Registry remote repository of PyPI). The remote repo is simpler: AR `pypi-remote` in `shipcube-apps`, and the build gets `PIP_INDEX_URL` pointing at it and no internet.
+3. **Egress at build time.** Wheels-only already removes code execution. To also remove arbitrary egress, run builds in a Cloud Build private pool on a VPC whose egress is allowed only to PyPI (via a proxy or Artifact Registry remote repository of PyPI). The remote repo is simpler: AR `pypi-remote` in `your-apps-project`, and the build gets `PIP_INDEX_URL` pointing at it and no internet.
    - Phase 2, because private pools cost an always-on worker. Measure first.
 4. **Per-workspace build identity.**
    - Reuse the C-1 pattern that hosted builds already use (`sc-build-<id>`): each workspace gets `profiler-build-<ws>`.
@@ -193,7 +193,7 @@ An `expected_users` of 1,000,000 doesn't change the run: the load generator is f
    - Expressed in SQL in the claim: `… and (select count(*) from operations r where r.kind='estimate' and r.status='running' and r.locked_until > now()) < 3 and not exists (… same workspace_id running)`, with `pg_advisory_xact_lock` around the claim to make the count race-free.
    - Fairness: order by each workspace's last-run time, then `next_attempt_at`, so a workspace with 20 queued estimates doesn't go ahead of one with 1.
 4. **Queue age.** If an estimate has waited more than 10 minutes for a profiler slot, it completes as static, with `reason=busy`. The agent gets an answer instead of a stall.
-5. **Quotas outside our control.** Cloud Build's concurrent-build quota, Cloud Run job execution limits and the Logging read quota (which already returned 429 once) are shared with hosted apps while the profiler lives in `shipcube-apps`. The global ceiling of 3 keeps the profiler's share small; the dedicated project (§3) removes the sharing.
+5. **Quotas outside our control.** Cloud Build's concurrent-build quota, Cloud Run job execution limits and the Logging read quota (which already returned 429 once) are shared with hosted apps while the profiler lives in `your-apps-project`. The global ceiling of 3 keeps the profiler's share small; the dedicated project (§3) removes the sharing.
 
 ## 7. Budget guard
 

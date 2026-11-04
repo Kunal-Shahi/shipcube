@@ -91,7 +91,7 @@ def deployer(tmp_path_factory):
 
 
 def app(ws: str, name: str = "hello") -> AppRef:
-    return AppRef(name=name, workspace_id=ws, target=Target("shipcube", "shipcube", "shipcube-apps-ks"), region="asia-south1")
+    return AppRef(name=name, workspace_id=ws, target=Target("shipcube", "shipcube", "your-apps-project"), region="asia-south1")
 
 
 def tarball() -> bytes:

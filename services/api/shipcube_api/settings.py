@@ -51,16 +51,16 @@ class Settings:
     # infra/terraform/modules/profiler (no roles, no secrets). Unset = static analysis only.
     profiler_job: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_PROFILER_JOB") or None)
     worker_id: str = field(default_factory=lambda: os.environ.get("K_REVISION", "") + "/" + os.environ.get("HOSTNAME", "local") + f"/{os.getpid()}")
-    # Hosted apps run here (security's `shipcube-apps` project).
-    apps_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_APPS_PROJECT", "shipcube-apps-ks"))
-    control_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONTROL_PROJECT", "shipcube-control-ks"))
+    # Hosted apps run here (security's `your-apps-project` project).
+    apps_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_APPS_PROJECT", "your-apps-project"))
+    control_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_CONTROL_PROJECT", "your-control-project"))
     region: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_REGION", "asia-south1"))
     # Registry repo in linked projects, and the shared repo hosted apps used before per-workspace repos.
     repo: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_REPO", "shipcube"))
-    upload_bucket: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_UPLOAD_BUCKET", "shipcube-uploads-ks"))
+    upload_bucket: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_UPLOAD_BUCKET", "your-uploads-bucket"))
     # Signs upload URLs through IAM signBlob (ADC user credentials cannot sign by themselves).
     signer_sa: str = field(default_factory=lambda: os.environ.get(
-        "SHIPCUBE_SIGNER_SA", "sc-api@shipcube-control-ks.iam.gserviceaccount.com"))
+        "SHIPCUBE_SIGNER_SA", "sc-api@your-control-project.iam.gserviceaccount.com"))
     # Hosted builds run as the workspace's own builder SA, read only the workspace's upload prefix
     # and push only to its own registry repo (deploy/isolation.py). {ws} = workspace uuid,
     # {ws_short} = its first 20 hex digits. Names agreed with security (infra/builder-isolation).
@@ -70,12 +70,12 @@ class Settings:
     upload_prefix_template: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_UPLOAD_PREFIX_TEMPLATE", "ws/{ws}/"))
     # The worker impersonates this SA to create a workspace's builder SA, repo and upload folder.
     provisioner_sa: str = field(default_factory=lambda: os.environ.get(
-        "SHIPCUBE_PROVISIONER_SA", "sc-provisioner@shipcube-control-ks.iam.gserviceaccount.com"))
+        "SHIPCUBE_PROVISIONER_SA", "sc-provisioner@your-control-project.iam.gserviceaccount.com"))
     # Granted on each builder SA: the worker mints its tokens, the hosted deployer submits builds as it.
     worker_sa: str = field(default_factory=lambda: os.environ.get(
-        "SHIPCUBE_WORKER_SA", "sc-worker@shipcube-control-ks.iam.gserviceaccount.com"))
+        "SHIPCUBE_WORKER_SA", "sc-worker@your-control-project.iam.gserviceaccount.com"))
     build_submitter_sa: str = field(default_factory=lambda: os.environ.get(
-        "SHIPCUBE_BUILD_SUBMITTER_SA", "sc-hosted-deployer@shipcube-control-ks.iam.gserviceaccount.com"))
+        "SHIPCUBE_BUILD_SUBMITTER_SA", "sc-hosted-deployer@your-control-project.iam.gserviceaccount.com"))
     # Optional: impersonate this deployer for hosted deploys; unset means ADC acts directly.
     hosted_deployer_sa: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_HOSTED_DEPLOYER_SA") or None)
     # Mediated egress (red-team N-2, networking.md §5.5): every hosted app routes all outbound through
@@ -92,7 +92,7 @@ class Settings:
     # The AI gateway's identity and the audience its ID tokens carry for this API (/internal/gateway/*,
     # shared caps). Unset audience: the internal routes refuse every caller.
     gateway_sa: str = field(default_factory=lambda: os.environ.get(
-        "SHIPCUBE_GATEWAY_SA", "sc-gateway@shipcube-control-ks.iam.gserviceaccount.com"))
+        "SHIPCUBE_GATEWAY_SA", "sc-gateway@your-control-project.iam.gserviceaccount.com"))
     internal_audience: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_INTERNAL_AUDIENCE") or None)
     # Public waitlist (waitlist.py). Platform admins review it: a comma-separated allowlist of verified
     # Google emails, never a workspace role. Approvals stop at max_workspaces workspaces in total.
@@ -136,12 +136,12 @@ class Settings:
     # Linked projects: the per-workspace deployer the user grants roles to (infra/scripts/link-project.sh).
     # Created in a project of their own (infra/terraform/links.tf), where the API can create SAs and
     # the API and worker can act as them, and nothing else (#15).
-    links_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LINKS_PROJECT", "shipcube-links-ks"))
+    links_project: str = field(default_factory=lambda: os.environ.get("SHIPCUBE_LINKS_PROJECT", "your-links-project"))
     link_deployer_sa_template: str = field(default_factory=lambda: os.environ.get(
         "SHIPCUBE_LINK_DEPLOYER_SA_TEMPLATE", "ws-{ws12}-deployer@{links_project}.iam.gserviceaccount.com"))
     # The API's own SA: it creates each workspace's deployer SA and checks links by impersonating it.
     api_sa: str = field(default_factory=lambda: os.environ.get(
-        "SHIPCUBE_API_SA", "sc-api@shipcube-control-ks.iam.gserviceaccount.com"))
+        "SHIPCUBE_API_SA", "sc-api@your-control-project.iam.gserviceaccount.com"))
     # Billing page: the credit grant on ShipCube's billing account (GCP credits), shown against usage.
     credit_grant_usd: float = field(default_factory=lambda: float(os.environ.get("SHIPCUBE_CREDIT_GRANT_USD", "0")))
     credit_expires_at: str | None = field(default_factory=lambda: os.environ.get("SHIPCUBE_CREDIT_EXPIRES_AT") or None)

@@ -2,13 +2,13 @@
 
 Infrastructure as code for ShipCube's own GCP projects, plus the scripts users run to link their own project. Design and reasoning: [docs/research/security-tenancy.md](../docs/research/security-tenancy.md).
 
-**Status (Oct 28): applied.** Kunal approved the plan and cost and ran `terraform apply`; a follow-up `terraform plan` shows no changes. State is in `gs://shipcube-control-ks-tfstate` (versioned, prefix `shipcube`). Cloud SQL connection name: `shipcube-control-ks:asia-south1:shipcube-pg`. The budget kill switch is live (see `budget-killswitch/`).
+ShipCube's own infrastructure is defined here as Terraform. Remote state is kept in a versioned GCS bucket (see **Terraform** below), and the budget kill switch is included (see `budget-killswitch/`). Fill in your own project IDs, region, billing account and Cloud SQL instance via `terraform.tfvars` (gitignored; see `terraform/terraform.tfvars.example`).
 
-Database (Oct 28): roles bootstrapped; migrations `0001`–`0004` applied and verified with `db/checks/check.sh`; see `db/` below.
+Database: roles are bootstrapped and migrations applied and verified with `db/checks/check.sh`; see `db/` below.
 
 | Path | What it is |
 |---|---|
-| `terraform/` | ShipCube's two projects: `shipcube-control` (API, MCP, gateway, Cloud SQL, secrets, audit logs) and `shipcube-apps` (hosted apps, profiler sandbox) |
+| `terraform/` | ShipCube's two projects: `your-control-project` (API, MCP, gateway, Cloud SQL, secrets, audit logs) and `your-apps-project` (hosted apps, profiler sandbox) |
 | `budget-killswitch/` | Hard spending cap: function + `deploy.sh`; Terraform owns its budget, topic and service account |
 | `db/` | `bootstrap.sql`/`.sh` (once, as `postgres`), `owner_defaults.sql` and `migrate.sh` (every migration, as `sc-migrator`), `proposed/` migrations for `services/api/migrations` |
 | `scripts/link-project.sh` | Run by a user, as Owner of their project, to let their workspace's ShipCube deployer deploy there |
@@ -27,7 +27,7 @@ Database (Oct 28): roles bootstrapped; migrations `0001`–`0004` applied and ve
 | Monitoring | `modules/monitoring`: 4 uptime checks, 8 alert policies (one condition each), 1 email channel | uptime checks ~104k executions/month of 1M free; alerting is billed per condition (~$0.10/condition-month) ≈ **<$1** |
 | APIs | Enables the APIs both projects need (most already on) | free |
 
-**Total ≈ $12–17/month (~₹1,000–1,450), about $40–50 over the rest of the trial**, nearly all Cloud SQL. That is within the ₹24,000 cap.
+**Total ≈ $12–17/month**, nearly all Cloud SQL. Set your own hard-cap budget via the budget kill switch.
 
 The one change to an existing resource: the `shipcube` registry's cleanup policy changes from "delete images older than 1 day" to "keep the 5 newest per app, delete others after 30 days", so images outlive the 7-day restore window for deleted apps.
 
@@ -60,8 +60,8 @@ What it creates:
 
 Manual steps Terraform can't do:
 
-1. Identity Platform with the Google provider on `shipcube-control` (done Oct 28).
-2. The external OAuth client for IAP in `shipcube-apps`, applied with `gcloud iap settings set` (the IAP OAuth Admin API is shut down for new projects).
+1. Identity Platform with the Google provider on `your-control-project` (done Oct 28).
+2. The external OAuth client for IAP in `your-apps-project`, applied with `gcloud iap settings set` (the IAP OAuth Admin API is shut down for new projects).
 3. Secret values: `meta-api-key` and `token-hmac-pepper` were added at version 1 on Oct 28 (adopted by `imports.tf`). Add or rotate with `printf '%s' "$VALUE" | gcloud secrets versions add NAME --data-file=-`.
 
 ## Local stack (database and secrets)
@@ -126,7 +126,7 @@ LOGIN=sc-api infra/db/checks/check.sh
 
 ### Pending live steps (Cloud SQL), in order
 
-The instance must be running. Take an on-demand backup first (`gcloud sql backups create --instance shipcube-pg --project shipcube-control-ks`), and run `check.sh` after each step. An API build refuses to start while its migrations are pending (`check_schema`), so each step must come **before** the deploy that needs it.
+The instance must be running. Take an on-demand backup first (`gcloud sql backups create --instance shipcube-pg --project your-control-project`), and run `check.sh` after each step. An API build refuses to start while its migrations are pending (`check_schema`), so each step must come **before** the deploy that needs it.
 
 1. **Before deploying #38 (shipcube-data catalog):** re-run `infra/db/bootstrap.sh`. `bootstrap.sql` now creates schema `catalog` (owned by postgres) and grants `shipcube_owner` CREATE in it. Without this step, the catalog migration fails with "permission denied for database shipcube".
 2. **Before deploying #35 (migration 0005, read-only migration ledger):** `migrate.sh` applies `0005_lock_migration_ledger.sql`. After that, `check.sh` reports `PASS 5` for `public.schema_migrations`.

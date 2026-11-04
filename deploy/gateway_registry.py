@@ -5,7 +5,7 @@ Interim, until the API serves GET /internal/gateway/resolve (services/gateway/RE
 ShipCube-managed Cloud Run service in the apps project (label managed-by=shipcube) becomes one entry:
 its runtime service account is the principal the gateway sees in the app's Google ID token.
 
-    python3 deploy/gateway_registry.py [--project shipcube-control-ks] [--apps-project shipcube-apps-ks]
+    python3 deploy/gateway_registry.py [--project your-control-project] [--apps-project your-apps-project]
 
 Adds a new secret version only when the content changed. Muse (`muse-spark-1.3`) with default caps;
 per-app provider config arrives with the API endpoint.
@@ -31,8 +31,8 @@ def gcloud(*args: str, stdin: str | None = None) -> str:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--project", default="shipcube-control-ks")
-    p.add_argument("--apps-project", default="shipcube-apps-ks")
+    p.add_argument("--project", default="your-control-project")
+    p.add_argument("--apps-project", default="your-apps-project")
     p.add_argument("--region", default="asia-south1")
     a = p.parse_args()
 

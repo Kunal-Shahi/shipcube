@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-PROJECT="${PROJECT:-shipcube-control-ks}"
+PROJECT="${PROJECT:-your-control-project}"
 INSTANCE="${INSTANCE:-${PROJECT}:asia-south1:shipcube-pg}"
 PORT="${PORT:-5433}"
 PSQL="${PSQL:-$(command -v psql || echo /opt/homebrew/opt/libpq/bin/psql)}"

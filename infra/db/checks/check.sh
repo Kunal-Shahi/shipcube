@@ -6,7 +6,7 @@
 #   LOGIN=sc-migrator PRE_SQL="a.sql b.sql" ./check.sh   # dry run of pending migrations
 set -euo pipefail
 cd "$(dirname "$0")"
-PROJECT="${PROJECT:-shipcube-control-ks}"
+PROJECT="${PROJECT:-your-control-project}"
 LOGIN="${LOGIN:?sc-api or sc-migrator}"
 PORT="${PORT:-5437}"
 PSQL="${PSQL:-$(command -v psql || echo /opt/homebrew/opt/libpq/bin/psql)}"

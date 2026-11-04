@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-PROJECT = "shipcube-control-ks"
+PROJECT = "your-control-project"
 
 
 def _local_env() -> dict[str, str]:

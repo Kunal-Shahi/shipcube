@@ -156,7 +156,7 @@ def test_exposure_check_logs_public_hosted_services_as_critical(client, caplog):
     class Exposed(MockDeployer):
         def public_services(self, regions):
             assert regions  # always at least the default region
-            return ["projects/shipcube-apps-ks/locations/asia-south1/services/leaky"], 3
+            return ["projects/your-apps-project/locations/asia-south1/services/leaky"], 3
 
     with caplog.at_level("INFO", logger="shipcube.worker"):
         Worker(Exposed(), worker_id="w-exposure").check_exposure()

@@ -469,14 +469,14 @@ func TestGoogleIDTokenVerification(t *testing.T) {
 	claims := func(mod func(map[string]any)) map[string]any {
 		c := map[string]any{"iss": "https://accounts.google.com", "aud": "https://gw.example.run.app",
 			"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(),
-			"email": "app-tracker@shipcube-apps-ks.iam.gserviceaccount.com", "email_verified": true}
+			"email": "app-tracker@your-apps-project.iam.gserviceaccount.com", "email_verified": true}
 		if mod != nil {
 			mod(c)
 		}
 		return c
 	}
 	email, err := v.Verify(context.Background(), signJWT(t, key, "k1", claims(nil)))
-	if err != nil || email != "app-tracker@shipcube-apps-ks.iam.gserviceaccount.com" {
+	if err != nil || email != "app-tracker@your-apps-project.iam.gserviceaccount.com" {
 		t.Fatalf("valid token: %v %q", err, email)
 	}
 	other, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -638,7 +638,7 @@ func TestUpstreamTimeoutIs504(t *testing.T) {
 
 func TestRequestIDAndTraceInLogs(t *testing.T) {
 	h := newHarness(t, ProviderConfig{Kind: ProviderMock, Model: "m"}, Caps{}, "")
-	h.g.Project = "shipcube-control-ks"
+	h.g.Project = "your-control-project"
 	h.srv.Config.Handler = h.g.Handler()
 	resp := h.post(t, chatBody, "X-Request-Id", "req-123",
 		"traceparent", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
@@ -647,7 +647,7 @@ func TestRequestIDAndTraceInLogs(t *testing.T) {
 	}
 	logs := h.logs.String()
 	if !strings.Contains(logs, `"request_id":"req-123"`) ||
-		!strings.Contains(logs, `"logging.googleapis.com/trace":"projects/shipcube-control-ks/traces/0af7651916cd43dd8448eb211c80319c"`) {
+		!strings.Contains(logs, `"logging.googleapis.com/trace":"projects/your-control-project/traces/0af7651916cd43dd8448eb211c80319c"`) {
 		t.Fatalf("logs missing request id or trace: %s", logs)
 	}
 	if e := h.sink.last(t); e.RequestID != "req-123" {

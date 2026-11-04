@@ -3,7 +3,7 @@
 Runs only when SHIPCUBE_IT_PROJECT is set (CI runs it through Workload Identity Federation on main;
 locally use `gcloud auth application-default login`). It reads one existing Cloud Run service:
 
-    SHIPCUBE_IT_PROJECT=shipcube-control-ks SHIPCUBE_IT_SERVICE=budget-killswitch \\
+    SHIPCUBE_IT_PROJECT=your-control-project SHIPCUBE_IT_SERVICE=budget-killswitch \\
       uv run --extra gcp pytest tests/test_integration_gcp.py
 """
 
