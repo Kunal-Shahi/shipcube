@@ -1,7 +1,7 @@
 # shellcheck shell=bash disable=SC2034  # sourced by the other scripts, which use these variables
 # Shared settings for deploy/*.sh. Override any of them in the environment.
-: "${PROJECT:=shipcube-control-ks}"
-: "${APPS_PROJECT:=shipcube-apps-ks}"
+: "${PROJECT:=your-control-project}"
+: "${APPS_PROJECT:=your-apps-project}"
 : "${REGION:=asia-south1}"
 : "${REPO:=platform}"                     # Artifact Registry repo (infra/terraform/registry.tf)
 : "${TAG:=$(git rev-parse --short=12 HEAD 2>/dev/null || date +%Y%m%d%H%M%S)}"

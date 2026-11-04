@@ -94,14 +94,14 @@ def test_only_the_gateway_may_call_the_internal_routes(client, monkeypatch):
     import dataclasses
 
     monkeypatch.setattr(gateway_counters, "settings", dataclasses.replace(settings_mod.settings, internal_audience="https://api"))
-    claims = {"email": "sc-gateway@shipcube-control-ks.iam.gserviceaccount.com", "email_verified": True}
+    claims = {"email": "sc-gateway@your-control-project.iam.gserviceaccount.com", "email_verified": True}
     from google.oauth2 import id_token
 
     monkeypatch.setattr(id_token, "verify_oauth2_token", lambda tok, req, audience: dict(claims) if tok == "good" else
                         (_ for _ in ()).throw(ValueError("bad signature")))
     assert client.post("/internal/gateway/reserve", json=body, headers={"Authorization": "Bearer good"}).status_code == 200
     assert client.post("/internal/gateway/reserve", json=body, headers={"Authorization": "Bearer forged"}).status_code == 403
-    claims["email"] = "someone-else@shipcube-control-ks.iam.gserviceaccount.com"
+    claims["email"] = "someone-else@your-control-project.iam.gserviceaccount.com"
     assert client.post("/internal/gateway/reserve", json=body, headers={"Authorization": "Bearer good"}).status_code == 403
 
 

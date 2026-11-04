@@ -5,7 +5,7 @@ import pytest
 from shipcube_monitor import MonitorUnavailable
 from shipcube_monitor.api import MonitorTelemetry, target_for
 
-APP = {"name": "tracker", "region": "asia-south1", "gcp_project": "shipcube-apps-ks",
+APP = {"name": "tracker", "region": "asia-south1", "gcp_project": "your-apps-project",
        "service_name": "tracker-b2ef0b", "app_id": "a1",
        "caps": {"cpu": "2", "memory": "1Gi", "max_instances": 3}}
 
@@ -31,7 +31,7 @@ class Provider:
 
 def test_target_from_api_app_view():
     t = target_for(APP)
-    assert (t.project_id, t.service, t.region, t.app_id) == ("shipcube-apps-ks", "tracker-b2ef0b", "asia-south1", "a1")
+    assert (t.project_id, t.service, t.region, t.app_id) == ("your-apps-project", "tracker-b2ef0b", "asia-south1", "a1")
     assert t.cpu == 2 and t.memory_mib == 1024 and t.caps["max_instances"] == 3
     assert target_for({**APP, "caps": {"memory": "512Mi"}}).memory_mib == 512
 

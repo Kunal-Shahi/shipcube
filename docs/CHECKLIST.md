@@ -80,7 +80,7 @@ What has to exist for launch: a user builds a tracker in their coding agent, con
 | | Component | Owner | Status |
 |---|---|---|---|
 | ★ | Design system, all screens on mock data (apps, app detail, access, caps, approvals, data, AI, billing, MCP guide) | frontend | ✅ mock |
-| ★ | Identity Platform enabled with the Google provider on `shipcube-control-ks` | Kunal | 🔴 the previous attempt was on the wrong project |
+| ★ | Identity Platform enabled with the Google provider on `your-control-project` | Kunal | 🔴 the previous attempt was on the wrong project |
 | ★ | Identity Platform auth adapter | frontend | 🔴 |
 | ★ | Wire screens to the real API | frontend | 🔴 |
 | ★ | Create PAT screen | frontend | 🟡 mock |
@@ -89,7 +89,7 @@ What has to exist for launch: a user builds a tracker in their coding agent, con
 
 | | Component | Owner | Status |
 |---|---|---|---|
-| ★ | Terraform for `shipcube-control` / `shipcube-apps`: validate and apply | security | 🟡 skeleton, never validated |
+| ★ | Terraform for `your-control-project` / `your-apps-project`: validate and apply | security | 🟡 skeleton, never validated |
 | ★ | Deploy the console, MCP server and API to Cloud Run with a domain | unowned | 🔴 |
 | ☆ | CI: lint, tests and build on every PR (GitHub Actions) | unowned | 🔴 |
 

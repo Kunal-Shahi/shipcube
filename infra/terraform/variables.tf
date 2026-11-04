@@ -67,13 +67,13 @@ variable "migration_operators" {
 variable "ml_bucket_name" {
   description = "Model registry and profiler source uploads, in the control project."
   type        = string
-  default     = "shipcube-ks-ml"
+  default     = "your-ml-bucket"
 }
 
 variable "uploads_bucket_name" {
   description = "Source uploads for deploys (created by networking's gcp_setup.sh, adopted here)."
   type        = string
-  default     = "shipcube-uploads-ks"
+  default     = "your-uploads-bucket"
 }
 
 variable "postgres_password_version" {
@@ -96,5 +96,5 @@ variable "links_project_id" {
     service accounts by name: the API may create SAs and act as any SA here, and nothing else.
   EOT
   type        = string
-  default     = "shipcube-links-ks"
+  default     = "your-links-project"
 }

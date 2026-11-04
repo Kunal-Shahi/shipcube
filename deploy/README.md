@@ -1,6 +1,6 @@
 # Hosting ShipCube itself
 
-Four Cloud Run services in `shipcube-control-ks` (asia-south1), built on Cloud Build (no local Docker)
+Four Cloud Run services in `your-control-project` (asia-south1), built on Cloud Build (no local Docker)
 and pushed to the `platform` repo. One set of images per commit (tag = the commit) is promoted
 unchanged; everything environment-specific comes from env vars and Secret Manager. Identities,
 grants, secrets and the build bucket are Terraform (`infra/terraform/platform.tf` and security's files).
@@ -12,7 +12,7 @@ grants, secrets and the build bucket are Terraform (`infra/terraform/platform.tf
 | `shipcube-worker` | `shipcube_api.worker` via `runtime/worker_service.py` | `api` | `sc-worker` → DB role `shipcube_worker` (BYPASSRLS) | private (IAM); only health checks call it | **1**, CPU always allocated | `/healthz` (loop alive, not stalled) |
 | `shipcube-gateway` | `services/gateway` (Go) | `gateway` | `sc-gateway` | public; verifies each app's Google ID token | 0–2, request-based | `/healthz` |
 
-URLs are Cloud Run's deterministic ones: `https://<service>-340481939948.asia-south1.run.app`.
+URLs are Cloud Run's deterministic ones: `https://<service>-000000000000.asia-south1.run.app`.
 
 **Wiring** (all set by `deploy.sh`):
 - console → API: `SHIPCUBE_API_URL` = the `shipcube-mcp` URL. The setup guide shows `SHIPCUBE_MCP_URL`.

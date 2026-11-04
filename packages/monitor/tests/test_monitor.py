@@ -21,7 +21,7 @@ METRICS_KEYS = {
 
 
 def target(**kw) -> AppTarget:
-    base = dict(app="tracker", project_id="shipcube-apps-ks", region="asia-south1", service="tracker",
+    base = dict(app="tracker", project_id="your-apps-project", region="asia-south1", service="tracker",
                 cpu=1.0, memory_mib=512, caps={"max_instances": 2})
     return AppTarget(**(base | kw))
 

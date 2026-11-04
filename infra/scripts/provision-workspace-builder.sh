@@ -23,10 +23,10 @@ ACTION="${2:-create}"
   echo "not a canonical uuid: $WS_UUID" >&2
   exit 2
 }
-APPS_PROJECT="${APPS_PROJECT:-shipcube-apps-ks}"
-CONTROL_PROJECT="${CONTROL_PROJECT:-shipcube-control-ks}"
+APPS_PROJECT="${APPS_PROJECT:-your-apps-project}"
+CONTROL_PROJECT="${CONTROL_PROJECT:-your-control-project}"
 REGION="${REGION:-asia-south1}"
-UPLOADS_BUCKET="${UPLOADS_BUCKET:-shipcube-uploads-ks}"
+UPLOADS_BUCKET="${UPLOADS_BUCKET:-your-uploads-bucket}"
 
 WS_SHORT="$(echo "$WS_UUID" | tr -d '-' | cut -c1-20)"
 SA_ID="sc-build-${WS_SHORT}"

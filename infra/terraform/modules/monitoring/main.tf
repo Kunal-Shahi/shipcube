@@ -282,7 +282,7 @@ resource "google_monitoring_alert_policy" "public_hosted_service" {
 
   documentation {
     mime_type = "text/markdown"
-    content   = "A hosted app's Cloud Run service can be called by `allUsers` or `allAuthenticatedUsers`, which skips IAP. The incident's `service` label names it. Remove the binding at once: `gcloud run services remove-iam-policy-binding SERVICE --project shipcube-apps-ks --region REGION --member allUsers --role roles/run.invoker` (or `allAuthenticatedUsers`), then find who added it in the apps project's Admin Activity audit log (`protoPayload.methodName:\"SetIamPolicy\"`). ${local.runbook}"
+    content   = "A hosted app's Cloud Run service can be called by `allUsers` or `allAuthenticatedUsers`, which skips IAP. The incident's `service` label names it. Remove the binding at once: `gcloud run services remove-iam-policy-binding SERVICE --project your-apps-project --region REGION --member allUsers --role roles/run.invoker` (or `allAuthenticatedUsers`), then find who added it in the apps project's Admin Activity audit log (`protoPayload.methodName:\"SetIamPolicy\"`). ${local.runbook}"
   }
 }
 

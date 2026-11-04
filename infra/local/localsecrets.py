@@ -29,7 +29,7 @@ from urllib.parse import quote
 _HERE = Path(__file__).resolve()
 ROOT = _HERE.parents[2] if len(_HERE.parents) > 2 else _HERE.parent  # repo root; /app in the container
 LOCAL = Path(os.environ.get("SHIPCUBE_LOCAL_DIR", ROOT / ".local"))
-PROJECT = "shipcube-control-ks"  # the Cloud SQL IAM user names bootstrap.sql grants roles to
+PROJECT = "your-control-project"  # the Cloud SQL IAM user names bootstrap.sql grants roles to
 LOCAL_PREFIX = "sclocal_"
 
 # Secret Manager name -> how to make a local value.

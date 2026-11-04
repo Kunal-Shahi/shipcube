@@ -7,7 +7,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-PROJECT="${PROJECT:-shipcube-control-ks}"
+PROJECT="${PROJECT:-your-control-project}"
 INSTANCE="${INSTANCE:-${PROJECT}:asia-south1:shipcube-pg}"
 PORT="${PORT:-5434}"
 MIGRATOR="sc-migrator@${PROJECT}.iam.gserviceaccount.com"

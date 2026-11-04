@@ -71,7 +71,7 @@ create table gcp_links (
   workspace_id  uuid not null references workspaces(id) on delete cascade,
   project_id    text not null,
   project_number text,
-  deployer_sa   text not null,      -- ws-<id>-deployer@shipcube-control.iam.gserviceaccount.com
+  deployer_sa   text not null,      -- ws-<id>-deployer@your-control-project.iam.gserviceaccount.com
   runtime_sa    text not null,      -- shipcube-apps@<project>.iam.gserviceaccount.com
   region        text not null default 'asia-south1',
   iap_oauth_client_secret_ref uuid, -- FK added below; null = Google-managed client
@@ -90,7 +90,7 @@ create unique index gcp_links_active_project on gcp_links (project_id) where sta
 create table apps (
   id            uuid primary key,
   workspace_id  uuid not null references workspaces(id) on delete cascade,
-  gcp_link_id   uuid references gcp_links(id),   -- null = hosted in shipcube-apps
+  gcp_link_id   uuid references gcp_links(id),   -- null = hosted in your-apps-project
   slug          text not null check (slug ~ '^[a-z0-9-]{3,40}$'),
   name          text not null,
   tier          text not null check (tier in ('T0','T1','T2','T3','T4')),
@@ -269,7 +269,7 @@ create table operations (
   app_id         uuid references apps(id) on delete set null,
   kind           text not null check (kind in ('estimate','deploy','delete','restore','purge','set_caps','set_access',
                                                'profile','link_verify','grant_sync')),
-  target_project text not null,          -- shipcube-apps or the linked project
+  target_project text not null,          -- your-apps-project or the linked project
   -- Same values as networking's OpStatus, plus awaiting_approval. A rejected or expired
   -- approval moves the operation to cancelled.
   status         text not null check (status in ('awaiting_approval','queued','running','succeeded','failed','cancelled')),

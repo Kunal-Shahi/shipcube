@@ -3,10 +3,10 @@
 These resources are managed as infrastructure as code by the infra/security workstream (`infra/**`). Don't create them by hand. Region: `asia-south1`. Project ids are configuration (env vars), not constants.
 
 Kunal's decision (Oct 27):
-- The profiler sandbox lives in **`shipcube-apps`**.
-- The ML bucket **`shipcube-ks-ml`** stays in **`shipcube-control-ks`**.
+- The profiler sandbox lives in **`your-apps-project`**.
+- The ML bucket **`your-ml-bucket`** stays in **`your-control-project`**.
 
-## In `shipcube-apps` (the sandbox)
+## In `your-apps-project` (the sandbox)
 
 | # | Resource | Settings |
 |---|---|---|
@@ -18,11 +18,11 @@ Kunal's decision (Oct 27):
 | 6 | SA `profiler-build` | Cloud Build identity (instead of the default compute SA) |
 | 7 | Artifact Registry `profiler` (Docker) | cleanup policy: delete images older than 7 days (`604800s`) |
 
-## In `shipcube-control-ks`
+## In `your-control-project`
 
 | # | Resource | Settings |
 |---|---|---|
-| 8 | Bucket `shipcube-ks-ml` | uniform bucket-level access, public access prevention enforced, lifecycle: Delete when age ≥ 1 day and `matchesPrefix: ["profiler-src/"]` |
+| 8 | Bucket `your-ml-bucket` | uniform bucket-level access, public access prevention enforced, lifecycle: Delete when age ≥ 1 day and `matchesPrefix: ["profiler-src/"]` |
 
 Bucket layout:
 - `models/workload-classifier/<version>/…` and `latest.json`, kept (the model registry)
@@ -30,19 +30,19 @@ Bucket layout:
 
 ## IAM (least privilege)
 
-`profiler-build@shipcube-apps` needs:
+`profiler-build@your-apps-project` needs:
 - `roles/artifactregistry.writer` on repo `profiler`
-- `roles/logging.logWriter` on `shipcube-apps`
-- `roles/storage.objectViewer` on `gs://shipcube-ks-ml`, with the condition `resource.name.startsWith("projects/_/buckets/shipcube-ks-ml/objects/profiler-src/")`
+- `roles/logging.logWriter` on `your-apps-project`
+- `roles/storage.objectViewer` on `gs://your-ml-bucket`, with the condition `resource.name.startsWith("projects/_/buckets/your-ml-bucket/objects/profiler-src/")`
 
 The **caller** is the service account that runs `estimate()` (the API worker). It needs:
-- in `shipcube-apps`:
+- in `your-apps-project`:
   - `roles/run.developer`
   - `roles/cloudbuild.builds.editor`
   - `roles/logging.viewer`
   - `roles/iam.serviceAccountUser` on `profiler-sandbox` and on `profiler-build`
   - `roles/serviceusage.serviceUsageConsumer`: the client bills API quota to this project (`x-goog-user-project`). Without it, user credentials billed Cloud Logging reads to gcloud's shared client project, which returned 429.
-- on `gs://shipcube-ks-ml`:
+- on `gs://your-ml-bucket`:
   - `roles/storage.objectAdmin`, with the condition prefix `profiler-src/` (it uploads and deletes tarballs)
   - `roles/storage.objectViewer`, with the condition prefix `models/workload-classifier/` (model registry reads)
 
@@ -63,15 +63,15 @@ Each run also produces a Cloud Build build and an image, which the cleanup polic
 ## Outputs the worker needs (environment)
 
 ```
-SHIPCUBE_PROFILER_PROJECT=shipcube-apps
+SHIPCUBE_PROFILER_PROJECT=your-apps-project
 SHIPCUBE_PROFILER_REGION=asia-south1
-SHIPCUBE_PROFILER_BUCKET=shipcube-ks-ml
+SHIPCUBE_PROFILER_BUCKET=your-ml-bucket
 SHIPCUBE_PROFILER_REPOSITORY=profiler
 SHIPCUBE_PROFILER_NETWORK=profiler-no-egress
 SHIPCUBE_PROFILER_SUBNET=profiler
-SHIPCUBE_PROFILER_SERVICE_ACCOUNT=profiler-sandbox@shipcube-apps.iam.gserviceaccount.com
-SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT=profiler-build@shipcube-apps.iam.gserviceaccount.com
-SHIPCUBE_MODEL_URI=gs://shipcube-ks-ml/models/workload-classifier/latest
+SHIPCUBE_PROFILER_SERVICE_ACCOUNT=profiler-sandbox@your-apps-project.iam.gserviceaccount.com
+SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT=profiler-build@your-apps-project.iam.gserviceaccount.com
+SHIPCUBE_MODEL_URI=gs://your-ml-bucket/models/workload-classifier/latest
 ```
 
-`shipcube-apps` is a placeholder for the real project id. The job and build run in `SHIPCUBE_PROFILER_PROJECT`; the bucket can be in another project.
+`your-apps-project` is a placeholder for the real project id. The job and build run in `SHIPCUBE_PROFILER_PROJECT`; the bucket can be in another project.

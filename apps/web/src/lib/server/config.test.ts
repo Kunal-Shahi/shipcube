@@ -74,7 +74,7 @@ describe("config()", () => {
   });
 
   it("uses Identity Platform and the API in production", () => {
-    withEnv({ SHIPCUBE_API_URL: "https://api/", SHIPCUBE_MCP_URL: "https://mcp/mcp", IDENTITY_PLATFORM_PROJECT: "shipcube-control-ks", K_SERVICE: "c" });
+    withEnv({ SHIPCUBE_API_URL: "https://api/", SHIPCUBE_MCP_URL: "https://mcp/mcp", IDENTITY_PLATFORM_PROJECT: "your-control-project", K_SERVICE: "c" });
     expect(config()).toMatchObject({ auth: "identity-platform", apiUrl: "https://api", mcpUrl: "https://mcp/mcp", devMode: false });
     expect(mockDataEnabled()).toBe(false);
   });
@@ -89,10 +89,10 @@ describe("config()", () => {
   // #29: what the deployed console sets today (deploy/services/console.yaml, live Oct 31) must start.
   const LIVE = {
     K_SERVICE: "shipcube-console",
-    SHIPCUBE_API_URL: "https://shipcube-mcp-340481939948.asia-south1.run.app",
+    SHIPCUBE_API_URL: "https://shipcube-mcp-000000000000.asia-south1.run.app",
     SHIPCUBE_API_TIMEOUT_MS: "30000",
-    SHIPCUBE_MCP_URL: "https://shipcube-mcp-340481939948.asia-south1.run.app/mcp",
-    IDENTITY_PLATFORM_PROJECT: "shipcube-control-ks",
+    SHIPCUBE_MCP_URL: "https://shipcube-mcp-000000000000.asia-south1.run.app/mcp",
+    IDENTITY_PLATFORM_PROJECT: "your-control-project",
   };
 
   it("starts with the live console's settings", () => {

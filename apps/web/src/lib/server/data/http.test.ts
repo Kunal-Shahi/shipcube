@@ -96,7 +96,7 @@ describe("linkFromApi", () => {
     id: "l1",
     project_id: "acme-prod",
     region: "europe-west1",
-    deployer_sa: "ws-abc-deployer@shipcube-control-ks.iam.gserviceaccount.com",
+    deployer_sa: "ws-abc-deployer@your-control-project.iam.gserviceaccount.com",
     linked_at: "2026-10-29T00:00:00Z",
   };
 

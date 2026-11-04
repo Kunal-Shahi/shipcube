@@ -125,7 +125,7 @@ def _extract(name: str, template: str, shortest: bool = True) -> str:
     return tail[:i] if i >= 0 else ""
 
 
-def _janitor_allows(name: str, bucket: str = "shipcube-uploads-ks", shortest: bool = True) -> bool:
+def _janitor_allows(name: str, bucket: str = "your-uploads-bucket", shortest: bool = True) -> bool:
     o = f"projects/_/buckets/{bucket}/objects"
     seg_profiler = _extract(name, f"{o}/ws/{{ws}}/profiler/", shortest)
     return (name.startswith(f"{o}/ws/") and seg_profiler != ""
@@ -151,11 +151,11 @@ def test_janitor_condition_text_is_the_one_modelled():
     ("profiler/x", False),
 ])
 def test_janitor_condition_allows_exactly_one_ws_segment_then_profiler(obj, allowed):
-    name = f"projects/_/buckets/shipcube-uploads-ks/objects/{obj}"
+    name = f"projects/_/buckets/your-uploads-bucket/objects/{obj}"
     assert _janitor_allows(name) is allowed, obj
     if not allowed:                                            # never broader under the other reading
         assert _janitor_allows(name, shortest=False) is False, obj
-    assert _janitor_allows(name.replace("shipcube-uploads-ks", "other-bucket")) is False
+    assert _janitor_allows(name.replace("your-uploads-bucket", "other-bucket")) is False
 
 
 # --- the worker's used-source cleanup: ws/<one segment>/uploads/ and inline/ only (uploads.tf) ---------
@@ -193,7 +193,7 @@ def test_worker_source_cleanup_stays_on_workspace_sources(tmp_path, name):
     assert chk.check(root), name
 
 
-def _source_allows(name: str, bucket: str = "shipcube-uploads-ks", shortest: bool = True) -> bool:
+def _source_allows(name: str, bucket: str = "your-uploads-bucket", shortest: bool = True) -> bool:
     o = f"projects/_/buckets/{bucket}/objects"
     first = _extract(name, f"{o}/ws/{{ws}}/", shortest)
 
@@ -222,8 +222,8 @@ def test_source_cleanup_condition_text_is_the_one_modelled():
     ("uploads/x.tgz", False),
 ])
 def test_source_cleanup_allows_exactly_one_ws_segment_then_uploads_or_inline(obj, allowed):
-    name = f"projects/_/buckets/shipcube-uploads-ks/objects/{obj}"
+    name = f"projects/_/buckets/your-uploads-bucket/objects/{obj}"
     assert _source_allows(name) is allowed, obj
     if not allowed:
         assert _source_allows(name, shortest=False) is False, obj
-    assert _source_allows(name.replace("shipcube-uploads-ks", "other-bucket")) is False
+    assert _source_allows(name.replace("your-uploads-bucket", "other-bucket")) is False

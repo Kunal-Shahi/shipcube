@@ -9,9 +9,9 @@ mock_provider "google" {}
 variables {
   project_id        = "shipcube-apps-test"
   region            = "asia-south1"
-  ml_bucket_project = "shipcube-control-test"
+  ml_bucket_project = "your-control-project-test"
   ml_bucket_name    = "shipcube-test-ml"
-  estimator_members = ["serviceAccount:sc-worker@shipcube-control-test.iam.gserviceaccount.com"]
+  estimator_members = ["serviceAccount:sc-worker@your-control-project-test.iam.gserviceaccount.com"]
 }
 
 run "no_egress_path" {

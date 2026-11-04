@@ -15,7 +15,7 @@ import (
 // TestIntegrationRealMuse runs a real Muse call through the gateway, with the key read from real
 // Secret Manager. It is skipped unless GATEWAY_IT_META_SECRET_REF is set:
 //
-//	GATEWAY_IT_META_SECRET_REF=projects/shipcube-control-ks/secrets/meta-api-key/versions/1 \
+//	GATEWAY_IT_META_SECRET_REF=projects/your-control-project/secrets/meta-api-key/versions/1 \
 //	GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token) go test -run Integration -v ./...
 func TestIntegrationRealMuse(t *testing.T) {
 	ref := os.Getenv("GATEWAY_IT_META_SECRET_REF")

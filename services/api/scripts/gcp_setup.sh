@@ -8,10 +8,10 @@
 # (~$0.10/GB-month, capped by the keep-5 cleanup policy) and Cloud Build beyond 2,500 min/month.
 set -euo pipefail
 
-APPS=${SHIPCUBE_APPS_PROJECT:-shipcube-apps-ks}
-CONTROL=${SHIPCUBE_CONTROL_PROJECT:-shipcube-control-ks}
+APPS=${SHIPCUBE_APPS_PROJECT:-your-apps-project}
+CONTROL=${SHIPCUBE_CONTROL_PROJECT:-your-control-project}
 REGION=${SHIPCUBE_REGION:-asia-south1}
-BUCKET=${SHIPCUBE_UPLOAD_BUCKET:-shipcube-uploads-ks}
+BUCKET=${SHIPCUBE_UPLOAD_BUCKET:-your-uploads-bucket}
 ME=$(gcloud config get-value account 2>/dev/null)
 BUILDER="sc-builder@${APPS}.iam.gserviceaccount.com"
 SIGNER="sc-api@${CONTROL}.iam.gserviceaccount.com"

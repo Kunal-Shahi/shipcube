@@ -4,7 +4,7 @@ Usage from the API:
 
     from shipcube_monitor import AppTarget, provider_from_env
     monitor = provider_from_env()          # Cloud Monitoring/Logging; mock only with DEV_MODE=1
-    monitor.metrics(AppTarget(app="tracker", project_id="shipcube-apps-ks", region="asia-south1",
+    monitor.metrics(AppTarget(app="tracker", project_id="your-apps-project", region="asia-south1",
                               service="tracker"), window="1h")
     monitor.logs(target, limit=50, severity="WARNING", page_token=None)
 """

@@ -104,7 +104,7 @@ def d(tmp_path, monkeypatch):
 
 
 def app(ws=WS, name="tracker"):
-    return AppRef(name=name, workspace_id=ws, target=Target("shipcube", "shipcube", "shipcube-apps-ks"), region="asia-south1")
+    return AppRef(name=name, workspace_id=ws, target=Target("shipcube", "shipcube", "your-apps-project"), region="asia-south1")
 
 
 def test_upload_url_is_v4_signed_for_the_workspace_prefix(tmp_path):
@@ -115,7 +115,7 @@ def test_upload_url_is_v4_signed_for_the_workspace_prefix(tmp_path):
                         docker=FakeDocker())
     dep._client = storage.Client(project="p", credentials=AnonymousCredentials(), client_options={"api_endpoint": "http://x"})
     up = dep.create_upload(WS, "application/gzip")
-    assert up["url"].startswith(f"http://localhost:4443/shipcube-uploads-ks/ws/{WS}/uploads/{up['upload_id']}.tgz?")
+    assert up["url"].startswith(f"http://localhost:4443/your-uploads-bucket/ws/{WS}/uploads/{up['upload_id']}.tgz?")
     assert "X-Goog-Signature=" in up["url"] and "X-Goog-Algorithm=GOOG4-RSA-SHA256" in up["url"]
 
 
@@ -123,7 +123,7 @@ def test_upload_build_uses_only_the_workspace_object_and_namespace(d):
     obj = isolation.upload_object(d.s, WS, "upl_0123456789ab")
     d.fake_bucket.store[obj] = tgz({"main.py": "print(1)", "requirements.txt": ""})
     staged = d.stage_source(app(), {"kind": "upload", "upload_id": "upl_0123456789ab"}, "op_1")
-    assert staged == {"storageSource": {"bucket": "shipcube-uploads-ks", "object": obj, "generation": "1"}}  # pinned
+    assert staged == {"storageSource": {"bucket": "your-uploads-bucket", "object": obj, "generation": "1"}}  # pinned
     image = d.build(app(), staged, "op_1", lambda: False, lambda _: None)
     ns = f"shipcube.local/ws-{WS.replace('-', '')[:20]}/"
     assert image == f"{ns}{app().service}@{IMAGE_ID}"
@@ -144,7 +144,7 @@ def test_another_workspaces_upload_is_not_found_and_its_objects_are_refused(d):
     with pytest.raises(DeployError) as e:
         d.stage_source(app(), {"kind": "upload", "upload_id": "upl_0123456789ab"}, "op_1")
     assert e.value.code == "invalid_argument" and "not found" in str(e.value)
-    foreign = {"storageSource": {"bucket": "shipcube-uploads-ks", "object": isolation.upload_object(d.s, OTHER, "upl_0123456789ab")}}
+    foreign = {"storageSource": {"bucket": "your-uploads-bucket", "object": isolation.upload_object(d.s, OTHER, "upl_0123456789ab")}}
     with pytest.raises(DeployError) as e:
         d.build(app(), foreign, "op_1", lambda: False, lambda _: None)
     assert e.value.code == "permission_denied" and not any(c[0] in ("pack",) or c[:2] == ["docker", "build"] for c in d.docker.calls)

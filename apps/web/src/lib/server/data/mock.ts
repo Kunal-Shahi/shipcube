@@ -230,7 +230,7 @@ export const mockData: ConsoleData = {
 
   async getGcpLink() {
     await wait();
-    return { deployer: "ws-01jb8k-deployer@shipcube-control-ks.iam.gserviceaccount.com", link: billing.gcp };
+    return { deployer: "ws-01jb8k-deployer@your-control-project.iam.gserviceaccount.com", link: billing.gcp };
   },
 
   async linkGcpProject({ projectId, region }) {
@@ -243,7 +243,7 @@ export const mockData: ConsoleData = {
       projectId,
       region,
       linkedAt: new Date().toISOString(),
-      serviceAccount: `ws-01jb8k-deployer@shipcube-control-ks.iam.gserviceaccount.com`,
+      serviceAccount: `ws-01jb8k-deployer@your-control-project.iam.gserviceaccount.com`,
     };
     billing.gcp = link;
     return link;

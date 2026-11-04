@@ -2,7 +2,7 @@
 """Add the console's host to Identity Platform's authorized domains (Google sign-in refuses other
 origins). Idempotent; changes nothing else in the project's Identity Platform config.
 
-    python3 deploy/identity_platform.py --project shipcube-control-ks --add-domain <host>
+    python3 deploy/identity_platform.py --project your-control-project --add-domain <host>
 """
 
 from __future__ import annotations

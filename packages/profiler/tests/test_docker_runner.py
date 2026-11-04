@@ -66,8 +66,8 @@ def test_runner_switch(monkeypatch):
 def test_cloud_run_runner_accepts_field_overrides(monkeypatch):
     for k in ("REGION", "BUCKET", "REPOSITORY", "NETWORK", "SUBNET", "BUILD_SERVICE_ACCOUNT"):
         monkeypatch.setenv(f"SHIPCUBE_PROFILER_{k}", "x")
-    r = CloudRunJobRunner(project="shipcube-apps-ks", service_account="sandbox@x")
-    assert r.config.project == "shipcube-apps-ks" and r.config.service_account == "sandbox@x"
+    r = CloudRunJobRunner(project="your-apps-project", service_account="sandbox@x")
+    assert r.config.project == "your-apps-project" and r.config.service_account == "sandbox@x"
 
 
 def test_bad_limits_are_a_config_error():
@@ -511,13 +511,13 @@ def test_offline_build_has_no_network_without_fetched_wheels(tmp_path):
 # The live shipcube-worker service's profiler settings (Oct 31, 2026): SHIPCUBE_PROFILER unset.
 LIVE_WORKER = {
     "K_SERVICE": "shipcube-worker",
-    "SHIPCUBE_PROFILER_BUCKET": "shipcube-ks-ml",
-    "SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT": "profiler-build@shipcube-apps-ks.iam.gserviceaccount.com",
+    "SHIPCUBE_PROFILER_BUCKET": "your-ml-bucket",
+    "SHIPCUBE_PROFILER_BUILD_SERVICE_ACCOUNT": "profiler-build@your-apps-project.iam.gserviceaccount.com",
     "SHIPCUBE_PROFILER_NETWORK": "profiler-no-egress",
-    "SHIPCUBE_PROFILER_PROJECT": "shipcube-apps-ks",
+    "SHIPCUBE_PROFILER_PROJECT": "your-apps-project",
     "SHIPCUBE_PROFILER_REGION": "asia-south1",
     "SHIPCUBE_PROFILER_REPOSITORY": "profiler",
-    "SHIPCUBE_PROFILER_SERVICE_ACCOUNT": "profiler-sandbox@shipcube-apps-ks.iam.gserviceaccount.com",
+    "SHIPCUBE_PROFILER_SERVICE_ACCOUNT": "profiler-sandbox@your-apps-project.iam.gserviceaccount.com",
     "SHIPCUBE_PROFILER_SUBNET": "profiler",
 }
 

@@ -23,7 +23,7 @@ SC_API_DB_PASSWORD="$(sed -n 's/^SC_API_DB_PASSWORD=//p' "$LOCAL_DIR/secrets.env
 
 echo "== RLS and PAT lookup (SQL, as sc-api)"
 PGPASSWORD="$SC_API_DB_PASSWORD" "$ROOT/infra/db/checks/run.sh" \
-  "host=${LOCAL_DB%:*} port=${LOCAL_DB#*:} dbname=shipcube user=sc-api@shipcube-control-ks.iam" 2>&1 |
+  "host=${LOCAL_DB%:*} port=${LOCAL_DB#*:} dbname=shipcube user=sc-api@your-control-project.iam" 2>&1 |
   tee /dev/stderr | grep -q "ALL CHECKS PASSED"
 
 echo "== PAT login, RLS and build isolation (Python, as the service logins)"

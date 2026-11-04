@@ -86,7 +86,7 @@ Isolation locally is enforced by the deployer (the same `isolation.py` checks: o
 | `SHIPCUBE_IDP_PROJECT` | unset | Identity Platform project for console ID tokens (approvals, restore) |
 | `SHIPCUBE_BACKEND` | `gcp` (`mock` in DEV_MODE) | `gcp`, `local` (Docker + pack + fake-gcs-server, below; DEV_MODE only) or `mock` (tests; DEV_MODE only) |
 | `SHIPCUBE_DEV_MODE` | unset | `1` enables every mock; never set in production |
-| `SHIPCUBE_APPS_PROJECT`, `SHIPCUBE_CONTROL_PROJECT`, `SHIPCUBE_REGION` | `shipcube-apps-ks`, `shipcube-control-ks`, `asia-south1` | Where apps run |
+| `SHIPCUBE_APPS_PROJECT`, `SHIPCUBE_CONTROL_PROJECT`, `SHIPCUBE_REGION` | `your-apps-project`, `your-control-project`, `asia-south1` | Where apps run |
 | `SHIPCUBE_UPLOAD_BUCKET`, `SHIPCUBE_SIGNER_SA`, `SHIPCUBE_REPO`, `SHIPCUBE_BUILDER` | see `settings.py` | Upload bucket, URL signer, Artifact Registry repo in linked projects, buildpacks builder |
 | `SHIPCUBE_BUILDER_SA_TEMPLATE`, `SHIPCUBE_AR_REPO_TEMPLATE`, `SHIPCUBE_UPLOAD_PREFIX_TEMPLATE` | `sc-build-{ws_short}@{apps_project}.iam.gserviceaccount.com`, `ws-{ws_short}`, `ws/{ws}/` | Per-workspace build isolation: each workspace builds as its own SA, reads only its upload prefix and pushes only to its own repo; deploys pin the digest (`deploy/isolation.py`) |
 | `SHIPCUBE_PROVISIONER_SA`, `SHIPCUBE_WORKER_SA`, `SHIPCUBE_BUILD_SUBMITTER_SA` | `sc-provisioner@…`, `sc-worker@…`, `sc-hosted-deployer@…` (control project) | Per-workspace builder provisioning (`GcpDeployer.ensure_builder`) |
@@ -105,11 +105,11 @@ Isolation locally is enforced by the deployer (the same `isolation.py` checks: o
 | `SHIPCUBE_PROFILER_DAILY_USD`, `_WORKSPACE_DAILY_USD`, `_RUN_COST_USD` | `5`, `1`, `0.11` | Spend ledger: caps per UTC day, and the worst-case cost charged per profiled run (lower it to `0.05` once profiler builds stop at 300 s) |
 | `SHIPCUBE_ESTIMATE_STATIC_IN_FLIGHT`, `SHIPCUBE_ESTIMATE_UNPACK_MAX_MIB`, `SHIPCUBE_ESTIMATE_SOURCE_SLOTS` | `3`, `256`, `2` | Static estimates in flight per workspace (then 429), the decompressed-size budget for uploads, and sources on disk at once per worker process |
 | `SHIPCUBE_WORKER_LANES` | `deploy,estimate*3` | Worker threads per process (`run_lanes`): one deploy lane, three estimate lanes. `all` claims everything (one thread) |
-| `SHIPCUBE_INTERNAL_AUDIENCE`, `SHIPCUBE_GATEWAY_SA` | unset, `sc-gateway@shipcube-control-ks…` | The AI gateway's shared caps (`/internal/gateway/reserve`, `/settle`, `gateway_counters.py`): only an ID token for that service account with this audience (the API's own URL) is accepted. Unset audience: the routes refuse every caller. |
+| `SHIPCUBE_INTERNAL_AUDIENCE`, `SHIPCUBE_GATEWAY_SA` | unset, `sc-gateway@your-control-project…` | The AI gateway's shared caps (`/internal/gateway/reserve`, `/settle`, `gateway_counters.py`): only an ID token for that service account with this audience (the API's own URL) is accepted. Unset audience: the routes refuse every caller. |
 | `SHIPCUBE_EMBEDDED_WORKER` | `1` in DEV_MODE, else `0` | Run a worker thread in the API process. Not possible in production: the API's login (`shipcube_app`) is confined to the caller's workspace by RLS, and the worker needs `shipcube_worker`. |
 | `SHIPCUBE_LOG_LEVEL` | `INFO` | |
 
-## Deploy (Cloud Run, in `shipcube-control-ks`)
+## Deploy (Cloud Run, in `your-control-project`)
 
 **One-time GCP setup:** `scripts/gcp_setup.sh` (idempotent). It creates the APIs, the Artifact Registry repo, the upload bucket with a 1-day lifecycle, `sc-builder`, `sc-api` and the IAP service agent, plus the grants. **IAP on a project without an organization** also needs one console step:
 1. Set Google Auth Platform → Branding to **External**. While in Testing, add every user as a test user.
@@ -117,7 +117,7 @@ Isolation locally is enforced by the deployer (the same `isolation.py` checks: o
 3. Apply it:
 
 ```bash
-printf 'access_settings:\n  oauth_settings:\n    client_id: CLIENT_ID\n    client_secret: CLIENT_SECRET\n' > /tmp/iap.yaml && gcloud iap settings set /tmp/iap.yaml --project=shipcube-apps-ks && rm /tmp/iap.yaml
+printf 'access_settings:\n  oauth_settings:\n    client_id: CLIENT_ID\n    client_secret: CLIENT_SECRET\n' > /tmp/iap.yaml && gcloud iap settings set /tmp/iap.yaml --project=your-apps-project && rm /tmp/iap.yaml
 ```
 
 **Schema:** `API_DIR=services/api infra/db/migrate.sh` (security's script) applies pending migrations as `sc-migrator`, using `python -m shipcube_api.admin migrate`, before new code rolls out. Services check the schema at startup and refuse to start if a migration is pending.

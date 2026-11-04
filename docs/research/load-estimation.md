@@ -307,8 +307,8 @@ Each step was a profiler or feature fix found on the dev suite. The held-out sui
 ### 4.2 Verified on real GCP (Oct 27)
 
 The resources come from security's Terraform module `infra/terraform/modules/profiler` (commit `025172a`):
-- the sandbox in `shipcube-apps-ks`
-- the bucket `shipcube-ks-ml` in `shipcube-control-ks`
+- the sandbox in `your-apps-project`
+- the bucket `your-ml-bucket` in `your-control-project`
 
 The runs used Kunal's user credentials, not the worker SA, so the worker's least-privilege IAM is still untested.
 
@@ -333,7 +333,7 @@ Every log line carried `estimate_id`, `operation_id` and `logging.googleapis.com
    - The client now sets the quota project explicitly (`x-goog-user-project` = the profiler project, or `SHIPCUBE_QUOTA_PROJECT`). The caller needs `serviceusage.serviceUsageConsumer` there.
    - Log polling is quota-aware: at most one query per 5 s, a timestamp bound on the filter, and a 429 means back off and keep waiting until the deadline.
 
-**Model registry on GCS:** `wc-20261027-5b477361` published to `gs://shipcube-ks-ml/models/workload-classifier/`, with sha256 `0c559d32…`.
+**Model registry on GCS:** versioned model artifacts are published to `gs://your-ml-bucket/models/workload-classifier/`, each with a sha256 checksum.
 - `latest` and pinned loads pass the checksum, and the bytes are identical to the bundled copy.
 - A wrong pin and a missing version raise `ModelLoadError`.
 - Re-publishing leaves the immutable objects untouched (412).
@@ -567,8 +567,8 @@ The host calls `shipcube_classifier.obs.configure_logging()` once. It logs JSON 
 ### 9.3 Deploy
 
 1. **Infrastructure as code.** The resources in `packages/profiler/deploy/RESOURCES.md` are managed by the infra/security workstream's Terraform (`infra/**`), not created by hand:
-   - in `shipcube-apps`: the sandbox VPC with deny-all egress, the zero-role sandbox SA, the build SA, and the Artifact Registry repo with 7-day cleanup
-   - in `shipcube-control-ks`: the ML bucket `shipcube-ks-ml`, with a 1-day lifecycle rule on `profiler-src/`
+   - in `your-apps-project`: the sandbox VPC with deny-all egress, the zero-role sandbox SA, the build SA, and the Artifact Registry repo with 7-day cleanup
+   - in `your-control-project`: the ML bucket `your-ml-bucket`, with a 1-day lifecycle rule on `profiler-src/`
    - least-privilege IAM for the caller and the build SA
 
    Set the `SHIPCUBE_PROFILER_*` variables from its outputs.

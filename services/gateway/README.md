@@ -51,7 +51,7 @@ retried 5xx may still have been billed by the provider, the same as with the pro
 
 ```bash
 go test -race ./...                               # unit tests (fake providers)
-GATEWAY_IT_META_SECRET_REF=projects/shipcube-control-ks/secrets/meta-api-key/versions/1 \
+GATEWAY_IT_META_SECRET_REF=projects/your-control-project/secrets/meta-api-key/versions/1 \
 GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token) go test -run Integration -v ./...   # real Secret Manager + Muse
 
 # Local server against the mock provider (no key needed):

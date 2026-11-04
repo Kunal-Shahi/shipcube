@@ -90,7 +90,7 @@ Everything is read from the environment at request time.
 | `AUTH_PROVIDER` | No | `identity-platform` (default). `DEV_MODE` only: `firebase-emulator` (the real sign-in flow against the Firebase Auth emulator) or `mock` |
 | `FIREBASE_AUTH_EMULATOR_HOST` | With `firebase-emulator` (`127.0.0.1:9099`) | The emulator as the console server reaches it. Refused outside `DEV_MODE` with any provider, because the Admin SDK would accept unsigned tokens |
 | `FIREBASE_AUTH_EMULATOR_PUBLIC_URL` | No | The emulator as the browser reaches it, when that differs (Docker Compose) |
-| `IDENTITY_PLATFORM_PROJECT` | Yes for Identity Platform | Project that hosts Identity Platform, e.g. `shipcube-control-ks` |
+| `IDENTITY_PLATFORM_PROJECT` | Yes for Identity Platform | Project that hosts Identity Platform, e.g. `your-control-project` |
 | `FIREBASE_WEB_API_KEY` | Yes for Identity Platform | The web API key from Identity Platform → Application setup details. It's public by design, not a secret |
 | `FIREBASE_AUTH_DOMAIN` | No | Defaults to `<project>.firebaseapp.com`. Set it if you use a custom auth domain |
 | `IDENTITY_PLATFORM_TENANT_ID` | No | Identity Platform tenant, if multi-tenancy is on |

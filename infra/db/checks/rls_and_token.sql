@@ -46,7 +46,7 @@ begin
   insert into load_estimates (id, workspace_id, app_id, workload_class, recommended_tier)
     values (gen_random_uuid(), wb, app_b, 'steady', 'T1');
   insert into operations (id, workspace_id, app_id, kind, target_project, status, idem_key, request_hash)
-    values (gen_random_uuid(), wb, app_b, 'deploy', 'shipcube-apps-ks', 'queued', 'rls-check', '\x00');
+    values (gen_random_uuid(), wb, app_b, 'deploy', 'your-apps-project', 'queued', 'rls-check', '\x00');
   insert into caps (id, workspace_id, app_id, kind, limit_value) values (gen_random_uuid(), wb, app_b, 'max_instances', 2);
   insert into secret_refs (id, workspace_id, kind, label, resource_name, version)
     values (gen_random_uuid(), wb, 'ai_key', 'rls', 'projects/x/secrets/rls-check-' || wb, '1');

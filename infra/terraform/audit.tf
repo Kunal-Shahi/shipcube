@@ -32,7 +32,7 @@ resource "google_logging_project_bucket_config" "audit" {
   location       = "global"
   bucket_id      = "shipcube-audit"
   retention_days = 365
-  description    = "Cloud Audit Logs from shipcube-control and shipcube-apps"
+  description    = "Cloud Audit Logs from your-control-project and your-apps-project"
   # Not locked: locking is irreversible. Lock once retention is final.
 }
 

@@ -331,7 +331,7 @@ Why not Workflows: it does exactly this, but it puts the pipeline in YAML that w
 sequenceDiagram
     autonumber
     participant Agent as Coding agent<br/>(Claude Code / Cursor / Muse Code)
-    participant MCP as MCP server /mcp<br/>(Python, Cloud Run, shipcube-control)
+    participant MCP as MCP server /mcp<br/>(Python, Cloud Run, your-control-project)
     participant API as Control-plane API /v1<br/>(same service, in-process)
     participant DB as Operations DB<br/>[security]
     participant Q as Cloud Tasks
@@ -339,7 +339,7 @@ sequenceDiagram
     participant GCS as GCS uploads
     participant CB as Cloud Build
     participant AR as Artifact Registry
-    participant CR as Cloud Run<br/>(user app, shipcube-apps)
+    participant CR as Cloud Run<br/>(user app, your-apps-project)
     participant IAP as IAP on the service
 
     Agent->>MCP: tools/call create_upload (Bearer PAT)
@@ -377,7 +377,7 @@ The only differences are **where** Cloud Build, Artifact Registry and Cloud Run 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant W as ShipCube deployer SA<br/>(shipcube-control)
+    participant W as ShipCube deployer SA<br/>(your-control-project)
     participant IAM as IAM Credentials API
     participant CB as Cloud Build<br/>(user project)
     participant AR as Artifact Registry<br/>(user project)
@@ -419,9 +419,9 @@ Keeping the **image in the user's project** avoids cross-project pulls. Pulling 
 - **State:** all of it is in Postgres, using security's schema (migration `0001` is their DDL verbatim). Row-level security is enforced on API transactions.
 - **Waiting on GCP:** the Cloud Run step waits on the Admin API's long-running operation, and the build step polls `builds.get` every 3 s.
 - **Image tag:** the image is tagged with the operation id, and Cloud Run resolves the digest.
-- **Quota project:** user ADC without a quota project shares the gcloud OAuth client's quota, and Resource Manager returned `429`. The deployer now bills API quota to `shipcube-control-ks`.
+- **Quota project:** user ADC without a quota project shares the gcloud OAuth client's quota, and Resource Manager returned `429`. The deployer now bills API quota to `your-control-project`.
 
-First real run, through the MCP server (`services/mcp/scripts/e2e_gcp.py`), deploying a 3-file FastAPI app (`main.py`, `requirements.txt`, `Procfile`) to `shipcube-apps-ks` in `asia-south1`:
+First real run, through the MCP server (`services/mcp/scripts/e2e_gcp.py`), deploying a 3-file FastAPI app (`main.py`, `requirements.txt`, `Procfile`) to `your-apps-project` in `asia-south1`:
 
 | Step | Seconds |
 |---|---|

@@ -27,16 +27,16 @@ grant usage, create on schema catalog to shipcube_owner;
 grant usage on schema catalog to shipcube_app, shipcube_worker, shipcube_readonly;
 
 -- Each service's IAM database user can act only as its own role.
-grant shipcube_owner  to "sc-migrator@shipcube-control-ks.iam";
-grant shipcube_app    to "sc-api@shipcube-control-ks.iam";
-grant shipcube_worker to "sc-worker@shipcube-control-ks.iam";
+grant shipcube_owner  to "sc-migrator@your-control-project.iam";
+grant shipcube_app    to "sc-api@your-control-project.iam";
+grant shipcube_worker to "sc-worker@your-control-project.iam";
 
 -- Start every session in that role, so objects a migration creates are owned by
 -- shipcube_owner and the API's queries are subject to RLS even before SET LOCAL ROLE.
 do $$ begin
-  execute 'alter role "sc-migrator@shipcube-control-ks.iam" set role = ''shipcube_owner''';
-  execute 'alter role "sc-api@shipcube-control-ks.iam" set role = ''shipcube_app''';
-  execute 'alter role "sc-worker@shipcube-control-ks.iam" set role = ''shipcube_worker''';
+  execute 'alter role "sc-migrator@your-control-project.iam" set role = ''shipcube_owner''';
+  execute 'alter role "sc-api@your-control-project.iam" set role = ''shipcube_app''';
+  execute 'alter role "sc-worker@your-control-project.iam" set role = ''shipcube_worker''';
 exception when insufficient_privilege then
   raise notice 'cannot set default roles on IAM users (%); callers must SET ROLE themselves', sqlerrm;
 end $$;
