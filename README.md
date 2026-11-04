@@ -14,7 +14,7 @@ You build an internal app (a tracker, dashboard, report, API or scoring job) in 
 
 Built for the Meta Global AI Developer Hackathon (Indie track) on Meta's Muse models.
 
-**Demo video (2:31):** VIDEO_URL_PENDING
+**Demo video (2:31):** [youtu.be/KhK0FmqYF1g](https://youtu.be/KhK0FmqYF1g)
 
 2 minutes? Watch the video. 20 minutes? Run it locally (below).
 
