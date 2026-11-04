@@ -14,13 +14,27 @@ You build an internal app (a tracker, dashboard, report, API or scoring job) in 
 
 Built for the Meta Global AI Developer Hackathon (Indie track) on Meta's Muse models.
 
+**Demo video (2:31):** VIDEO_URL_PENDING
+
+2 minutes? Watch the video. 20 minutes? Run it locally (below).
+
 ## Where Muse decides
 
 ShipCube uses Meta's **Muse Spark** (`muse-spark-1.3`, through the Meta Model API) in three places:
 
-1. **Explaining each load estimate.** The sandbox measures the app, and the classifier picks the workload class, tier and price. Muse Spark turns those measurements into the reasoning the user reads, writes the trade-off for each alternative tier, and recommends the app's caps.
+1. **Explaining each load estimate.** The sandbox measures the app, and the classifier picks the workload class, tier and price. Muse Spark turns those measurements into the reasoning the user reads, writes the trade-off for each alternative tier, and recommends the app's caps. `deploy_app` doesn't apply them by itself: the user or agent sets them with `set_caps`.
 2. **Drafting data-model changes.** `data_propose_migration` takes a plain-English request or the app's code, and Muse Spark drafts the change. A person approves it before it applies.
 3. **The model inside every deployed app.** Apps call Muse through ShipCube's AI gateway by default, with a token budget for each app.
+
+   Muse output via the ShipCube gateway (provider: meta), captured on the local stack on 2 Nov 2026. The prompt was a one-word classification of an order note. The reply is trimmed below. The same call without the app token got a 401.
+
+   ```
+   HTTP/1.1 200 OK
+   X-Shipcube-Model: muse-spark-1.3
+   X-Shipcube-Provider: meta
+
+   {"model":"muse-spark-1.3","choices":[{"message":{"role":"assistant","content":"delivery"},"finish_reason":"stop"}],"usage":{"prompt_tokens":32,"completion_tokens":367,"total_tokens":399,"completion_tokens_details":{"reasoning_tokens":357}}}
+   ```
 
 Two real estimates from the local stack, as Muse returned them (`explained_by: muse-spark-1.3`):
 
@@ -38,6 +52,22 @@ Guardrails on what Muse can change (`packages/placement/src/shipcube_placement/e
 - **Anything that fails validation falls back to the rule-based text**, field by field.
 
 **To see it live:** put your own Meta Model API key in a repo-root `.env` (`MUSE_API_KEY=...`) before `make up`; Meta bills the calls. Without a key, the same paths run on built-in rules and a mock gateway reply, as described below.
+
+## By the numbers
+
+Each of these comes from CI or a recorded run:
+
+- **16 MCP tools**, all driven end to end by `make smoke`.
+- **24/24 smoke checks pass on clean CI with no secrets** (job `local-stack`: no GCP credentials and no model key).
+- **The profiler sandbox has no network.** Outbound calls are blocked while profiling and recorded: the nightly-job demo tried to reach `hooks.example.com`, and the attempt shows up in the estimate.
+- **The workload classifier reports a confidence.** For example, a nightly batch job comes out as `batch_cron` at 0.98.
+- **The AI gateway is Go, standard library only**, with no third-party dependencies.
+- **A nightly job costs $0.10/month on a Cloud Run job, against $49.93/month always-on** (`packages/placement/scripts/demo.py --rules`).
+- **The peak-forecast app costs $2.79/month expected, against $57.83 always-on** (production estimate `est_c302cf9e5ec040ed`: `memory_heavy`, T1, 1 vCPU and 2 GiB, explained by `muse-spark-1.3`).
+- **An abuse pre-screen blocks crypto miners, attack tools and phishing kits** before any build.
+- **The semantic layer prunes partitions.** In production, a query for orders by region for January–June 2018 read 6 of 20 partitions in 283 ms. The CI smoke query reads 3 of 20.
+
+Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Try it locally
 
